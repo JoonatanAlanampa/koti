@@ -167,10 +167,29 @@ comfort. KianV's firmware is the reference.
        **40x30 text** (16x16 cells, pixels doubled both ways — halves
        the line buffers to 2x40 B and the row DMA to 5 bursts);
        **64-glyph font** (lowercase folds to uppercase in vga_text,
-       C64 style — ROM now 512 B). All suites re-green. If the next
-       harden still misses: remaining levers are latch/RAM-macro line
-       buffers + regfile (TT memory macros), narrower muldiv, or the
-       colossal-tile conversation with TT.
+       C64 style — ROM now 512 B). All suites re-green.
+       **Harden campaign log (2026-07-18, 5 attempts)**:
+       1. 50 MHz, full design: 94.5% util, DPL-0036 at placement.
+       2. After cuts: 69.7% util, PLACES; dies in setup repair — the
+          template's CLOCK_PERIOD was 20 ns (50 MHz), never our
+          target. 1338 violating endpoints.
+       3. CLOCK_PERIOD=40 (25 MHz real): CI network timeout (noise).
+       4. Re-run: setup violations 1338 -> 223, but pre-CTS
+          fanout/slew repair inserts ~2900 buffers -> placement
+          80.8% -> post-CTS legalization fails (DPL-0036).
+       5. + registered VGA pixel pipe: no change (251 endpoints,
+          81.4%) — the dominant fanout/timing is in the CPU (pstall
+          network, TLB-after-ALU), not the video path.
+       **Conclusion**: flop-everything RV32IMA+MMU+VGA saturates 8x2
+       at ~70% pre-repair; the flow needs ~10-15% more headroom than
+       exists. Next-session plan, in order: (a) TT RAM macros for the
+       regfile (1024 flops — biggest block and mux-congestion source)
+       and line buffers, per tinytapeout.com/specs/memory; (b)
+       failing that, prune: iterate muldiv 2 bits/cycle tradeoffs,
+       merge I/D walkers, register the pstall fanout; (c) failing
+       that, the colossal-tile / density conversation with TT. The
+       design is CLOSE — it places and mostly times at the real
+       clock; only repair margin is missing.
 5. [~] Bus unification (2026-07-18): `src/koti_core.sv` is now THE
        core — rv32_core.sv's fetch FSM/data port/MMIO merged with the
        RV32IMA+Zicsr pipeline; `src/qspi_ctrl.sv` (+2:1 arbiter)

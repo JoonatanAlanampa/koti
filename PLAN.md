@@ -146,9 +146,20 @@ comfort. KianV's firmware is the reference.
        koti_core over the XIP model (LAT=4) — green first run; data
        moved to the PSRAM map (0x0100_0000+). CLINT/PLIC/VGA MMIO
        (0x0002_0000+) rides the data port for the SoC top to decode.
-       Open: SoC top (tt_um wiring: qspi_ctrl + arbiter + CLINT decode
-       + pin mux), 3-port arbiter + video priority with worst-case
-       latency proof.
+       SoC top DONE (same day): `src/project.sv` is the real
+       `tt_um_koti` — koti_core + arbiter + qspi_ctrl + CLINT
+       (intercepted on the data port at 0x0002_0000, 1-cycle ack,
+       mtip/msip wired to the core). Headless v1 pinout = tt-riscv's
+       proven demo layout (uio QSPI Pmod, uo UART/HALTED/LED, ui
+       GPIO). Shared modules copied core/ -> src/ (TT wants sources in
+       src/; src/ is canonical now). Pin-level test: boots from the
+       SpiMem flash model over real SPI protocol, PSRAM serial+quad
+       traffic, CLINT timer irq into a handler, EBREAK halt — 1/1,
+       first run. VGA/PS2 bring-up stub retired; vga_timing/ps2_rx
+       coverage returns with the video milestone. info.yaml now 8x2 —
+       the GDS action attempt gives the first honest area datapoint.
+       Open: 3-port arbiter + video priority with worst-case latency
+       proof (video milestone).
 6. [~] csr.sv M-mode DONE with 3 instruction-level tests green (CSR
        RMW forms + forwarding, ECALL->handler->MRET resume, async mtip
        interrupting a spin loop — 7/7 in test/run_cpu.py). Open: wire

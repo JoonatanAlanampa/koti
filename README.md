@@ -19,6 +19,10 @@ TTSKY26c, 8x2 tiles.
 - `src/` — new SoC blocks (vga_timing, ps2_rx, clint so far)
 - `docs/info.md` — datasheet skeleton
 
-Status 2026-07-18: scaffolded from ttsky-verilog-template; bring-up
-top (`tt_um_koti`: VGA checkerboard, PS/2 picks the colors) passes its
-3-test cocotb suite (`cd test && python run.py`, or `make`).
+Status 2026-07-18: the SoC is real — `tt_um_koti` = RV32IMA + Zicsr +
+M-mode traps core, QSPI XIP memory (serial boot, quad opt-in), CLINT
+timer. Boots pin-level from a behavioral flash model, takes a timer
+interrupt, halts on EBREAK. Suites: `test/run.py` (SoC pin-level),
+`test/run_cpu.py` (9 instruction-level tests over XIP),
+`test/run_core.py` (1252 muldiv vectors). Next: S-mode + sv32 MMU,
+VGA text console.

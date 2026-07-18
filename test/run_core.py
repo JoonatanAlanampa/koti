@@ -8,10 +8,10 @@ from pathlib import Path
 from cocotb_tools.runner import get_runner
 
 TEST_DIR = Path(__file__).parent
-CORE_DIR = TEST_DIR.parent / "core"
+SRC_DIR = TEST_DIR.parent / "src"
 
 SOURCES = [
-    CORE_DIR / "muldiv.sv",
+    SRC_DIR / "muldiv.sv",
     TEST_DIR / "tb_core.v",
 ]
 
@@ -22,7 +22,7 @@ def main():
         sources=SOURCES,
         hdl_toplevel="tb_core",
         build_dir=TEST_DIR / "sim_build" / "core",
-        build_args=["-g2012", f"-I{CORE_DIR}"],
+        build_args=["-g2012", f"-I{SRC_DIR}"],
         timescale=("1ns", "1ps"),
     )
     runner.test(

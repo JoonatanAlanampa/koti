@@ -11,9 +11,17 @@ SRC_DIR = TEST_DIR.parent / "src"
 
 SOURCES = [
     SRC_DIR / "project.sv",
-    SRC_DIR / "vga_timing.sv",
-    SRC_DIR / "ps2_rx.sv",
+    SRC_DIR / "koti_core.sv",
+    SRC_DIR / "qspi_ctrl.sv",
     SRC_DIR / "clint.sv",
+    SRC_DIR / "control.sv",
+    SRC_DIR / "alu.sv",
+    SRC_DIR / "branch.sv",
+    SRC_DIR / "immgen.sv",
+    SRC_DIR / "regfile.sv",
+    SRC_DIR / "muldiv.sv",
+    SRC_DIR / "csr.sv",
+    SRC_DIR / "uart_tx.sv",
     TEST_DIR / "tb.v",
 ]
 

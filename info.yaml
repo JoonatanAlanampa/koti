@@ -1,15 +1,14 @@
 # Tiny Tapeout project information
 project:
-  title:        "Koti-1 (bring-up stub)"
+  title:        "Koti-1 (headless v1)"
   author:       "Joonatan Alanampa"
   discord:      ""
-  description:  "VGA + PS/2 bring-up stub of Koti-1, a full-MMU Linux home computer on a chip"
+  description:  "RV32IMA + Zicsr Linux-track SoC: QSPI XIP, CLINT timer, UART. VGA/PS2 to come."
   language:     "SystemVerilog"
   clock_hz:     25000000
 
   # How many tiles your design occupies? A single tile is about 167x108 uM.
-  # Stub fits 1x1; the full Koti-1 SoC targets 8x2 (see PLAN.md).
-  tiles: "1x1"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
+  tiles: "8x2"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
 
   # Your top module name must start with "tt_um_". Make it unique by including your github username:
   top_module:  "tt_um_koti"
@@ -19,42 +18,50 @@ project:
   # Don't forget to also update `PROJECT_SOURCES` in test/Makefile.
   source_files:
     - "project.sv"
-    - "vga_timing.sv"
-    - "ps2_rx.sv"
+    - "koti_core.sv"
+    - "qspi_ctrl.sv"
     - "clint.sv"
+    - "control.sv"
+    - "alu.sv"
+    - "branch.sv"
+    - "immgen.sv"
+    - "regfile.sv"
+    - "muldiv.sv"
+    - "csr.sv"
+    - "uart_tx.sv"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
-  # Inputs
-  ui[0]: "PS2_CLK"
-  ui[1]: "PS2_DAT"
-  ui[2]: ""
-  ui[3]: ""
-  ui[4]: ""
-  ui[5]: ""
-  ui[6]: ""
-  ui[7]: ""
+  # Inputs (GPIO in, MMIO 0x10008; PS/2 takes ui[1:0] with the video milestone)
+  ui[0]: "GPIO0"
+  ui[1]: "GPIO1"
+  ui[2]: "GPIO2"
+  ui[3]: "GPIO3"
+  ui[4]: "GPIO4"
+  ui[5]: "GPIO5"
+  ui[6]: "GPIO6"
+  ui[7]: "GPIO7"
 
-  # Outputs (Tiny VGA Pmod)
-  uo[0]: "R1"
-  uo[1]: "G1"
-  uo[2]: "B1"
-  uo[3]: "VSync"
-  uo[4]: "R0"
-  uo[5]: "G0"
-  uo[6]: "B0"
-  uo[7]: "HSync"
+  # Outputs (headless v1; Tiny VGA takes uo with the video milestone)
+  uo[0]: "UART_TX"
+  uo[1]: "HALTED"
+  uo[2]: "LED0"
+  uo[3]: "LED1"
+  uo[4]: "LED2"
+  uo[5]: "LED3"
+  uo[6]: "LED4"
+  uo[7]: "LED5"
 
-  # Bidirectional pins (reserved for the QSPI Pmod)
-  uio[0]: ""
-  uio[1]: ""
-  uio[2]: ""
-  uio[3]: ""
-  uio[4]: ""
-  uio[5]: ""
-  uio[6]: ""
-  uio[7]: ""
+  # Bidirectional pins (TinyTapeout QSPI Pmod standard)
+  uio[0]: "CS0_FLASH"
+  uio[1]: "SD0_MOSI"
+  uio[2]: "SD1_MISO"
+  uio[3]: "SCK"
+  uio[4]: "SD2"
+  uio[5]: "SD3"
+  uio[6]: "CS1_PSRAM"
+  uio[7]: "CS2"
 
 # Do not change!
 yaml_version: 6

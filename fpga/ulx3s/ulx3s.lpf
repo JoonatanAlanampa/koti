@@ -1,0 +1,33 @@
+# ulx3s.lpf — Koti-1 on ULX3S: pin constraints TEMPLATE.
+# !! VERIFY EVERY SITE against the official file for your board rev:
+# https://github.com/emard/ulx3s/blob/master/doc/constraints/
+# clk/led/ftdi below follow the well-known v2/v3 assignments; the
+# gp/gn GPIO sites are PLACEHOLDERS (marked TODO) and must be filled
+# from the official file before building.
+
+LOCATE COMP "clk_25mhz" SITE "G2";
+IOBUF PORT "clk_25mhz" IO_TYPE=LVCMOS33;
+FREQUENCY PORT "clk_25mhz" 25 MHZ;
+
+LOCATE COMP "led[0]" SITE "B2";
+LOCATE COMP "led[1]" SITE "C2";
+LOCATE COMP "led[2]" SITE "C1";
+LOCATE COMP "led[3]" SITE "D2";
+LOCATE COMP "led[4]" SITE "D1";
+LOCATE COMP "led[5]" SITE "E2";
+LOCATE COMP "led[6]" SITE "E1";
+LOCATE COMP "led[7]" SITE "H3";
+IOBUF GROUP "led" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "btn[0]" SITE "D6";
+LOCATE COMP "btn[1]" SITE "R1";
+# TODO btn[2..6]
+
+LOCATE COMP "ftdi_rxd" SITE "L4";
+IOBUF PORT "ftdi_rxd" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "wifi_gpio0" SITE "L2";
+
+# TODO: gp[0..27] / gn[0..27] sites from the official constraint file
+# (QSPI Pmod on gp[0..7] needs IO_TYPE=LVCMOS33 and no pull;
+#  PS/2 on gp[8..9] needs PULLMODE=UP)

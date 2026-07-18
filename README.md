@@ -19,10 +19,17 @@ TTSKY26c, 8x2 tiles.
 - `src/` — new SoC blocks (vga_timing, ps2_rx, clint so far)
 - `docs/info.md` — datasheet skeleton
 
-Status 2026-07-18: the SoC is real — `tt_um_koti` = RV32IMA + Zicsr +
-M-mode traps core, QSPI XIP memory (serial boot, quad opt-in), CLINT
-timer. Boots pin-level from a behavioral flash model, takes a timer
-interrupt, halts on EBREAK. Suites: `test/run.py` (SoC pin-level),
-`test/run_cpu.py` (9 instruction-level tests over XIP),
-`test/run_core.py` (1252 muldiv vectors). Next: S-mode + sv32 MMU,
-VGA text console.
+Status: **hardware-complete for the goal.** RV32IMA + Zicsr, M/S/U
+with delegation, sv32 MMU (split TLBs + dual walkers, precise faults
+with tval), CLINT, illegal/misaligned traps, mcycle/minstret, QSPI
+XIP (serial boot, quad opt-in), 40x30 VGA text console, PS/2
+keyboard, and an M-mode SBI firmware (`sw/sbi/`) proven pin-level:
+S-mode payload, SBI console, rdtime-via-trap emulation, delegated
+timer interrupts. GCC C runs (`sw/hello.c`). Suites (all green in
+CI): `test/run_core.py` (1252 muldiv vectors), `test/run_cpu.py`
+(15 directed), `test/run_riscv.py` (all 58 official rv32ui/um/ua),
+`test/run.py` (4 pin-level incl. C hello + SBI boot).
+
+Open: the 8x2 harden needs the TT RF macro (PLAN.md campaign log),
+kernel bring-up needs a Linux build env, and `fpga/ulx3s/` holds the
+untested pre-tapeout FPGA scaffold. Datasheet: [docs/info.md](docs/info.md).

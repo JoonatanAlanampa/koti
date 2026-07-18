@@ -1,5 +1,29 @@
 # Koti-1 — plan
 
+## TODO (state as of 2026-07-19: hardware-complete, 6 suites green)
+
+User actions — everything below is blocked on one of these:
+1. [ ] **Ask the TT Discord / tnt** for the 32x32 RF macro files
+       (GDS/LEF/lib/model + read timing). Pipeline is already
+       sync-read/macro-ready; this unblocks the 8x2 harden.
+2. [ ] **Submit TinyRV32 + ServoCtl-8 to TTSKY26c** — hard deadline
+       ~2026-09-07. Both repos are ready; form-filling only.
+3. [ ] **Order the ULX3S 85F** (~$155 Crowd Supply, ~1 month lead).
+4. [ ] **Install WSL** (`wsl --install`, admin + reboot) — unblocks
+       the kernel ladder.
+
+Then, in order (mostly Claude-executable once unblocked):
+5. [ ] Integrate the RF macro (body swap in src/regfile.sv +
+       LibreLane EXTRA_LEFS/GDS + placement); re-harden 8x2.
+6. [ ] xv6 rv32 port on the SBI firmware (first sv32 workload).
+7. [ ] Buildroot nommu uLinux, console on UART (frontier rung 1 —
+       submittable on its own).
+8. [ ] Mainline sv32 Linux, console on the VGA text mode (rung 2 —
+       the frontier claim). Yocto layer after.
+9. [ ] ULX3S bring-up: verify LPF pins, build, **font glyph visual
+       check** on a real monitor.
+10.[ ] Submit Koti-1 to the shuttle after TTSKY26c.
+
 **Goal:** the first Tiny Tapeout chip to boot full MMU Linux *visibly* — a
 single-chip home computer (fi. *kotitietokone*): monitor on the VGA Pmod,
 keyboard on PS/2, mainline sv32 Linux with the console on screen. Ladder

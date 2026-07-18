@@ -49,7 +49,8 @@ module cpu #(
                  .reg_write(reg_write), .imm_sel(imm_sel),
                  .alu_a_src(alu_a_src), .alu_b_src(alu_b_src),
                  .alu_op(alu_op), .mem_write(mem_write), .wb_src(wb_src),
-                 .is_branch(is_branch), .is_jump(is_jump), .halt(halt));
+                 .is_branch(is_branch), .is_jump(is_jump),
+                 .is_system(halt));   // RV32I: any SYSTEM op halts
 
     logic [31:0] imm;
     immgen ig (.instr(instr), .sel(imm_sel), .imm(imm));

@@ -16,6 +16,7 @@ module tb_cpu ();
 
   reg clk;
   reg rst;
+  reg mtip, msip, meip;
 
   wire        halted;
   wire [7:0]  led;
@@ -31,6 +32,7 @@ module tb_cpu ();
 
   cpu #(.HEXFILE(""), .UART_DIV(4)) c0 (
       .clk(clk), .rst(rst),
+      .mtip(mtip), .msip(msip), .meip(meip),
       .halted(halted), .led(led), .uart_txd(uart_txd),
       .vid_we(vid_we), .vid_addr(vid_addr), .vid_wdata(vid_wdata),
       .vid_status(32'd0), .pad(16'd0), .audio(audio),

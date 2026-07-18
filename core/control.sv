@@ -20,12 +20,15 @@ module control (
     output logic [1:0] wb_src,     // 0=ALU 1=MEM 2=PC+4
     output logic       is_branch,
     output logic       is_jump,    // JAL or JALR
-    output logic       halt        // ECALL/EBREAK
+    output logic       is_system   // SYSTEM opcode: CSR ops get
+                                   // reg_write here; ECALL/EBREAK/MRET
+                                   // /WFI need instr[31:20], refined in
+                                   // cpu_pipe (cpu.sv: halts, RV32I)
 );
     always_comb begin
         reg_write = 0; imm_sel = 3'd0; alu_a_src = 2'd0; alu_b_src = 0;
         alu_op = 4'd0; mem_write = 0; wb_src = 2'd0;
-        is_branch = 0; is_jump = 0; halt = 0; is_muldiv = 0;
+        is_branch = 0; is_jump = 0; is_system = 0; is_muldiv = 0;
         case (opcode)
             7'b0110111: begin reg_write = 1; imm_sel = 3'd3;            // LUI
                               alu_a_src = 2'd2; alu_b_src = 1; end      //   0 + immU
@@ -52,7 +55,8 @@ module control (
             7'b0110011: begin reg_write = 1;                            // ALU-reg
                               if (funct7b0) is_muldiv = 1;              //   RV32M
                               else alu_op = {funct7b5, funct3}; end
-            7'b1110011: halt = 1;                                       // ECALL/EBREAK
+            7'b1110011: begin is_system = 1;                            // SYSTEM
+                              if (funct3 != 3'b000) reg_write = 1; end  //   CSRR*
             default: ;                                                  // FENCE = NOP
         endcase
     end

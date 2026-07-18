@@ -13,13 +13,17 @@
 //  - load-use: 1-cycle stall (data doesn't exist until MEM has run)
 //  - branches: predict not-taken; taken branch/jump resolved in EX kills the
 //    ONE wrong-path instruction behind it (fetch-ahead imem => 1 bubble)
-//  - ECALL: flushes younger instructions, drains, sets halted at WB — so
+//  - EBREAK: flushes younger instructions, drains, sets halted at WB — so
 //    every older instruction commits and nothing younger does
+//  - ECALL / interrupts: precise traps taken at EX via csr.sv (mepc,
+//    mcause, mstatus stack); MRET returns; WFI is a NOP
 module cpu #(
     parameter HEXFILE  = "",
     parameter UART_DIV = 217
 ) (
     input  logic clk, rst,
+    // machine-mode interrupt lines (CLINT mtip/msip, PLIC meip)
+    input  logic mtip, msip, meip,
     output logic halted,
     output logic [7:0] led,
     output logic uart_txd,
@@ -83,8 +87,8 @@ module cpu #(
     wire [4:0] rs2_d = instr_d[24:20];
     wire [4:0] rd_d  = instr_d[11:7];
 
-    logic       c_reg_write, c_alu_b_src, c_mem_write, c_is_branch, c_is_jump, c_halt;
-    logic       c_is_md;
+    logic       c_reg_write, c_alu_b_src, c_mem_write, c_is_branch, c_is_jump;
+    logic       c_is_md, c_is_sys;
     logic [2:0] c_imm_sel;
     logic [1:0] c_alu_a_src, c_wb_src;
     logic [3:0] c_alu_op;
@@ -94,7 +98,17 @@ module cpu #(
                  .reg_write(c_reg_write), .imm_sel(c_imm_sel),
                  .alu_a_src(c_alu_a_src), .alu_b_src(c_alu_b_src),
                  .alu_op(c_alu_op), .mem_write(c_mem_write), .wb_src(c_wb_src),
-                 .is_branch(c_is_branch), .is_jump(c_is_jump), .halt(c_halt));
+                 .is_branch(c_is_branch), .is_jump(c_is_jump),
+                 .is_system(c_is_sys));
+
+    // SYSTEM sub-decode (needs instr[31:20], which control never sees).
+    // EBREAK inherits the halt-the-core role — ECALL must trap, it is
+    // the SBI call path. WFI and unknown SYSTEM encodings are NOPs.
+    wire [11:0] sys12      = instr_d[31:20];
+    wire is_csr_d    = c_is_sys && instr_d[14:12] != 3'b000;
+    wire is_ecall_d  = c_is_sys && instr_d[14:12] == 3'b000 && sys12 == 12'h000;
+    wire is_ebreak_d = c_is_sys && instr_d[14:12] == 3'b000 && sys12 == 12'h001;
+    wire is_mret_d   = c_is_sys && instr_d[14:12] == 3'b000 && sys12 == 12'h302;
 
     logic [31:0] imm_d;
     immgen ig (.instr(instr_d), .sel(c_imm_sel), .imm(imm_d));
@@ -115,7 +129,8 @@ module cpu #(
 
     // ---- ID/EX ----
     logic        valid_e, reg_write_e, alu_b_src_e, mem_write_e;
-    logic        is_branch_e, is_jump_e, halt_e, is_md_e;
+    logic        is_branch_e, is_jump_e, is_md_e;
+    logic        ebreak_e, ecall_e, mret_e, csr_e;
     logic [1:0]  alu_a_src_e, wb_src_e;
     logic [3:0]  alu_op_e;
     logic [2:0]  funct3_e;
@@ -135,8 +150,10 @@ module cpu #(
                 valid_e     <= valid_d;
                 reg_write_e <= c_reg_write; alu_b_src_e <= c_alu_b_src;
                 mem_write_e <= c_mem_write; is_branch_e <= c_is_branch;
-                is_jump_e   <= c_is_jump;   halt_e      <= c_halt;
+                is_jump_e   <= c_is_jump;
                 is_md_e     <= c_is_md;
+                ebreak_e    <= is_ebreak_d; ecall_e     <= is_ecall_d;
+                mret_e      <= is_mret_d;   csr_e       <= is_csr_d;
                 alu_a_src_e <= c_alu_a_src; wb_src_e    <= c_wb_src;
                 alu_op_e    <= c_alu_op;    funct3_e    <= instr_d[14:12];
                 rs1_e <= rs1_d; rs2_e <= rs2_d; rd_e <= rd_d;
@@ -187,10 +204,40 @@ module cpu #(
                .funct3(funct3_e), .a(fwd1), .b(fwd2),
                .result(md_result), .busy(md_busy), .done(md_done));
 
+    // ---- CSR file + trap/interrupt resolution (all at EX: older
+    // instructions in M/W always commit, so an EX-taken trap is
+    // precise; the one wrong-path fetch dies like a mispredict) ----
+    logic        csr_irq;
+    logic [31:0] csr_rval, csr_irq_cause, csr_tvec, csr_epc;
+
+    // never inject onto an in-flight muldiv (would orphan the unit);
+    // the next instruction is at most ~35 cycles away
+    wire irq_take  = valid_e && csr_irq && !is_md_e && !mstall && !halted;
+    wire trap_take = irq_take || (valid_e && ecall_e);
+    wire mret_take = valid_e && mret_e && !trap_take;
+    wire [31:0] trap_cause = irq_take ? csr_irq_cause : 32'd11; // M-ecall
+
+    wire csr_en  = valid_e && csr_e && !irq_take && !mstall && !halted;
+    wire csr_wen = (funct3_e[1:0] == 2'b01) || (rs1_e != 5'd0);
+    wire [31:0] csr_wval = funct3_e[2] ? {27'd0, rs1_e} : fwd1;
+
+    csr csr0 (.clk(clk), .rst(rst),
+              .en(csr_en), .op(funct3_e[1:0]), .wen(csr_wen),
+              .addr(imm_e[11:0]), .wval(csr_wval), .rval(csr_rval),
+              .trap(trap_take), .trap_pc(pc_e), .trap_cause(trap_cause),
+              .mret(mret_take),
+              .mtip(mtip), .msip(msip), .meip(meip),
+              .irq(csr_irq), .irq_cause(csr_irq_cause),
+              .tvec(csr_tvec), .epc(csr_epc));
+
     wire take_ex  = valid_e && (is_jump_e || (is_branch_e && br_taken));
-    assign flush_ex  = take_ex || (valid_e && halt_e);
-    assign target_ex = (valid_e && halt_e) ? pc_e            // spin on the ecall
-                                           : {alu_y[31:1], 1'b0};
+    assign flush_ex  = take_ex || trap_take || mret_take
+                     || (valid_e && ebreak_e);
+    assign target_ex = trap_take            ? csr_tvec
+                     : mret_take            ? csr_epc
+                     : (valid_e && ebreak_e) ? pc_e         // spin, drain,
+                                                            // halt at WB
+                     : {alu_y[31:1], 1'b0};
 
     // ---- EX/MEM ----
     logic [2:0]  funct3_m;
@@ -199,15 +246,20 @@ module cpu #(
     always_ff @(posedge clk)
         if (rst) valid_m <= 1'b0;
         else if (!halted && !pstall) begin
-            valid_m     <= valid_e;
+            valid_m     <= valid_e && !trap_take;   // trapped instr is
+                                                    // suppressed; it
+                                                    // re-executes (irq)
+                                                    // or the handler
+                                                    // owns it (ecall)
             reg_write_m <= reg_write_e;
             mem_write_m <= mem_write_e;
             wb_src_m    <= wb_src_e;
             funct3_m    <= funct3_e;
             rd_m        <= rd_e;
             st_m        <= fwd2;                          // store data, forwarded
-            halt_m      <= valid_e && halt_e;
-            value_m     <= is_md_e            ? md_result
+            halt_m      <= valid_e && ebreak_e;
+            value_m     <= csr_e              ? csr_rval
+                         : is_md_e            ? md_result
                          : (wb_src_e == 2'd2) ? pc_e + 32'd4   // JAL/JALR link
                                               : alu_y;
         end

@@ -1,17 +1,21 @@
 # SPDX-FileCopyrightText: © 2026 Joonatan Alanampa
 # SPDX-License-Identifier: Apache-2.0
 #
-# Instruction-level tests: hand-assembled RV32IM programs poked into
-# imem by backdoor, run on the real 5-stage pipeline to ECALL, results
-# read back from the regfile. Targets what the muldiv unit tests can't
-# see: forwarding of M results, load-use + muldiv interaction, branch
-# flushes around muldiv, and the full 32-register file.
+# Instruction-level tests: hand-assembled RV32IM(+Zicsr) programs poked
+# into imem by backdoor, run on the real 5-stage pipeline to EBREAK
+# (the halt instruction — ECALL traps, it is the SBI path), results
+# read back from the regfile. Covers what unit tests can't see:
+# forwarding of M/CSR results, load-use + muldiv interaction, branch
+# flushes, precise ECALL traps with MRET, and timer interrupts.
 
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles
 
 M32 = 0xFFFF_FFFF
+
+MSTATUS, MISA, MIE, MTVEC = 0x300, 0x301, 0x304, 0x305
+MSCRATCH, MEPC, MCAUSE = 0x340, 0x341, 0x342
 
 # ---- tiny assembler ----------------------------------------------------
 
@@ -70,23 +74,56 @@ def beq(rs1, rs2, off):
         (((off >> 11) & 1) << 7) | 0x63
 
 
+def _csr(f3, rd, csr, rs1_or_z):
+    return (csr << 20) | (rs1_or_z << 15) | (f3 << 12) | (rd << 7) | 0x73
+
+
+def csrrw(rd, csr, rs1):
+    return _csr(1, rd, csr, rs1)
+
+
+def csrrs(rd, csr, rs1):
+    return _csr(2, rd, csr, rs1)
+
+
+def csrrc(rd, csr, rs1):
+    return _csr(3, rd, csr, rs1)
+
+
+def csrrwi(rd, csr, z):
+    return _csr(5, rd, csr, z)
+
+
+def csrrsi(rd, csr, z):
+    return _csr(6, rd, csr, z)
+
+
 ECALL = 0x0000_0073
+EBREAK = 0x0010_0073
+MRET = 0x3020_0073
+
+HANDLER = 48  # word index of trap handlers in trap tests
 
 # ---- harness -----------------------------------------------------------
 
 
-async def run_program(dut, words, max_cycles=20000):
+async def run_program(dut, words, max_cycles=20000, mtip_at=None):
     dut.rst.value = 1
+    dut.mtip.value = 0
+    dut.msip.value = 0
+    dut.meip.value = 0
     await ClockCycles(dut.clk, 5)
     for i, w in enumerate(words):
         dut.c0.im.mem[i].value = w
-    # pad with ECALL so runaway fetch halts instead of executing X
+    # pad with EBREAK so runaway fetch halts instead of executing X
     for i in range(len(words), len(words) + 16):
-        dut.c0.im.mem[i].value = ECALL
+        dut.c0.im.mem[i].value = EBREAK
     await ClockCycles(dut.clk, 2)
     dut.rst.value = 0
-    for _ in range(max_cycles):
+    for cyc in range(max_cycles):
         await ClockCycles(dut.clk, 1)
+        if mtip_at is not None and cyc == mtip_at:
+            dut.mtip.value = 1
         if dut.halted.value:
             return
     raise AssertionError("program never halted")
@@ -95,6 +132,11 @@ async def run_program(dut, words, max_cycles=20000):
 def reg(dut, n):
     assert n != 0
     return int(dut.c0.rf.regs[n].value)
+
+
+def with_handler(main, handler):
+    assert len(main) <= HANDLER
+    return main + [EBREAK] * (HANDLER - len(main)) + handler
 
 
 GOLD = {  # (a, b) -> per-op expected, mirrors test_core golden cases
@@ -112,7 +154,7 @@ async def test_regs_and_arith(dut):
     prog = []
     for n in range(1, 32):
         prog += li(n, 0x1000_0000 + n * 0x0101)
-    prog += [add(1, 30, 31), sub(2, 31, 30), ECALL]
+    prog += [add(1, 30, 31), sub(2, 31, 30), EBREAK]
     await run_program(dut, prog)
     for n in range(3, 32):
         assert reg(dut, n) == 0x1000_0000 + n * 0x0101, f"x{n}"
@@ -132,7 +174,7 @@ async def test_muldiv_instructions(dut):
             rd = 10 + i
             prog.append(mop(f3, rd, 1, 2))
             rds.append((rd, cases[f3]))
-        prog.append(ECALL)
+        prog.append(EBREAK)
         await run_program(dut, prog)
         for rd, exp in rds:
             assert reg(dut, rd) == exp, f"a={a:#x} b={b:#x} x{rd}"
@@ -148,7 +190,7 @@ async def test_muldiv_forwarding(dut):
         mop(0, 5, 3, 4),      # both operands young:  x5 = 882
         mop(4, 6, 5, 2),      # div on fresh result:  x6 = 294
         addi(7, 6, 1),        # forwards from M:      x7 = 295
-        ECALL,
+        EBREAK,
     ])
     await run_program(dut, prog)
     assert reg(dut, 3) == 21
@@ -169,9 +211,90 @@ async def test_loaduse_and_branch_with_muldiv(dut):
         beq(1, 1, 8),         # taken: skip the next mul
         mop(0, 9, 4, 4),      # must be flushed, x9 stays 99
         sub(5, 4, 3),         # x5 = 30
-        ECALL,
+        EBREAK,
     ])
     await run_program(dut, prog)
     assert reg(dut, 4) == 36
     assert reg(dut, 9) == 99, "flushed mul wrote its register"
     assert reg(dut, 5) == 30
+
+
+@cocotb.test()
+async def test_csr_ops(dut):
+    """CSR read/modify/write forms, and CSR results forward like ALU."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    prog = (li(1, 0x1234_5678) + li(3, 0x0F0F) + [
+        csrrw(0, MSCRATCH, 1),    # mscratch = 0x12345678
+        csrrs(2, MSCRATCH, 0),    # x2 = 0x12345678
+        csrrs(4, MSCRATCH, 3),    # x4 = old, mscratch |= 0x0F0F
+        csrrc(5, MSCRATCH, 3),    # x5 = 0x12345F7F, then clear bits
+        csrrwi(6, MSCRATCH, 21),  # x6 = 0x12345070, mscratch = 21
+        csrrsi(7, MSCRATCH, 10),  # x7 = 21, mscratch = 31
+        csrrs(8, MSCRATCH, 0),    # x8 = 31
+        add(9, 2, 8),             # CSR result forwards: x9 = x2 + 31
+        csrrs(10, MISA, 0),       # x10 = RV32IM misa
+        EBREAK,
+    ])
+    await run_program(dut, prog)
+    assert reg(dut, 2) == 0x1234_5678
+    assert reg(dut, 4) == 0x1234_5678
+    assert reg(dut, 5) == 0x1234_5F7F
+    assert reg(dut, 6) == 0x1234_5070
+    assert reg(dut, 7) == 21
+    assert reg(dut, 8) == 31
+    assert reg(dut, 9) == (0x1234_5678 + 31) & M32
+    assert reg(dut, 10) == 0x4000_1100
+
+
+@cocotb.test()
+async def test_ecall_trap_and_mret(dut):
+    """ECALL enters the handler precisely; MRET resumes after it."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    main = (li(1, HANDLER * 4) + [
+        csrrw(0, MTVEC, 1),
+        addi(10, 0, 0),
+        ECALL,                    # -> handler, mepc = this address
+        addi(10, 10, 100),        # resumes here
+        EBREAK,
+    ])
+    ecall_addr = 4 * main.index(ECALL)
+    handler = [
+        csrrs(11, MCAUSE, 0),     # 11 = ECALL from M-mode
+        csrrs(12, MEPC, 0),
+        addi(13, 12, 4),
+        csrrw(0, MEPC, 13),
+        MRET,
+    ]
+    await run_program(dut, with_handler(main, handler))
+    assert reg(dut, 10) == 100, "MRET did not resume after ECALL"
+    assert reg(dut, 11) == 11
+    assert reg(dut, 12) == ecall_addr
+
+
+@cocotb.test()
+async def test_timer_interrupt(dut):
+    """mtip fires mid-loop; handler runs once, main escapes cleanly."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    main = (li(1, HANDLER * 4) + [
+        csrrw(0, MTVEC, 1),
+        addi(20, 0, 0x80),        # mie.MTIE
+        csrrs(0, MIE, 20),
+        csrrsi(0, MSTATUS, 8),    # mstatus.MIE
+        addi(13, 0, 0),
+        addi(21, 0, 0),
+        # loop:
+        addi(13, 13, 1),
+        beq(21, 0, -4),           # spin until the handler sets x21
+        EBREAK,
+    ])
+    handler = [
+        csrrs(14, MCAUSE, 0),     # 0x80000007 = machine timer irq
+        addi(15, 0, 0x80),
+        csrrc(0, MIE, 15),        # mask MTIE (mtip stays high)
+        addi(21, 0, 1),
+        MRET,
+    ]
+    await run_program(dut, with_handler(main, handler), mtip_at=150)
+    assert reg(dut, 14) == 0x8000_0007
+    assert reg(dut, 21) == 1
+    assert reg(dut, 13) >= 1, "loop never ran"

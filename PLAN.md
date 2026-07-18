@@ -31,7 +31,15 @@ over; it becomes a 3-port arbiter (ifetch / data / video DMA).
    vendored core's FPGA dmem model would be throwaway work.
 4. **Privilege + CSR**: M/S/U modes, trap/mret/sret, wfi-as-nop,
    mstatus/mie/mip/mtvec/mepc/mcause/mscratch + S-mode twins, medeleg/
-   mideleg, satp. One `csr.sv` module owned by the writeback stage.
+   mideleg, satp. One `csr.sv` module — M-mode half DONE 2026-07-18:
+   CSR ops execute in EX and forward like ALU results; precise
+   EX-taken traps (older stages always commit, the wrong-path fetch
+   dies like a mispredict); ECALL traps (it is the SBI path), **EBREAK
+   now halts** (role moved from tt-riscv's ECALL); MRET; WFI=NOP;
+   mtip/msip/meip ports (never injected onto an in-flight muldiv).
+   Compliance gaps logged for milestone 8: unknown CSRs read-0/
+   write-ignore (no illegal-instruction trap), no misaligned-access
+   traps, no mcycle/minstret.
 5. **sv32 MMU**: hardware page-table walker sharing the data port;
    split I/D TLBs, 2–4 entries each, flop-based. sfence.vma flushes
    both. TLB miss = walker microsequence (2 loads). Keep it dumb.
@@ -125,7 +133,11 @@ comfort. KianV's firmware is the reference.
 4. [ ] `vga_text.sv`: line buffer + font ROM + charbuf DMA; measure
        font ROM area in a trial harden immediately.
 5. [ ] 3-port arbiter + video priority; worst-case latency proof.
-6. [ ] csr.sv M-mode only; traps + CLINT irqs; riscv privilege tests.
+6. [~] csr.sv M-mode DONE with 3 instruction-level tests green (CSR
+       RMW forms + forwarding, ECALL->handler->MRET resume, async mtip
+       interrupting a spin loop — 7/7 in test/run_cpu.py). Open: wire
+       CLINT's mtip/msip to the core in the SoC top; official riscv
+       privilege tests once the XIP harness exists.
 7. [ ] nommu uLinux boots in Verilator, console on UART (rung 1
        secured — this alone is submittable).
 8. [ ] S/U modes + sv32 TLBs + walker; xv6 boots.

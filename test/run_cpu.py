@@ -16,6 +16,7 @@ SOURCES = [
     CORE_DIR / "immgen.sv",
     CORE_DIR / "regfile.sv",
     CORE_DIR / "muldiv.sv",
+    CORE_DIR / "csr.sv",
     CORE_DIR / "uart_tx.sv",
     TEST_DIR / "sim_models.sv",
     TEST_DIR / "tb_cpu.v",

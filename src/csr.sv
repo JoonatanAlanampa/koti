@@ -25,7 +25,9 @@ module csr (
     // trap entry / returns (single-cycle commands from EX)
     input  logic        trap,        // take a trap now
     input  logic        trap_irq,    // it is the pending irq we report
-    input  logic [1:0]  trap_kind,   // else: 0 ecall, 1 ipf, 2 lpf, 3 spf
+    input  logic [2:0]  trap_kind,   // else: 0 ecall, 1 ipf, 2 lpf,
+                                     // 3 spf, 4 illegal, 5 misaligned
+                                     // fetch, 6 misload, 7 misstore
     input  logic [31:0] trap_pc,
     input  logic [31:0] trap_tval,
     input  logic        mret, sret,
@@ -38,7 +40,9 @@ module csr (
     // MMU context
     output logic [31:0] satp_rd,
     output logic [1:0]  priv_rd,
-    output logic        sum_rd, mxr_rd
+    output logic        sum_rd, mxr_rd,
+    // the addressed CSR exists (illegal-instruction check in EX)
+    output logic        known
 );
     // privilege: 11 = M, 01 = S, 00 = U
     logic [1:0]  priv;
@@ -128,10 +132,18 @@ module csr (
     // ---- trap routing ----
     wire [31:0] ecall_cause = (priv == 2'b11) ? 32'd11
                             : (priv == 2'b01) ? 32'd9 : 32'd8;
-    wire [31:0] exc_cause = (trap_kind == 2'd1) ? 32'd12
-                          : (trap_kind == 2'd2) ? 32'd13
-                          : (trap_kind == 2'd3) ? 32'd15
-                          :                       ecall_cause;
+    logic [31:0] exc_cause;
+    always_comb
+        case (trap_kind)
+            3'd1:    exc_cause = 32'd12;      // instruction page fault
+            3'd2:    exc_cause = 32'd13;      // load page fault
+            3'd3:    exc_cause = 32'd15;      // store/AMO page fault
+            3'd4:    exc_cause = 32'd2;       // illegal instruction
+            3'd5:    exc_cause = 32'd0;       // fetch addr misaligned
+            3'd6:    exc_cause = 32'd4;       // load addr misaligned
+            3'd7:    exc_cause = 32'd6;       // store/AMO misaligned
+            default: exc_cause = ecall_cause;
+        endcase
     wire [31:0] cause  = trap_irq ? irq_cause : exc_cause;
     wire trap_to_s = trap_irq ? take_s
                    : (medeleg_q[cause[4:0]] && priv != 2'b11);
@@ -143,6 +155,16 @@ module csr (
     assign priv_rd = priv;
     assign sum_rd  = sum_b;
     assign mxr_rd  = mxr_b;
+
+    always_comb
+        case (addr)
+            12'h100, 12'h104, 12'h105, 12'h140, 12'h141, 12'h142,
+            12'h143, 12'h144, 12'h180,
+            12'h300, 12'h301, 12'h302, 12'h303, 12'h304, 12'h305,
+            12'h340, 12'h341, 12'h342, 12'h343, 12'h344:
+                     known = 1'b1;
+            default: known = 1'b0;
+        endcase
 
     always_ff @(posedge clk)
         if (rst) begin

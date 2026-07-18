@@ -227,6 +227,45 @@ module koti_core #(
     wire is_sfence_d = c_is_sys && instr_d[14:12] == 3'b000
                      && instr_d[31:25] == 7'b0001001;   // sfence.vma
 
+    // instruction legality (coarse but covers what kernels probe:
+    // unknown major opcodes, bad funct3/funct7 combos, bad SYSTEM
+    // encodings; CSR existence/privilege is checked at EX)
+    logic legal_d;
+    always_comb begin
+        legal_d = 1'b0;
+        case (instr_d[6:0])
+            7'b0110111, 7'b0010111, 7'b1101111: legal_d = 1'b1;  // U/J
+            7'b1100111: legal_d = instr_d[14:12] == 3'b000;      // JALR
+            7'b1100011: legal_d = instr_d[14:12] != 3'b010
+                               && instr_d[14:12] != 3'b011;      // Bxx
+            7'b0000011: legal_d = instr_d[14:12] <= 3'd2
+                               || instr_d[14:12] == 3'd4
+                               || instr_d[14:12] == 3'd5;        // loads
+            7'b0100011: legal_d = instr_d[14:12] <= 3'd2;        // stores
+            7'b0010011: legal_d =
+                  (instr_d[14:12] == 3'b001) ? instr_d[31:25] == 7'd0
+                : (instr_d[14:12] == 3'b101) ? (instr_d[31:25] == 7'd0
+                                             || instr_d[31:25] == 7'h20)
+                : 1'b1;                                          // OP-IMM
+            7'b0110011: legal_d = instr_d[31:25] == 7'd0
+                               || instr_d[31:25] == 7'h01
+                               || (instr_d[31:25] == 7'h20
+                                   && (instr_d[14:12] == 3'b000
+                                    || instr_d[14:12] == 3'b101)); // OP/M
+            7'b0001111: legal_d = 1'b1;                          // FENCE
+            7'b0101111: legal_d = instr_d[14:12] == 3'b010
+                && (instr_d[31:27] <= 5'd4 || instr_d[31:27] == 5'd8
+                    || instr_d[31:27] == 5'd12
+                    || (instr_d[31] && instr_d[28:27] == 2'b00)); // A
+            7'b1110011: legal_d = (instr_d[14:12] != 3'b000
+                                && instr_d[14:12] != 3'b100)     // CSRs
+                || is_ecall_d || is_ebreak_d || is_mret_d
+                || is_sret_d || is_sfence_d
+                || sys12 == 12'h105;                             // WFI
+            default: ;
+        endcase
+    end
+
     logic [31:0] imm_d;
     immgen ig (.instr(instr_d), .sel(c_imm_sel), .imm(imm_d));
 
@@ -258,7 +297,8 @@ module koti_core #(
     logic        valid_e, reg_write_e, alu_b_src_e, mem_write_e;
     logic        is_branch_e, is_jump_e, is_md_e, is_amo_e;
     logic        ebreak_e, ecall_e, mret_e, sret_e, csr_e;
-    logic        ipf_e, sfence_e;
+    logic        ipf_e, sfence_e, illegal_e;
+    logic [31:0] instr_e;                // for mtval on illegal
     logic [4:0]  amo5_e;
     logic [1:0]  alu_a_src_e, wb_src_e;
     logic [3:0]  alu_op_e;
@@ -286,6 +326,8 @@ module koti_core #(
                 mret_e      <= is_mret_d;   csr_e       <= is_csr_d;
                 sret_e      <= is_sret_d;   sfence_e    <= is_sfence_d;
                 ipf_e       <= ipf_d;
+                illegal_e   <= !legal_d && !ipf_d;   // poison NOP is legal
+                instr_e     <= instr_d;
                 is_amo_e    <= c_is_amo;    amo5_e      <= instr_d[31:27];
                 alu_a_src_e <= c_alu_a_src; wb_src_e    <= c_wb_src;
                 alu_op_e    <= c_alu_op;    funct3_e    <= instr_d[14:12];
@@ -327,7 +369,7 @@ module koti_core #(
     // delivers; the result rides EX/MEM and forwards normally
     logic        md_busy, md_done;
     logic [31:0] md_result;
-    wire md_op  = valid_e && is_md_e;
+    wire md_op  = valid_e && is_md_e && !illegal_e;
     wire md_ack = md_op && md_done && !mstall && !astall && !halted;
     assign md_stall = md_op && !md_done;
     muldiv md (.clk(clk), .rst(rst), .start(md_op), .ack(md_ack),
@@ -339,13 +381,32 @@ module koti_core #(
     // only on the commit cycle (!pstall) — held across a stall they
     // would rewrite the MPIE/MIE stack. Never inject an irq onto an
     // in-flight muldiv (would orphan the unit).
-    logic        csr_irq;
+    logic        csr_irq, csr_known;
     logic [31:0] csr_rval, csr_trap_vec, csr_mepc, csr_sepc;
+
+    // ---- illegal instruction (cause 2): decode-level (illegal_e from
+    // D) plus EX-level checks that need CSR/privilege context. An
+    // illegal instruction must produce no side effects: it is excluded
+    // from memory ops, muldiv, CSR writes, and branch redirects.
+    wire csr_wen0 = (funct3_e[1:0] == 2'b01) || (rs1_e != 5'd0);
+    wire csr_ill  = csr_e && (!csr_known
+                 || imm_e[9:8] > csr_priv
+                 || (csr_wen0 && imm_e[11:10] == 2'b11));  // RO CSR write
+    wire ret_ill  = (mret_e && csr_priv != 2'b11)
+                 || (sret_e && csr_priv == 2'b00)
+                 || (sfence_e && csr_priv == 2'b00);
+    wire ill_e    = illegal_e || csr_ill || ret_ill;
 
     // ---- sv32 data-side translation, at EX so traps stay precise and
     // stval gets the faulting VA ----
     wire mmu_d_on  = csr_satp[31] && csr_priv != 2'b11;   // (no MPRV)
-    wire dmem_op_e = valid_e && (mem_write_e || wb_src_e == 2'd1);
+    wire dmem_op_e = valid_e && !ill_e
+                  && (mem_write_e || wb_src_e == 2'd1);
+
+    // misaligned data address (4/6): lower priority than page faults
+    wire dmis = dmem_op_e
+             && ((funct3_e[1:0] == 2'b01 && alu_y[0])
+              || (funct3_e[1:0] == 2'b10 && alu_y[1:0] != 2'b00));
     wire d_isstore = mem_write_e
                   || (is_amo_e && amo5_e != 5'b00010);    // SC/AMO: store pf
 
@@ -412,25 +473,41 @@ module koti_core #(
         end else if (dw_l0)
             dw_state <= 2'd0;
 
-    // ---- traps: EX commands fire only on the commit cycle ----
-    wire irq_take  = valid_e && csr_irq && !is_md_e && !pstall && !halted;
-    wire ipf_take  = valid_e && ipf_e && !irq_take && !pstall && !halted;
+    wire take_ex = valid_e && !ill_e
+                && (is_jump_e || (is_branch_e && br_taken));
+
+    // ---- traps: EX commands fire only on the commit cycle.
+    // Priority: irq > ipf > illegal > ecall > misaligned fetch target
+    // > data page fault > data misalign (page faults outrank misalign
+    // per the privileged spec's exception priority table).
+    wire commit    = !pstall && !halted;
+    wire irq_take  = valid_e && csr_irq && !is_md_e && commit;
+    wire ipf_take  = valid_e && ipf_e && !irq_take && commit;
+    wire ill_take  = valid_e && ill_e && !irq_take && commit;
+    wire ecl_take  = valid_e && ecall_e && !irq_take && commit;
+    wire imis_take = take_ex && alu_y[1] && !irq_take && commit;
     wire dpf_take  = d_xlate && dtlb_hit && dtlb_pfault
-                  && !irq_take && !pstall && !halted;
-    wire ecl_take  = valid_e && ecall_e && !irq_take && !pstall && !halted;
-    wire trap_take = irq_take || ipf_take || dpf_take || ecl_take;
-    wire mret_take = valid_e && mret_e && !pstall && !halted && !trap_take;
-    wire sret_take = valid_e && sret_e && !pstall && !halted && !trap_take;
-    wire sfence_take = valid_e && sfence_e && !pstall && !halted
-                    && !trap_take;
+                  && !irq_take && commit;
+    wire dmis_take = dmis && !dpf_take && !irq_take && commit;
+    wire trap_take = irq_take || ipf_take || ill_take || ecl_take
+                  || imis_take || dpf_take || dmis_take;
+    wire mret_take = valid_e && mret_e && commit && !trap_take;
+    wire sret_take = valid_e && sret_e && commit && !trap_take;
+    wire sfence_take = valid_e && sfence_e && commit && !trap_take;
 
-    wire [1:0]  trap_kind = ipf_take ? 2'd1
-                          : dpf_take ? (d_isstore ? 2'd3 : 2'd2) : 2'd0;
-    wire [31:0] trap_tval = ipf_take ? pc_e
-                          : dpf_take ? alu_y : 32'd0;
+    wire [2:0]  trap_kind = ipf_take  ? 3'd1
+                          : ill_take  ? 3'd4
+                          : imis_take ? 3'd5
+                          : dpf_take  ? (d_isstore ? 3'd3 : 3'd2)
+                          : dmis_take ? (d_isstore ? 3'd7 : 3'd6)
+                          :             3'd0;
+    wire [31:0] trap_tval = ipf_take  ? pc_e
+                          : ill_take  ? instr_e
+                          : imis_take ? {alu_y[31:1], 1'b0}
+                          : (dpf_take || dmis_take) ? alu_y : 32'd0;
 
-    wire csr_en  = valid_e && csr_e && !irq_take && !pstall && !halted;
-    wire csr_wen = (funct3_e[1:0] == 2'b01) || (rs1_e != 5'd0);
+    wire csr_en  = valid_e && csr_e && !ill_e && !irq_take && commit;
+    wire csr_wen = csr_wen0;
     wire [31:0] csr_wval = funct3_e[2] ? {27'd0, rs1_e} : fwd1;
 
     assign tlb_flush = sfence_take
@@ -446,10 +523,10 @@ module koti_core #(
               .irq(csr_irq), .trap_vec(csr_trap_vec),
               .mepc_rd(csr_mepc), .sepc_rd(csr_sepc),
               .satp_rd(csr_satp), .priv_rd(csr_priv),
-              .sum_rd(csr_sum), .mxr_rd(csr_mxr));
+              .sum_rd(csr_sum), .mxr_rd(csr_mxr), .known(csr_known));
 
-    wire take_ex  = valid_e && (is_jump_e || (is_branch_e && br_taken));
-    assign flush_ex  = take_ex || trap_take || mret_take || sret_take
+    assign flush_ex  = (take_ex && !imis_take) || trap_take || mret_take
+                     || sret_take
                      || sfence_take || (valid_e && ebreak_e);
     assign target_ex = trap_take             ? csr_trap_vec
                      : mret_take             ? csr_mepc

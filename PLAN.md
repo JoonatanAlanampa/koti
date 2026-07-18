@@ -41,9 +41,20 @@ over; it becomes a 3-port arbiter (ifetch / data / video DMA).
    dies like a mispredict); ECALL traps (it is the SBI path), **EBREAK
    now halts** (role moved from tt-riscv's ECALL); MRET; WFI=NOP;
    mtip/msip/meip ports (never injected onto an in-flight muldiv).
-   Compliance gaps logged for milestone 8: unknown CSRs read-0/
-   write-ignore (no illegal-instruction trap), no misaligned-access
-   traps, no mcycle/minstret.
+   Compliance gaps CLOSED 2026-07-18: **illegal-instruction traps**
+   (cause 2, mtval = instruction bits) for unknown major opcodes,
+   bad funct3/funct7 combos, bad SYSTEM encodings, unknown CSRs,
+   CSR privilege + read-only-write violations, and mret/sret/sfence
+   below their privilege — illegal instructions are excluded from
+   memory ops, muldiv, CSR writes and branch redirects.
+   **Misaligned traps**: load (4) / store-AMO (6) with mtval =
+   address (page faults outrank misalign per the spec priority
+   table), and misaligned fetch targets (cause 0) on taken jumps
+   with mtval = target. Verified by a 7-trap cause/mtval sequence
+   test and a U-mode CSR-privilege test (incl. SRET-in-U); 15/15
+   directed + 58/58 official + pin-level green. Remaining known
+   gaps: mcycle/minstret, MPRV, EBREAK halts instead of raising
+   breakpoint (deliberate), coarse funct7 legality corners.
 5. **sv32 MMU**: hardware page-table walker sharing the data port;
    split I/D TLBs, 2–4 entries each, flop-based. sfence.vma flushes
    both. TLB miss = walker microsequence (2 loads). Keep it dumb.

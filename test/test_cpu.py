@@ -539,6 +539,76 @@ async def test_sv32_translation_and_faults(dut):
 
 
 @cocotb.test()
+async def test_illegal_and_misaligned(dut):
+    """Causes 4/6/0/2 with correct mtval: misaligned loads/stores/
+    fetch targets/AMOs, then unknown-encoding and unknown-CSR
+    illegals (mtval = instruction bits)."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    bad_csr = csrrs(10, 0xCC0, 0)
+    main = ([addi(24, 0, 0), addi(26, 0, 0)]
+            + li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
+            + li(2, DATA) + li(3, DATA + 2) + [
+        lw(11, 2, 2),           # cause 4, tval DATA+2
+        sw(11, 2, 1),           # cause 6, tval DATA+1
+        ((1 << 20) | (2 << 15) | (1 << 12) | (12 << 7) | 0x03),
+                                # lh x12, 1(x2): cause 4
+        jalr(13, 2, 2),         # target DATA+2: cause 0, tval DATA+2
+        amo(AADD, 14, 3, 1),    # misaligned AMO: cause 6, tval DATA+2
+        0x0000_0000,            # illegal encoding: cause 2, tval 0
+        bad_csr,                # unknown CSR: cause 2, tval = instr
+        EBREAK,
+    ])
+    m_handler = [
+        csrrs(20, MCAUSE, 0),
+        slli(24, 24, 4),
+        andi(22, 20, 15),
+        or_(24, 24, 22),
+        csrrs(21, MTVAL, 0),
+        add(25, 0, 26),
+        add(26, 0, 21),
+        csrrs(23, MEPC, 0),
+        addi(23, 23, 4),
+        csrrw(0, MEPC, 23),
+        MRET,
+    ]
+    await run_program(dut, layout(main, {HANDLER: m_handler}))
+    assert reg(dut, 24) == 0x4640622, \
+        f"cause sequence {reg(dut, 24):#x} != 4,6,4,0,6,2,2"
+    assert reg(dut, 25) == 0, "mtval of the all-zeros illegal"
+    assert reg(dut, 26) == bad_csr, "mtval must hold the instr bits"
+
+
+@cocotb.test()
+async def test_umode_csr_privilege(dut):
+    """U-mode touching S/M CSRs and executing SRET raises illegal."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    main = ([addi(24, 0, 0)]
+            + li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
+            + li(3, S_ENTRY * 4) + [csrrw(0, MEPC, 3),
+                                    MRET])           # MPP reset = U
+    u_entry = [
+        csrrs(5, MSCRATCH, 0),   # M CSR from U: illegal
+        csrrs(6, SSTATUS, 0),    # S CSR from U: illegal
+        SRET,                    # SRET in U: illegal
+        EBREAK,
+    ]
+    m_handler = [
+        csrrs(20, MCAUSE, 0),
+        slli(24, 24, 4),
+        andi(22, 20, 15),
+        or_(24, 24, 22),
+        csrrs(23, MEPC, 0),
+        addi(23, 23, 4),
+        csrrw(0, MEPC, 23),
+        MRET,
+    ]
+    await run_program(dut, layout(main, {HANDLER: m_handler,
+                                         S_ENTRY: u_entry}))
+    assert reg(dut, 24) == 0x222, \
+        f"three illegals expected, got {reg(dut, 24):#x}"
+
+
+@cocotb.test()
 async def test_timer_interrupt(dut):
     """mtip fires mid-loop; handler runs once, main escapes cleanly."""
     cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())

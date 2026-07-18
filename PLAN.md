@@ -173,7 +173,19 @@ comfort. KianV's firmware is the reference.
        privilege tests once the XIP harness exists.
 7. [ ] nommu uLinux boots in Verilator, console on UART (rung 1
        secured — this alone is submittable).
-8. [ ] S/U modes + sv32 TLBs + walker; xv6 boots.
+8. [~] S/U privilege plumbing DONE (2026-07-18): `src/csr.sv` rewrote
+       with M/S/U modes, full mstatus (MPP/SPP/xPIE/xIE stack),
+       S-mode CSR set (sstatus/sie/sip/stvec/sepc/scause/stval/
+       sscratch/satp), medeleg/mideleg, sret, S-irq injection via
+       M-writes to mip (STIP/SSIP/SEIP), spec-correct interrupt
+       take/delegation rules. satp is a plain register until the
+       walker lands. core/csr.sv stays the frozen M-only ancestor.
+       3 new tests: delegated ecall-from-S handled in S + sret;
+       ecall-from-U to M with MPP=U; and the Linux timer flow — M
+       takes MTI, masks, injects STIP, delegated S-timer trap lands
+       at stvec. 12/12 directed + 58/58 official + pin-level all
+       green. Open: sv32 TLBs + hardware walker + page-fault causes
+       + permission checks; then xv6.
 9. [ ] Mainline Linux sv32 boots to shell on fbcon, Verilator + ULX3S.
 10. [ ] Harden at 8x2 @ ~55%; iterate. Submit to the next shuttle
         after TTSKY26c (this is NOT a TTSKY26c project — no rushing a

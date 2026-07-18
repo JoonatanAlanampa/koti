@@ -143,6 +143,7 @@ module koti_core #(
     wire is_ecall_d  = c_is_sys && instr_d[14:12] == 3'b000 && sys12 == 12'h000;
     wire is_ebreak_d = c_is_sys && instr_d[14:12] == 3'b000 && sys12 == 12'h001;
     wire is_mret_d   = c_is_sys && instr_d[14:12] == 3'b000 && sys12 == 12'h302;
+    wire is_sret_d   = c_is_sys && instr_d[14:12] == 3'b000 && sys12 == 12'h102;
 
     logic [31:0] imm_d;
     immgen ig (.instr(instr_d), .sel(c_imm_sel), .imm(imm_d));
@@ -164,7 +165,7 @@ module koti_core #(
     // ---- ID/EX ----
     logic        valid_e, reg_write_e, alu_b_src_e, mem_write_e;
     logic        is_branch_e, is_jump_e, is_md_e, is_amo_e;
-    logic        ebreak_e, ecall_e, mret_e, csr_e;
+    logic        ebreak_e, ecall_e, mret_e, sret_e, csr_e;
     logic [4:0]  amo5_e;
     logic [1:0]  alu_a_src_e, wb_src_e;
     logic [3:0]  alu_op_e;
@@ -189,6 +190,7 @@ module koti_core #(
                 is_md_e     <= c_is_md;
                 ebreak_e    <= is_ebreak_d; ecall_e     <= is_ecall_d;
                 mret_e      <= is_mret_d;   csr_e       <= is_csr_d;
+                sret_e      <= is_sret_d;
                 is_amo_e    <= c_is_amo;    amo5_e      <= instr_d[31:27];
                 alu_a_src_e <= c_alu_a_src; wb_src_e    <= c_wb_src;
                 alu_op_e    <= c_alu_op;    funct3_e    <= instr_d[14:12];
@@ -240,12 +242,12 @@ module koti_core #(
     // would rewrite the MPIE/MIE stack. Never inject an irq onto an
     // in-flight muldiv (would orphan the unit).
     logic        csr_irq;
-    logic [31:0] csr_rval, csr_irq_cause, csr_tvec, csr_epc;
+    logic [31:0] csr_rval, csr_trap_vec, csr_mepc, csr_sepc;
 
     wire irq_take  = valid_e && csr_irq && !is_md_e && !pstall && !halted;
     wire trap_take = irq_take || (valid_e && ecall_e && !pstall && !halted);
     wire mret_take = valid_e && mret_e && !pstall && !halted && !trap_take;
-    wire [31:0] trap_cause = irq_take ? csr_irq_cause : 32'd11; // M-ecall
+    wire sret_take = valid_e && sret_e && !pstall && !halted && !trap_take;
 
     wire csr_en  = valid_e && csr_e && !irq_take && !pstall && !halted;
     wire csr_wen = (funct3_e[1:0] == 2'b01) || (rs1_e != 5'd0);
@@ -254,17 +256,18 @@ module koti_core #(
     csr csr0 (.clk(clk), .rst(rst),
               .en(csr_en), .op(funct3_e[1:0]), .wen(csr_wen),
               .addr(imm_e[11:0]), .wval(csr_wval), .rval(csr_rval),
-              .trap(trap_take), .trap_pc(pc_e), .trap_cause(trap_cause),
-              .mret(mret_take),
+              .trap(trap_take), .trap_ecall(!irq_take), .trap_pc(pc_e),
+              .mret(mret_take), .sret(sret_take),
               .mtip(mtip), .msip(msip), .meip(meip),
-              .irq(csr_irq), .irq_cause(csr_irq_cause),
-              .tvec(csr_tvec), .epc(csr_epc));
+              .irq(csr_irq), .trap_vec(csr_trap_vec),
+              .mepc_rd(csr_mepc), .sepc_rd(csr_sepc));
 
     wire take_ex  = valid_e && (is_jump_e || (is_branch_e && br_taken));
-    assign flush_ex  = take_ex || trap_take || mret_take
+    assign flush_ex  = take_ex || trap_take || mret_take || sret_take
                      || (valid_e && ebreak_e);
-    assign target_ex = trap_take             ? csr_tvec
-                     : mret_take             ? csr_epc
+    assign target_ex = trap_take             ? csr_trap_vec
+                     : mret_take             ? csr_mepc
+                     : sret_take             ? csr_sepc
                      : (valid_e && ebreak_e) ? pc_e          // spin + drain
                      : {alu_y[31:1], 1'b0};
 

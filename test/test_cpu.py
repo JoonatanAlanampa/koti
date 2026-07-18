@@ -17,7 +17,10 @@ M32 = 0xFFFF_FFFF
 DATA = 0x0100_0100  # scratch word in PSRAM (flash is read-only)
 
 MSTATUS, MISA, MIE, MTVEC = 0x300, 0x301, 0x304, 0x305
-MSCRATCH, MEPC, MCAUSE = 0x340, 0x341, 0x342
+MSCRATCH, MEPC, MCAUSE, MIP = 0x340, 0x341, 0x342, 0x344
+MEDELEG, MIDELEG = 0x302, 0x303
+SSTATUS, SIE, STVEC = 0x100, 0x104, 0x105
+SEPC, SCAUSE = 0x141, 0x142
 
 # ---- tiny assembler ----------------------------------------------------
 
@@ -112,8 +115,18 @@ AMIN, AMAX, AMINU, AMAXU = 0b10000, 0b10100, 0b11000, 0b11100
 ECALL = 0x0000_0073
 EBREAK = 0x0010_0073
 MRET = 0x3020_0073
+SRET = 0x1020_0073
 
 HANDLER = 48  # word index of trap handlers in trap tests
+
+
+def layout(main, sections):
+    """Place code sections at fixed word indices, EBREAK-padded."""
+    prog = list(main)
+    for idx in sorted(sections):
+        assert len(prog) <= idx, f"section at {idx} overlaps"
+        prog += [EBREAK] * (idx - len(prog)) + sections[idx]
+    return prog
 
 # ---- harness -----------------------------------------------------------
 
@@ -296,7 +309,7 @@ async def test_csr_ops(dut):
         csrrsi(7, MSCRATCH, 10),  # x7 = 21, mscratch = 31
         csrrs(8, MSCRATCH, 0),    # x8 = 31
         add(9, 2, 8),             # CSR result forwards: x9 = x2 + 31
-        csrrs(10, MISA, 0),       # x10 = RV32IM misa
+        csrrs(10, MISA, 0),       # x10 = RV32IMA+SU misa
         EBREAK,
     ])
     await run_program(dut, prog)
@@ -307,7 +320,7 @@ async def test_csr_ops(dut):
     assert reg(dut, 7) == 21
     assert reg(dut, 8) == 31
     assert reg(dut, 9) == (0x1234_5678 + 31) & M32
-    assert reg(dut, 10) == 0x4000_1100
+    assert reg(dut, 10) == 0x4014_1100
 
 
 @cocotb.test()
@@ -333,6 +346,108 @@ async def test_ecall_trap_and_mret(dut):
     assert reg(dut, 10) == 100, "MRET did not resume after ECALL"
     assert reg(dut, 11) == 11
     assert reg(dut, 12) == ecall_addr
+
+
+S_HANDLER, S_ENTRY = 64, 80
+
+
+@cocotb.test()
+async def test_smode_ecall_delegated(dut):
+    """MRET drops to S; a delegated ECALL lands in the S handler;
+    SRET resumes."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    main = (li(1, S_HANDLER * 4) + [csrrw(0, STVEC, 1)]
+            + li(2, 1 << 9) + [csrrs(0, MEDELEG, 2)]     # ecall-from-S -> S
+            + li(3, S_ENTRY * 4) + [csrrw(0, MEPC, 3)]
+            + li(4, 0x800) + [csrrs(0, MSTATUS, 4),      # MPP = 01 (S)
+                              MRET])
+    s_entry = [
+        addi(10, 0, 0),
+        ECALL,                      # delegated: S handler, scause 9
+        addi(10, 10, 100),
+        EBREAK,
+    ]
+    s_handler = [
+        csrrs(11, SCAUSE, 0),
+        csrrs(12, SEPC, 0),
+        csrrs(17, SSTATUS, 0),      # SPP (bit 8) = came from S
+        addi(13, 12, 4),
+        csrrw(0, SEPC, 13),
+        SRET,
+    ]
+    await run_program(dut, layout(main, {S_HANDLER: s_handler,
+                                         S_ENTRY: s_entry}))
+    assert reg(dut, 10) == 100, "SRET did not resume after the ECALL"
+    assert reg(dut, 11) == 9, "scause != ecall-from-S"
+    assert reg(dut, 12) == S_ENTRY * 4 + 4
+    assert reg(dut, 17) & 0x100, "sstatus.SPP should say 'came from S'"
+
+
+@cocotb.test()
+async def test_umode_ecall_to_m(dut):
+    """MRET drops to U (reset MPP=00); ECALL from U traps to M with
+    cause 8 and MPP recording U."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    main = (li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
+            + li(3, S_ENTRY * 4) + [csrrw(0, MEPC, 3),
+                                    MRET])              # MPP reset = U
+    u_entry = [
+        addi(10, 0, 0),
+        ECALL,                      # not delegated: M handler, cause 8
+        addi(10, 10, 50),
+        EBREAK,
+    ]
+    m_handler = [
+        csrrs(11, MCAUSE, 0),
+        csrrs(17, MSTATUS, 0),      # MPP (12:11) must be 00
+        csrrs(12, MEPC, 0),
+        addi(13, 12, 4),
+        csrrw(0, MEPC, 13),
+        MRET,
+    ]
+    await run_program(dut, layout(main, {HANDLER: m_handler,
+                                         S_ENTRY: u_entry}))
+    assert reg(dut, 10) == 50, "MRET did not resume U after the ECALL"
+    assert reg(dut, 11) == 8, "mcause != ecall-from-U"
+    assert reg(dut, 17) & 0x1800 == 0, "mstatus.MPP should record U"
+
+
+@cocotb.test()
+async def test_sbi_timer_path(dut):
+    """The Linux timer flow: M takes MTI, masks it, injects STIP;
+    the delegated S-timer interrupt lands in the S handler."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    main = (li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
+            + li(2, S_HANDLER * 4) + [csrrw(0, STVEC, 2)]
+            + li(3, 1 << 5) + [csrrs(0, MIDELEG, 3)]     # delegate STI
+            + [addi(4, 0, 0x80), csrrs(0, MIE, 4)]       # MTIE
+            + li(5, S_ENTRY * 4) + [csrrw(0, MEPC, 5)]
+            + li(6, 0x800) + [csrrs(0, MSTATUS, 6),      # MPP = S
+                              MRET])
+    s_entry = [
+        addi(2, 0, 1 << 5),
+        csrrs(0, SIE, 2),           # sie.STIE
+        csrrsi(0, SSTATUS, 2),      # sstatus.SIE
+        beq(0, 0, 0),               # spin until the S-timer trap
+    ]
+    m_handler = [                   # "SBI firmware"
+        csrrs(14, MCAUSE, 0),       # 0x80000007: machine timer
+        addi(4, 0, 0x80),
+        csrrc(0, MIE, 4),           # mask MTIE
+        addi(4, 0, 1 << 5),
+        csrrs(0, MIP, 4),           # inject STIP
+        MRET,                       # back to S...
+    ]
+    s_handler = [
+        csrrs(16, SCAUSE, 0),       # ...which takes 0x80000005
+        EBREAK,
+    ]
+    await run_program(dut, layout(main, {HANDLER: m_handler,
+                                         S_HANDLER: s_handler,
+                                         S_ENTRY: s_entry}),
+                      mtip_at=200)
+    assert reg(dut, 14) == 0x8000_0007, "M did not take the MTI"
+    assert reg(dut, 16) == 0x8000_0005, "S did not take the injected STI"
 
 
 @cocotb.test()

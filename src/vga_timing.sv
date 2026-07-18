@@ -5,9 +5,10 @@
 // Both syncs are active-low (standard 640x480 polarity). All outputs
 // are registered and mutually aligned: hsync/vsync/active describe the
 // pixel at the exported x/y. Visible pixels: x < 640 && y < 480.
-// `hblank_start` pulses (with ce) when x becomes 640 on a visible line
-// — the video controller launches its charbuf prefetch burst there.
-// `frame_start` pulses at x==0, y==0.
+// `hblank_start` pulses (with ce) when x becomes 640 on EVERY line —
+// including blanking lines: the text controller schedules its vblank
+// row-0 prefetch and frame swap from it. `frame_start` pulses at
+// x==0, y==0.
 module vga_timing (
     input  logic       clk, rst,
     input  logic       ce,
@@ -42,7 +43,7 @@ module vga_timing (
             hsync  <= ~(nx >= H_VIS + H_FP && nx < H_VIS + H_FP + H_SYNC);
             vsync  <= ~(ny >= V_VIS + V_FP && ny < V_VIS + V_FP + V_SYNC);
             active <= (nx < H_VIS) && (ny < V_VIS);
-            hblank_start <= (nx == H_VIS) && (ny < V_VIS);
+            hblank_start <= (nx == H_VIS);
             frame_start  <= (nx == 10'd0) && (ny == 10'd0);
         end else begin
             hblank_start <= 1'b0;

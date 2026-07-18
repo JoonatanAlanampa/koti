@@ -6,9 +6,15 @@
 # arms the CLINT timer, takes the interrupt, and halts via EBREAK.
 # SpiMem/spi_bus are the pin-level models proven in tt-riscv.
 
+import sys
+from pathlib import Path
+
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
+
+sys.path.append(str(Path(__file__).parent.parent / "tools"))
+from genfont import FONT  # noqa: E402  (RTL font ROM comes from here)
 
 # uio bit positions (QSPI Pmod): SD0..SD3 on uio[1,2,4,5]
 CS0 = 0   # flash, active low
@@ -56,6 +62,14 @@ def sw(rs2, off, rs1):
 
 def beq(rs1, rs2, off):
     return b_type(off, rs2, rs1, 0)
+
+
+def srli(rd, rs1, sh):
+    return i_type(sh, rs1, 5, rd, 0x13)
+
+
+def andi(rd, rs1, imm):
+    return i_type(imm, rs1, 7, rd, 0x13)
 
 
 def csrrw(rd, csr, rs1):
@@ -319,3 +333,98 @@ async def test_koti_boot_and_timer(dut):
     # PSRAM: serial-written word at +4, quad-written word at +8
     assert ram.mem[4:8] == bytes([0xFD, 0xFF, 0xFF, 0xFF]), ram.mem[0:12].hex()
     assert ram.mem[8:12] == bytes([0xFD, 0xFF, 0xFF, 0xFF]), ram.mem[0:12].hex()
+
+
+# ---------------------------------------------------------------- VGA + PS/2
+
+
+async def ps2_send_pins(dut, byte):
+    """Clock one PS/2 frame on ui[0]/ui[1] (~100 clk per half-bit)."""
+    parity = 1 ^ (bin(byte).count("1") & 1)
+    bits = [0] + [(byte >> i) & 1 for i in range(8)] + [parity, 1]
+    for b in bits:
+        dut.ui_in.value = (b << 1) | 1
+        await ClockCycles(dut.clk, 100)
+        dut.ui_in.value = (b << 1) | 0
+        await ClockCycles(dut.clk, 100)
+    dut.ui_in.value = 0b11
+
+
+def vga_program():
+    x0, x5, x6, x7, x8, x9, x10, x11 = 0, 5, 6, 7, 8, 9, 10, 11
+    return [
+        lui(x5, MMIO_HI),          # LED MMIO
+        lui(x6, 0x40),             # VGA/PS2 block 0x0004_0000
+        # poll the keyboard, then show the scancode on the LEDs
+        lw(x9, 12, x6),
+        srli(x10, x9, 8),
+        beq(x10, x0, -8),
+        andi(x11, x9, 0xFF),
+        sw(x11, 0, x5),
+        # write "KOTI" into the charbuf and switch the pins to VGA
+        lui(x7, 0x1008),           # charbuf at 0x0100_8000
+        lui(x8, 0x49545),
+        addi(x8, x8, 0xF4B),       # x8 = 0x49544F4B = "KOTI" LE
+        sw(x8, 0, x7),
+        sw(x7, 4, x6),             # charbuf base
+        addi(x9, x0, 1),
+        sw(x9, 0, x6),             # ctrl: VGA_EN
+        beq(x0, x0, 0),            # spin
+    ]
+
+
+@cocotb.test()
+async def test_ps2_and_vga_text(dut):
+    """PS/2 scancode read via MMIO shows on LEDs; then VGA mode renders
+    the first glyph row of 'K' pixel-exactly on the uo pins."""
+    clock = Clock(dut.clk, 40, unit="ns")  # 25 MHz
+    cocotb.start_soon(clock.start())
+
+    flash = SpiMem(1 << 16, writable=False)
+    ram = SpiMem(1 << 16, writable=True)
+    for i, insn in enumerate(vga_program()):
+        flash.mem[4 * i:4 * i + 4] = insn.to_bytes(4, "little")
+    cocotb.start_soon(spi_bus(dut, flash, ram))
+
+    dut.ena.value = 1
+    dut.ui_in.value = 0b11         # PS/2 idle high
+    dut.uio_in.value = 0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 10)
+    dut.rst_n.value = 1
+
+    await ClockCycles(dut.clk, 200)
+    await ps2_send_pins(dut, 0x2A)
+
+    for _ in range(60000):
+        await RisingEdge(dut.clk)
+        if int(dut.uo_out.value) >> 2 == 0x2A:
+            break
+    else:
+        raise AssertionError("scancode never reached the LEDs")
+
+    # VGA mode: catch a full vsync pulse (uo[3] low for 2 lines), then
+    # line up on y=0 x=0: 33 hsync falls after the vsync rise, +142 clk
+    async def wait_bit(bit, level, timeout):
+        for _ in range(timeout):
+            await RisingEdge(dut.clk)
+            if (int(dut.uo_out.value) >> bit) & 1 == level:
+                return
+        raise AssertionError(f"uo[{bit}] never reached {level}")
+
+    await wait_bit(3, 0, 900_000)          # vsync fall (VGA mode is on)
+    await wait_bit(3, 1, 10_000)           # vsync rise: line 492
+    for _ in range(33):                    # falls at x=656 of each line
+        await wait_bit(7, 0, 2_000)
+        await wait_bit(7, 1, 2_000)
+    await ClockCycles(dut.clk, 46)         # rise was x=752; land at x=-2
+
+    samples = []
+    for _ in range(20):
+        await RisingEdge(dut.clk)
+        samples.append(int(dut.uo_out.value))
+
+    krow = FONT[ord("K")][0]
+    want = [0xFF if (krow >> i) & 1 else 0x88 for i in range(8)]
+    ok = any(samples[i:i + 8] == want for i in range(len(samples) - 7))
+    assert ok, f"'K' row not on the wire: {[hex(s) for s in samples]}"

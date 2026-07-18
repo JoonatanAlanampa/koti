@@ -142,8 +142,25 @@ comfort. KianV's firmware is the reference.
        reset pattern, hsync width/period, PS/2 frames incl. bad-parity
        reject. Open: clint bench (not yet wired into top), vsync
        count, VGA frame dumped to PPM.
-4. [ ] `vga_text.sv`: line buffer + font ROM + charbuf DMA; measure
-       font ROM area in a trial harden immediately.
+4. [x] `vga_text.sv` DONE (2026-07-18): 80x30 text, 8x8 font in 8x16
+       cells (line-doubled) — font ROM only 768 B (tools/genfont.py
+       generates src/font_rom.svh from the public-domain font8x8 set;
+       **glyph art needs visual verification on FPGA before tapeout**).
+       Ping-pong 80-byte line buffers; row r+1 fetched during row r
+       (10 pair-reads, ~3.3 scanlines worst-case serial vs 16
+       available); row 0 prefetched at vblank line 508, swap at row
+       ends + line 524. `arbiter3.sv`: video > data > fetch, grant
+       held to ack (worst video wait = one serial burst, ~132 clk).
+       SoC: VGA/PS2 MMIO block at 0x0004_0000 (ctrl/base/colors/
+       keyboard, read-clears avail — captured pre-clear after a
+       classic read-race bug), ps2_rx wired to ui[1:0], kb_avail →
+       meip. uo personality is software-switched: headless at reset
+       (UART/HALTED/LED — all older tests still pass), Tiny VGA once
+       VGA_EN set, UART mux onto blue LSB via ctrl bit 1. Pin-level
+       test renders 'K' row 0 pixel-exact on uo after a PS/2 MMIO
+       round-trip. Bug found: hblank_start was visible-lines-only,
+       silently killing the vblank prefetch + frame swap.
+       Area check in the 8x2 GDS run pending.
 5. [~] Bus unification (2026-07-18): `src/koti_core.sv` is now THE
        core — rv32_core.sv's fetch FSM/data port/MMIO merged with the
        RV32IMA+Zicsr pipeline; `src/qspi_ctrl.sv` (+2:1 arbiter)

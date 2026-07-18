@@ -79,7 +79,7 @@ module koti_core #(
     logic        itlb_hit;
     logic [21:0] itlb_ppn;
     logic        itlb_r, itlb_w, itlb_x, itlb_u, itlb_pd, itlb_f;
-    tlb #(.N(4)) itlb0 (
+    tlb #(.N(2)) itlb0 (
         .clk(clk), .rst(rst), .flush(tlb_flush),
         .vpn(i_vpn), .hit(itlb_hit), .ppn(itlb_ppn),
         .p_r(itlb_r), .p_w(itlb_w), .p_x(itlb_x), .p_u(itlb_u),
@@ -339,7 +339,7 @@ module koti_core #(
     logic        dtlb_hit;
     logic [21:0] dtlb_ppn;
     logic        dtlb_r, dtlb_w, dtlb_x, dtlb_u, dtlb_pd, dtlb_f;
-    tlb #(.N(4)) dtlb0 (
+    tlb #(.N(2)) dtlb0 (
         .clk(clk), .rst(rst), .flush(tlb_flush),
         .vpn(d_vpn), .hit(dtlb_hit), .ppn(dtlb_ppn),
         .p_r(dtlb_r), .p_w(dtlb_w), .p_x(dtlb_x), .p_u(dtlb_u),

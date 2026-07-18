@@ -160,7 +160,17 @@ comfort. KianV's firmware is the reference.
        test renders 'K' row 0 pixel-exact on uo after a PS/2 MMIO
        round-trip. Bug found: hblank_start was visible-lines-only,
        silently killing the vblank prefetch + frame swap.
-       Area check in the 8x2 GDS run pending.
+       **First 8x2 harden attempt FAILED as predicted by risk #1**
+       (run 29655252221): 247.9k um^2 of logic on a 302.4k um^2 core
+       = 94.5% utilization, detailed placement (DPL-0036) gave up.
+       Fallback levers pulled (2026-07-18): TLBs 4->2 entries each;
+       **40x30 text** (16x16 cells, pixels doubled both ways — halves
+       the line buffers to 2x40 B and the row DMA to 5 bursts);
+       **64-glyph font** (lowercase folds to uppercase in vga_text,
+       C64 style — ROM now 512 B). All suites re-green. If the next
+       harden still misses: remaining levers are latch/RAM-macro line
+       buffers + regfile (TT memory macros), narrower muldiv, or the
+       colossal-tile conversation with TT.
 5. [~] Bus unification (2026-07-18): `src/koti_core.sv` is now THE
        core — rv32_core.sv's fetch FSM/data port/MMIO merged with the
        RV32IMA+Zicsr pipeline; `src/qspi_ctrl.sv` (+2:1 arbiter)

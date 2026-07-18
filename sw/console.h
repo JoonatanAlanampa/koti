@@ -1,4 +1,4 @@
-// console.h — VGA text console (80x30 charbuf in PSRAM).
+// console.h — VGA text console (40x30 charbuf in PSRAM).
 #ifndef CONSOLE_H
 #define CONSOLE_H
 

@@ -2,7 +2,8 @@
 # (derived from the public-domain font8x8_basic set; glyph art to be
 # visually verified on FPGA before tapeout). Convention: 8 rows top to
 # bottom, bit 0 = leftmost pixel. ASCII 0x20..0x7F; anything else
-# renders blank.
+# renders blank. Glyphs 0x60+ are folded onto 0x40+ in vga_text
+# (uppercase-only, C64 style) so only 0x20..0x5F carry ROM area.
 #
 #   python tools/genfont.py
 #
@@ -121,6 +122,8 @@ def main():
         "    case (ch)",
     ]
     for code, rows in sorted(FONT.items()):
+        if code >= 0x60:
+            continue
         g = 0
         for i, b in enumerate(rows):
             g |= b << (8 * i)

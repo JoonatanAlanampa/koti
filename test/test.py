@@ -420,13 +420,16 @@ async def test_ps2_and_vga_text(dut):
     await ClockCycles(dut.clk, 46)         # rise was x=752; land at x=-2
 
     samples = []
-    for _ in range(20):
+    for _ in range(28):
         await RisingEdge(dut.clk)
         samples.append(int(dut.uo_out.value))
 
     krow = FONT[ord("K")][0]
-    want = [0xFF if (krow >> i) & 1 else 0x88 for i in range(8)]
-    ok = any(samples[i:i + 8] == want for i in range(len(samples) - 7))
+    want = []
+    for i in range(8):                      # pixels doubled horizontally
+        v = 0xFF if (krow >> i) & 1 else 0x88
+        want += [v, v]
+    ok = any(samples[i:i + 16] == want for i in range(len(samples) - 15))
     assert ok, f"'K' row not on the wire: {[hex(s) for s in samples]}"
 
 
@@ -481,14 +484,14 @@ async def test_hello_c(dut):
     banner = b"Koti-1: hello from my own SoC\r\n"
     assert await uart_rx(dut, len(banner)) == banner
 
-    # console text appears in the charbuf (0x8000 in the PSRAM model)
+    # console text appears in the charbuf (0x8000, 40-byte rows)
     row1_want = b"hello, visible world"
     for _ in range(200):
         await ClockCycles(dut.clk, 10_000)
-        if ram.mem[0x8050:0x8050 + len(row1_want)] == row1_want:
+        if ram.mem[0x8028:0x8028 + len(row1_want)] == row1_want:
             break
     else:
         raise AssertionError(
-            f"charbuf row1: {bytes(ram.mem[0x8050:0x80A0])!r}")
+            f"charbuf row1: {bytes(ram.mem[0x8028:0x8050])!r}")
     assert ram.mem[0x8000:0x8006] == b"KOTI-1"
-    assert all(c == 0x20 for c in ram.mem[0x8006:0x8050]), "row 0 tail"
+    assert all(c == 0x20 for c in ram.mem[0x8006:0x8028]), "row 0 tail"

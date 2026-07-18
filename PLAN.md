@@ -191,10 +191,20 @@ comfort. KianV's firmware is the reference.
        validated on ttsky25b (tt_um_tnt_rf_validation; repo cloned
        to ../rf-val for reference — public sources are a stub, the
        macro GDS/LEF/lib/model are NOT publicly packaged).
+       **Pipeline made macro-ready (2026-07-18)**: decided not to
+       wait on the read-timing question — architected for sync-read
+       (registered address, read-first), the superset-compatible
+       assumption (a comb macro + input address register reproduces
+       it exactly). src/regfile.sv is now the sync-read behavioral
+       model; the pipeline's r1_e/r2_e operand registers are GONE
+       (the RF read output is the pipeline register), the WB->ID
+       bypass became latched hit flags + value (byp*_e/bypv_e), and
+       a freeze-time address mux re-selects the EX instruction's
+       registers so operands stay coherent through stalls. All
+       suites green first run. The macro is now a body-swap in
+       regfile.sv + LibreLane config.
        **ACTION (human)**: ask on the TT Discord / contact tnt for
-       the macro files + read-timing spec (combinational vs sync
-       read decides whether it drops into regfile.sv or needs the
-       WB->ID bypass moved to E). Fallbacks: DFFRAM RAM32 (128 B,
+       the macro files (GDS/LEF/lib/model) + confirm read timing. Fallbacks: DFFRAM RAM32 (128 B,
        1RW — fits the line buffers, not the 2R regfile), then
        fanout pruning, then the colossal-tile conversation.
 5. [~] Bus unification (2026-07-18): `src/koti_core.sv` is now THE

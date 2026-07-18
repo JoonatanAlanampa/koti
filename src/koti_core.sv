@@ -230,19 +230,29 @@ module koti_core #(
     logic [31:0] imm_d;
     immgen ig (.instr(instr_d), .sel(c_imm_sel), .imm(imm_d));
 
-    // regfile: written in W, read in D
+    // regfile: written in W, read with a REGISTERED address — the
+    // sync-read (read-first) timing of the tnt 32x32 RF macro, whose
+    // instance replaces src/regfile.sv's body. The read output IS the
+    // operand pipeline register (r1_e/r2_e are gone). While the pipe
+    // is frozen the address mux re-selects the EX instruction's
+    // registers so the output stays coherent with what EX is using;
+    // W is frozen too, so the content cannot change mid-freeze.
     logic        reg_write_w, valid_w;
     logic [4:0]  rd_w;
     logic [31:0] wb_w, rf_r1, rf_r2;
+    wire de_advance = !halted && !pstall;   // the ID/EX latch condition
     regfile rf (.clk(clk), .we(reg_write_w && valid_w && !halted),
                 .waddr(rd_w), .wdata(wb_w),
-                .raddr1(rs1_d), .raddr2(rs2_d), .rdata1(rf_r1), .rdata2(rf_r2));
+                .raddr1(de_advance ? rs1_d : rs1_e),
+                .raddr2(de_advance ? rs2_d : rs2_e),
+                .rdata1(rf_r1), .rdata2(rf_r2));
 
-    // WB -> ID bypass: the write landing this edge isn't visible to the read
+    // WB -> ID bypass, latched into EX: the only write the edge-N
+    // read misses (read-first) is the one landing at edge N itself —
+    // a W writeback during the instruction's final D cycle. Writes on
+    // earlier (stalled) D cycles are already inside the read.
     wire wb_hit1 = reg_write_w && valid_w && rd_w != 5'd0 && rd_w == rs1_d;
     wire wb_hit2 = reg_write_w && valid_w && rd_w != 5'd0 && rd_w == rs2_d;
-    wire [31:0] r1_d = wb_hit1 ? wb_w : rf_r1;
-    wire [31:0] r2_d = wb_hit2 ? wb_w : rf_r2;
 
     // ---- ID/EX ----
     logic        valid_e, reg_write_e, alu_b_src_e, mem_write_e;
@@ -254,7 +264,8 @@ module koti_core #(
     logic [3:0]  alu_op_e;
     logic [2:0]  funct3_e;
     logic [4:0]  rs1_e, rs2_e, rd_e;
-    logic [31:0] pc_e, r1_e, r2_e, imm_e;
+    logic        byp1_e, byp2_e;
+    logic [31:0] pc_e, imm_e, bypv_e;
 
     // load-use: instruction in EX is a load whose rd the ID instruction reads
     wire is_load_e = valid_e && wb_src_e == 2'd1;
@@ -279,7 +290,8 @@ module koti_core #(
                 alu_a_src_e <= c_alu_a_src; wb_src_e    <= c_wb_src;
                 alu_op_e    <= c_alu_op;    funct3_e    <= instr_d[14:12];
                 rs1_e <= rs1_d; rs2_e <= rs2_d; rd_e <= rd_d;
-                pc_e  <= pc_d;  r1_e  <= r1_d;  r2_e <= r2_d; imm_e <= imm_d;
+                pc_e  <= pc_d;  imm_e <= imm_d;
+                byp1_e <= wb_hit1; byp2_e <= wb_hit2; bypv_e <= wb_w;
             end
         end
 
@@ -293,8 +305,10 @@ module koti_core #(
     wire m_fwd2 = valid_m && reg_write_m && rd_m != 5'd0 && rd_m == rs2_e;
     wire w_fwd1 = valid_w && reg_write_w && rd_w != 5'd0 && rd_w == rs1_e;
     wire w_fwd2 = valid_w && reg_write_w && rd_w != 5'd0 && rd_w == rs2_e;
-    wire [31:0] fwd1 = m_fwd1 ? value_m : w_fwd1 ? wb_w : r1_e;
-    wire [31:0] fwd2 = m_fwd2 ? value_m : w_fwd2 ? wb_w : r2_e;
+    wire [31:0] base1 = byp1_e ? bypv_e : rf_r1;   // sync read + bypass
+    wire [31:0] base2 = byp2_e ? bypv_e : rf_r2;
+    wire [31:0] fwd1 = m_fwd1 ? value_m : w_fwd1 ? wb_w : base1;
+    wire [31:0] fwd2 = m_fwd2 ? value_m : w_fwd2 ? wb_w : base2;
 
     logic [31:0] alu_a, alu_y;
     always_comb

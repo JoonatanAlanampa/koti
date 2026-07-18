@@ -1,6 +1,7 @@
-// cpu_pipe.sv — RV32I 5-stage pipeline (step 4). Drop-in replacement for the
-// single-cycle cpu.sv: same module name, ports, and submodules — select the
-// implementation by file list at compile time.
+// cpu_pipe.sv — RV32IM 5-stage pipeline (step 4 + Koti-1 M extension).
+// Drop-in replacement for the single-cycle cpu.sv: same module name, ports,
+// and submodules — select the implementation by file list at compile time.
+// (cpu.sv remains RV32I-only: it ignores is_muldiv.)
 //
 // Stages:  F (imem registered fetch) | D (decode + regfile) | E (ALU, branch
 //          resolve, FORWARDING) | M (dmem, MMIO) | W (regfile write)
@@ -49,11 +50,13 @@ module cpu #(
 
     logic        stall, flush_ex;        // defined in D/E below
     logic        mstall;                 // SDRAM wait, defined in M below
+    logic        md_stall;               // muldiv wait, defined in E below
+    wire         pstall = mstall || md_stall;   // whole-pipe freezes
     logic [31:0] target_ex;
 
     wire [31:0] fetch_addr = rst               ? 32'd0
                            : flush_ex          ? target_ex
-                           : (stall || mstall) ? pc_d
+                           : (stall || pstall) ? pc_d
                            :                     pc;
 
     imem #(.HEXFILE(HEXFILE)) im (.clk(clk), .addr_next(fetch_addr),
@@ -62,7 +65,7 @@ module cpu #(
     always_ff @(posedge clk)
         if (rst) begin
             pc <= 32'd0; pc_d <= 32'd0; valid_d <= 1'b0;
-        end else if (!halted && !mstall) begin
+        end else if (!halted && !pstall) begin
             if (flush_ex) begin
                 pc      <= target_ex + 32'd4;
                 pc_d    <= target_ex;       // imem is capturing the target now
@@ -81,11 +84,13 @@ module cpu #(
     wire [4:0] rd_d  = instr_d[11:7];
 
     logic       c_reg_write, c_alu_b_src, c_mem_write, c_is_branch, c_is_jump, c_halt;
+    logic       c_is_md;
     logic [2:0] c_imm_sel;
     logic [1:0] c_alu_a_src, c_wb_src;
     logic [3:0] c_alu_op;
     control ctl (.opcode(instr_d[6:0]), .funct3(instr_d[14:12]),
-                 .funct7b5(instr_d[30]),
+                 .funct7b5(instr_d[30]), .funct7b0(instr_d[25]),
+                 .is_muldiv(c_is_md),
                  .reg_write(c_reg_write), .imm_sel(c_imm_sel),
                  .alu_a_src(c_alu_a_src), .alu_b_src(c_alu_b_src),
                  .alu_op(c_alu_op), .mem_write(c_mem_write), .wb_src(c_wb_src),
@@ -110,7 +115,7 @@ module cpu #(
 
     // ---- ID/EX ----
     logic        valid_e, reg_write_e, alu_b_src_e, mem_write_e;
-    logic        is_branch_e, is_jump_e, halt_e;
+    logic        is_branch_e, is_jump_e, halt_e, is_md_e;
     logic [1:0]  alu_a_src_e, wb_src_e;
     logic [3:0]  alu_op_e;
     logic [2:0]  funct3_e;
@@ -124,13 +129,14 @@ module cpu #(
 
     always_ff @(posedge clk)
         if (rst) valid_e <= 1'b0;
-        else if (!halted && !mstall) begin
+        else if (!halted && !pstall) begin
             if (flush_ex || stall) valid_e <= 1'b0;      // bubble
             else begin
                 valid_e     <= valid_d;
                 reg_write_e <= c_reg_write; alu_b_src_e <= c_alu_b_src;
                 mem_write_e <= c_mem_write; is_branch_e <= c_is_branch;
                 is_jump_e   <= c_is_jump;   halt_e      <= c_halt;
+                is_md_e     <= c_is_md;
                 alu_a_src_e <= c_alu_a_src; wb_src_e    <= c_wb_src;
                 alu_op_e    <= c_alu_op;    funct3_e    <= instr_d[14:12];
                 rs1_e <= rs1_d; rs2_e <= rs2_d; rd_e <= rd_d;
@@ -167,6 +173,20 @@ module cpu #(
     logic br_taken;
     branch_cmp bc (.funct3(funct3_e), .a(fwd1), .b(fwd2), .taken(br_taken));
 
+    // RV32M: the iterative unit sits beside the ALU; md_stall freezes
+    // the whole pipeline until it delivers, then the result rides the
+    // normal EX/MEM path and forwards like any ALU value. `done` is
+    // sticky so a concurrent mstall can't lose the completion; it
+    // clears the edge EX/MEM actually latches the result.
+    logic        md_busy, md_done;
+    logic [31:0] md_result;
+    wire md_op  = valid_e && is_md_e;
+    wire md_ack = md_op && md_done && !mstall && !halted;
+    assign md_stall = md_op && !md_done;
+    muldiv md (.clk(clk), .rst(rst), .start(md_op), .ack(md_ack),
+               .funct3(funct3_e), .a(fwd1), .b(fwd2),
+               .result(md_result), .busy(md_busy), .done(md_done));
+
     wire take_ex  = valid_e && (is_jump_e || (is_branch_e && br_taken));
     assign flush_ex  = take_ex || (valid_e && halt_e);
     assign target_ex = (valid_e && halt_e) ? pc_e            // spin on the ecall
@@ -178,7 +198,7 @@ module cpu #(
     logic        halt_m;
     always_ff @(posedge clk)
         if (rst) valid_m <= 1'b0;
-        else if (!halted && !mstall) begin
+        else if (!halted && !pstall) begin
             valid_m     <= valid_e;
             reg_write_m <= reg_write_e;
             mem_write_m <= mem_write_e;
@@ -187,7 +207,8 @@ module cpu #(
             rd_m        <= rd_e;
             st_m        <= fwd2;                          // store data, forwarded
             halt_m      <= valid_e && halt_e;
-            value_m     <= (wb_src_e == 2'd2) ? pc_e + 32'd4   // JAL/JALR link
+            value_m     <= is_md_e            ? md_result
+                         : (wb_src_e == 2'd2) ? pc_e + 32'd4   // JAL/JALR link
                                               : alu_y;
         end
 
@@ -208,9 +229,25 @@ module cpu #(
     wire vid_m = addr_m[17] && !sdram_m;
     wire io_m  = addr_m[16] && !vid_m && !sdram_m;
 
-    // memory stall: SDRAM transactions freeze the entire pipeline until ack
-    wire sd_active = valid_m && sdram_m && (mem_write_m || is_load_m) && !halted;
+    // memory stall: SDRAM transactions freeze the entire pipeline until ack.
+    // An access can also complete while md_stall keeps M frozen: remember
+    // the ack (sd_seen) and hold the data, otherwise the dropped-req rule
+    // below re-issues the transaction when !sd_ack comes back around.
+    logic        sd_seen;
+    logic [31:0] sd_data_r;
+    wire sd_active = valid_m && sdram_m && (mem_write_m || is_load_m)
+                  && !halted && !sd_seen;
     assign mstall  = sd_active && !sd_ack;
+
+    always_ff @(posedge clk)
+        if (rst) sd_seen <= 1'b0;
+        else begin
+            if (sd_active && sd_ack) begin
+                sd_data_r <= sd_rdata;
+                sd_seen   <= 1'b1;
+            end
+            if (!halted && !pstall) sd_seen <= 1'b0;   // M advanced
+        end
     // drop req the moment ack arrives: otherwise req is still combinationally
     // high for the cycle before M advances, and the controller re-triggers a
     // spurious duplicate transaction whose ack corrupts a later access
@@ -248,7 +285,8 @@ module cpu #(
                    .ch(addr_m[3:2]), .wdata(st_data), .pcm(audio));
 
     // loads see BRAM or SDRAM through the same byte-extension path
-    wire [31:0] mem_word = sdram_m ? sd_rdata : ld_word;
+    wire [31:0] mem_word = sdram_m ? (sd_seen ? sd_data_r : sd_rdata)
+                                   : ld_word;
     wire [31:0] ld_shift = mem_word >> (8 * off_m);
     logic [31:0] ld_ext;
     always_comb
@@ -265,7 +303,7 @@ module cpu #(
     always_ff @(posedge clk)
         if (rst) begin
             valid_w <= 1'b0; halt_w <= 1'b0;
-        end else if (!halted && !mstall) begin
+        end else if (!halted && !pstall) begin
             valid_w     <= valid_m;
             reg_write_w <= reg_write_m;
             rd_w        <= rd_m;

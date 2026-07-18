@@ -26,6 +26,9 @@ over; it becomes a 3-port arbiter (ifetch / data / video DMA).
    controller; AMOs as a locked read-modify-write sequence holding the
    bus. No other master exists besides video DMA, which never touches
    AMO targets mid-sequence (video reads are read-only bursts).
+   *Sequenced with milestone 5's bus unification* — AMOs are RMW
+   sequences in the memory controller, and building them against the
+   vendored core's FPGA dmem model would be throwaway work.
 4. **Privilege + CSR**: M/S/U modes, trap/mret/sret, wfi-as-nop,
    mstatus/mie/mip/mtvec/mepc/mcause/mscratch + S-mode twins, medeleg/
    mideleg, satp. One `csr.sv` module owned by the writeback stage.
@@ -92,7 +95,20 @@ comfort. KianV's firmware is the reference.
 
 ## Milestones
 
-1. [ ] M + A + 32-reg regfile in core; rv32um/ua green pin-level.
+1. [~] Core surgery (2026-07-18):
+       - 32 regs: free — the vendored core/ is the RV32I FPGA pipeline
+         (the RV32E cut lived in tt-riscv's ASIC-side copies).
+       - M: `core/muldiv.sv` (iterative, 32-cycle, shared datapath) +
+         decode (`funct7[0]` on OP) + whole-pipe md_stall in cpu_pipe;
+         result rides EX/MEM and forwards normally. Unit-tested: 1252
+         vectors (edge cross-product + seeded random) green vs a
+         Python golden model, `test/run_core.py`.
+       - Found+fixed latent hazard: SDRAM ack landing while the pipe
+         is frozen by md_stall would re-issue the transaction; added
+         sd_seen/sd_data_r capture in M.
+       - Open: A (moved to milestone 5, see above); pipeline-level
+         rv32um tests need an instruction-level harness (imem/dmem sim
+         models) — that harness is also the vehicle for riscv-tests.
 2. [x] Peripheral trio: `vga_timing.sv`, `ps2_rx.sv`, `clint.sv`
        (2026-07-18).
 3. [~] cocotb suite (2026-07-18): bring-up top `tt_um_koti` (VGA

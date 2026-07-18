@@ -45,6 +45,7 @@ module cpu #(
     logic [1:0] alu_a_src, wb_src;
     logic [3:0] alu_op;
     control ctl (.opcode(opcode), .funct3(funct3), .funct7b5(instr[30]),
+                 .funct7b0(instr[25]), .is_muldiv(),   // RV32I only: no M
                  .reg_write(reg_write), .imm_sel(imm_sel),
                  .alu_a_src(alu_a_src), .alu_b_src(alu_b_src),
                  .alu_op(alu_op), .mem_write(mem_write), .wb_src(wb_src),

@@ -7,6 +7,10 @@ module control (
     input  logic [6:0] opcode,
     input  logic [2:0] funct3,
     input  logic       funct7b5,   // instr[30]
+    input  logic       funct7b0,   // instr[25]: on OP, legal funct7 is
+                                   // 0000000/0100000/0000001, so bit 0
+                                   // alone selects RV32M
+    output logic       is_muldiv,  // route funct3 to the muldiv unit
     output logic       reg_write,
     output logic [2:0] imm_sel,    // 0=I 1=S 2=B 3=U 4=J
     output logic [1:0] alu_a_src,  // 0=rs1 1=PC 2=zero
@@ -21,7 +25,7 @@ module control (
     always_comb begin
         reg_write = 0; imm_sel = 3'd0; alu_a_src = 2'd0; alu_b_src = 0;
         alu_op = 4'd0; mem_write = 0; wb_src = 2'd0;
-        is_branch = 0; is_jump = 0; halt = 0;
+        is_branch = 0; is_jump = 0; halt = 0; is_muldiv = 0;
         case (opcode)
             7'b0110111: begin reg_write = 1; imm_sel = 3'd3;            // LUI
                               alu_a_src = 2'd2; alu_b_src = 1; end      //   0 + immU
@@ -46,7 +50,8 @@ module control (
                                        ? {funct7b5, funct3}
                                        : {1'b0, funct3}; end
             7'b0110011: begin reg_write = 1;                            // ALU-reg
-                              alu_op = {funct7b5, funct3}; end
+                              if (funct7b0) is_muldiv = 1;              //   RV32M
+                              else alu_op = {funct7b5, funct3}; end
             7'b1110011: halt = 1;                                       // ECALL/EBREAK
             default: ;                                                  // FENCE = NOP
         endcase

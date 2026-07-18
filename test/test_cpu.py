@@ -14,6 +14,8 @@ from cocotb.triggers import ClockCycles
 
 M32 = 0xFFFF_FFFF
 
+DATA = 0x0100_0100  # scratch word in PSRAM (flash is read-only)
+
 MSTATUS, MISA, MIE, MTVEC = 0x300, 0x301, 0x304, 0x305
 MSCRATCH, MEPC, MCAUSE = 0x340, 0x341, 0x342
 
@@ -123,10 +125,10 @@ async def run_program(dut, words, max_cycles=20000, mtip_at=None):
     dut.meip.value = 0
     await ClockCycles(dut.clk, 5)
     for i, w in enumerate(words):
-        dut.c0.im.mem[i].value = w
+        dut.mem.flash[i].value = w
     # pad with EBREAK so runaway fetch halts instead of executing X
     for i in range(len(words), len(words) + 16):
-        dut.c0.im.mem[i].value = EBREAK
+        dut.mem.flash[i].value = EBREAK
     await ClockCycles(dut.clk, 2)
     dut.rst.value = 0
     for cyc in range(max_cycles):
@@ -213,8 +215,8 @@ async def test_muldiv_forwarding(dut):
 async def test_loaduse_and_branch_with_muldiv(dut):
     """Load-use stall feeding muldiv; taken branch must kill a mul."""
     cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
-    prog = (li(1, 6) + li(2, 0x100) + li(9, 99) + [
-        sw(1, 2, 0),          # mem[0x100] = 6
+    prog = (li(1, 6) + li(2, DATA) + li(9, 99) + [
+        sw(1, 2, 0),          # mem[DATA] = 6
         lw(3, 2, 0),          # x3 = 6
         mop(0, 4, 3, 3),      # load-use into muldiv: x4 = 36
         beq(1, 1, 8),         # taken: skip the next mul
@@ -232,7 +234,7 @@ async def test_loaduse_and_branch_with_muldiv(dut):
 async def test_amo_rmw(dut):
     """Every AMO op read-modify-writes memory; old value lands in rd."""
     cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
-    prog = (li(1, 7) + li(2, 0x100) + li(3, 0xFF) + li(4, 0x0F)
+    prog = (li(1, 7) + li(2, DATA) + li(3, 0xFF) + li(4, 0x0F)
             + li(5, 0xF0) + li(6, 0xFFFF_FFFB) + li(7, 5) + [   # x6 = -5
         sw(7, 2, 0),                # mem = 5
         amo(AADD, 10, 2, 1),        # x10 = 5,    mem = 12
@@ -261,7 +263,7 @@ async def test_amo_rmw(dut):
 async def test_lr_sc(dut):
     """SC succeeds only under a live reservation; stores kill it."""
     cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
-    prog = (li(1, 42) + li(2, 0x100) + li(3, 77) + li(4, 5) + [
+    prog = (li(1, 42) + li(2, DATA) + li(3, 77) + li(4, 5) + [
         sw(4, 2, 0),                # mem = 5
         amo(LR, 10, 2, 0),          # x10 = 5, reservation armed
         amo(SC, 11, 2, 1),          # x11 = 0 (ok),  mem = 42

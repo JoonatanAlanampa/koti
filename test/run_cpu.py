@@ -7,9 +7,10 @@ from cocotb_tools.runner import get_runner
 
 TEST_DIR = Path(__file__).parent
 CORE_DIR = TEST_DIR.parent / "core"
+SRC_DIR = TEST_DIR.parent / "src"
 
 SOURCES = [
-    CORE_DIR / "cpu_pipe.sv",
+    SRC_DIR / "koti_core.sv",
     CORE_DIR / "control.sv",
     CORE_DIR / "alu.sv",
     CORE_DIR / "branch.sv",
@@ -18,7 +19,7 @@ SOURCES = [
     CORE_DIR / "muldiv.sv",
     CORE_DIR / "csr.sv",
     CORE_DIR / "uart_tx.sv",
-    TEST_DIR / "sim_models.sv",
+    TEST_DIR / "xip_model.sv",
     TEST_DIR / "tb_cpu.v",
 ]
 

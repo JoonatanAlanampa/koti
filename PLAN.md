@@ -138,7 +138,17 @@ comfort. KianV's firmware is the reference.
        count, VGA frame dumped to PPM.
 4. [ ] `vga_text.sv`: line buffer + font ROM + charbuf DMA; measure
        font ROM area in a trial harden immediately.
-5. [ ] 3-port arbiter + video priority; worst-case latency proof.
+5. [~] Bus unification (2026-07-18): `src/koti_core.sv` is now THE
+       core — rv32_core.sv's fetch FSM/data port/MMIO merged with the
+       RV32IMA+Zicsr pipeline; `src/qspi_ctrl.sv` (+2:1 arbiter)
+       vendored from tt-riscv. core/cpu_pipe.sv and cpu.sv remain as
+       frozen references. All 9 instruction-level tests re-run against
+       koti_core over the XIP model (LAT=4) — green first run; data
+       moved to the PSRAM map (0x0100_0000+). CLINT/PLIC/VGA MMIO
+       (0x0002_0000+) rides the data port for the SoC top to decode.
+       Open: SoC top (tt_um wiring: qspi_ctrl + arbiter + CLINT decode
+       + pin mux), 3-port arbiter + video priority with worst-case
+       latency proof.
 6. [~] csr.sv M-mode DONE with 3 instruction-level tests green (CSR
        RMW forms + forwarding, ECALL->handler->MRET resume, async mtip
        interrupting a spin loop — 7/7 in test/run_cpu.py). Open: wire

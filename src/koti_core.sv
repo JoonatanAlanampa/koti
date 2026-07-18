@@ -514,6 +514,7 @@ module koti_core #(
                     || (csr_en && csr_wen && imm_e[11:0] == 12'h180);
 
     csr csr0 (.clk(clk), .rst(rst),
+              .retire(valid_w && !pstall && !halted),
               .en(csr_en), .op(funct3_e[1:0]), .wen(csr_wen),
               .addr(imm_e[11:0]), .wval(csr_wval), .rval(csr_rval),
               .trap(trap_take), .trap_irq(irq_take), .trap_kind(trap_kind),

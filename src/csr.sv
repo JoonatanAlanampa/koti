@@ -15,6 +15,7 @@
 // misalign traps, no mcycle/minstret, stval/mtval always 0.
 module csr (
     input  logic        clk, rst,
+    input  logic        retire,      // one instruction commits this cycle
     // EX-stage CSR instruction
     input  logic        en,
     input  logic [1:0]  op,          // funct3[1:0]: 01 RW, 10 RS, 11 RC
@@ -60,6 +61,7 @@ module csr (
     logic [31:0] stvec_q, sepc_q, scause_q, sscratch_q, stval_q;
     logic [31:0] satp_q;
     logic [31:0] medeleg_q, mideleg_q;
+    logic [63:0] mcycle_q, minstret_q;
 
     wire [31:0] mstatus_r = {12'd0, mxr_b, sum_b, 5'd0, mpp, 2'd0, spp,
                              mpie, 1'b0, spie, 1'b0, mie_g, 1'b0,
@@ -95,6 +97,10 @@ module csr (
             12'h342: rval = mcause_q;
             12'h343: rval = mtval_q;
             12'h344: rval = mip_r;
+            12'hB00: rval = mcycle_q[31:0];
+            12'hB02: rval = minstret_q[31:0];
+            12'hB80: rval = mcycle_q[63:32];
+            12'hB82: rval = minstret_q[63:32];
             default: rval = 32'd0;
         endcase
 
@@ -161,10 +167,28 @@ module csr (
             12'h100, 12'h104, 12'h105, 12'h140, 12'h141, 12'h142,
             12'h143, 12'h144, 12'h180,
             12'h300, 12'h301, 12'h302, 12'h303, 12'h304, 12'h305,
-            12'h340, 12'h341, 12'h342, 12'h343, 12'h344:
+            12'h340, 12'h341, 12'h342, 12'h343, 12'h344,
+            12'hB00, 12'hB02, 12'hB80, 12'hB82:
                      known = 1'b1;
             default: known = 1'b0;
         endcase
+
+    // counters run in their own process: CSR writes override the tick
+    always_ff @(posedge clk)
+        if (rst) begin
+            mcycle_q <= 64'd0; minstret_q <= 64'd0;
+        end else begin
+            mcycle_q <= mcycle_q + 64'd1;
+            if (retire) minstret_q <= minstret_q + 64'd1;
+            if (en && wen)
+                case (addr)
+                    12'hB00: mcycle_q   <= {mcycle_q[63:32], wnew};
+                    12'hB02: minstret_q <= {minstret_q[63:32], wnew};
+                    12'hB80: mcycle_q   <= {wnew, mcycle_q[31:0]};
+                    12'hB82: minstret_q <= {wnew, minstret_q[31:0]};
+                    default: ;
+                endcase
+        end
 
     always_ff @(posedge clk)
         if (rst) begin

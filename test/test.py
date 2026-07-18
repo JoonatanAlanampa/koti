@@ -438,8 +438,9 @@ async def test_ps2_and_vga_text(dut):
 UART_DIV = 217  # 115200 8N1 @ 25 MHz
 
 
-async def uart_rx(dut, nbytes, timeout=1_500_000):
-    """Decode nbytes of 8N1 from uo[0] (headless personality)."""
+async def uart_rx(dut, nbytes, timeout=1_500_000, bit=0):
+    """Decode nbytes of 8N1 from uo[bit] (bit 0 headless, 6 in VGA
+    mode with the UART-on-blue-LSB mux)."""
     got = bytearray()
     waited = 0
     while len(got) < nbytes:
@@ -448,14 +449,14 @@ async def uart_rx(dut, nbytes, timeout=1_500_000):
             await RisingEdge(dut.clk)
             waited += 1
             assert waited < timeout, f"UART stalled after {bytes(got)!r}"
-            if not int(dut.uo_out.value) & 1:
+            if not (int(dut.uo_out.value) >> bit) & 1:
                 break
         await ClockCycles(dut.clk, UART_DIV + UART_DIV // 2)
         b = 0
         for i in range(8):
-            b |= (int(dut.uo_out.value) & 1) << i
+            b |= ((int(dut.uo_out.value) >> bit) & 1) << i
             await ClockCycles(dut.clk, UART_DIV)
-        assert int(dut.uo_out.value) & 1, "missing stop bit"
+        assert (int(dut.uo_out.value) >> bit) & 1, "missing stop bit"
         got.append(b)
         waited += 10 * UART_DIV
     return bytes(got)
@@ -495,3 +496,42 @@ async def test_hello_c(dut):
             f"charbuf row1: {bytes(ram.mem[0x8028:0x8050])!r}")
     assert ram.mem[0x8000:0x8006] == b"KOTI-1"
     assert all(c == 0x20 for c in ram.mem[0x8006:0x8028]), "row 0 tail"
+
+
+@cocotb.test()
+async def test_sbi_firmware(dut):
+    """The SBI stack end to end on the pins: M firmware boots, drops
+    to the S-mode payload; 'S' via SBI console, timer armed via
+    rdtime (illegal-trap emulation in M), delegated S-timer interrupt
+    prints 'T', 'K' after — decoded from the UART-on-blue-LSB pin,
+    and mirrored on the VGA console charbuf."""
+    clock = Clock(dut.clk, 40, unit="ns")  # 25 MHz
+    cocotb.start_soon(clock.start())
+
+    img = (Path(__file__).parent.parent / "sw" / "sbi"
+           / "sbi_test.bin").read_bytes()
+    flash = SpiMem(1 << 16, writable=False)
+    ram = SpiMem(1 << 16, writable=True)
+    flash.mem[:len(img)] = img
+    cocotb.start_soon(spi_bus(dut, flash, ram))
+
+    dut.ena.value = 1
+    dut.ui_in.value = 0b11
+    dut.uio_in.value = 0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 10)
+    dut.rst_n.value = 1
+
+    # uo[6] is LED4 (low) until the firmware flips the pins to VGA
+    # with UART-on-blue-LSB; wait for the idle-high UART line first
+    for _ in range(400_000):
+        await RisingEdge(dut.clk)
+        if (int(dut.uo_out.value) >> 6) & 1:
+            break
+    else:
+        raise AssertionError("UART idle never appeared on uo[6]")
+
+    assert await uart_rx(dut, 3, bit=6) == b"STK"
+    await ClockCycles(dut.clk, 20_000)   # let the last charbuf write land
+    assert ram.mem[0x8000:0x8003] == b"STK", \
+        f"VGA console mirror: {bytes(ram.mem[0x8000:0x8010])!r}"

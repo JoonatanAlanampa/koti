@@ -252,8 +252,21 @@ comfort. KianV's firmware is the reference.
        rv32ima_zicsr). hello.c (601 B) proven pin-level: UART banner
        decoded bit-by-bit at uo[0], then the VGA console brings the
        pins up and "KOTI-1 / hello, visible world" lands in the
-       charbuf. hello.bin committed so CI runs it. Next: M-mode SBI
-       stub + xv6, then nommu uLinux on UART (rung 1).
+       charbuf. hello.bin committed so CI runs it.
+       **SBI firmware DONE (2026-07-19, sw/sbi/)**: boot + delegation
+       (mideleg 0x222, medeleg 0xB151 — illegal stays in M for rdtime
+       emulation, ecall-from-S is the SBI), full-frame trap shim with
+       mscratch stack swap, legacy SBI set_timer/putchar/getchar,
+       M-timer -> STIP injection, and **rdtime/rdtimeh emulated via
+       the illegal-instruction trap** (mtval decodes the CSR read).
+       Console mirrors to UART (on the blue LSB, uo[6]) + the VGA
+       charbuf. Proven pin-level: the S-mode payload prints 'S', arms
+       the timer via rdtime, takes the delegated S-timer irq ('T'),
+       finishes ('K') — decoded off uo[6], mirrored in the charbuf.
+       mcycle/minstret CSRs added (retire counted at W advance).
+       Datasheet (docs/info.md) written for real. This is the exact
+       runtime contract xv6/Linux sit on. Next: xv6 (kernel rungs
+       need a Linux build env).
 8. [~] S/U privilege plumbing DONE (2026-07-18): `src/csr.sv` rewrote
        with M/S/U modes, full mstatus (MPP/SPP/xPIE/xIE stack),
        S-mode CSR set (sstatus/sie/sip/stvec/sepc/scause/stval/

@@ -1,29 +1,82 @@
 ## How it works
 
-Koti-1 is a single-chip home computer: an RV32IMA RISC-V CPU with
-M/S/U privilege modes and an sv32 MMU, booting from QSPI flash/PSRAM
-(Linux-track), with the console rendered as 40x30 VGA text (16x16
-cells, C64-class density; lowercase folds to uppercase) and a PS/2
-keyboard for input. The uo pins boot headless (UART/HALTED/LED) and
-switch to the Tiny VGA Pmod when software sets VGA_EN.
+Koti-1 (fi. *koti*, "home" — from *kotitietokone*, home computer) is a
+single-chip computer: an **RV32IMA + Zicsr** RISC-V CPU with **M/S/U
+privilege modes** and an **sv32 MMU**, executing in place from an
+external QSPI Pmod (W25Q128 flash + APS6404 PSRAM), with a **40x30
+VGA text console** and a **PS/2 keyboard**. It ships with an M-mode
+SBI firmware (`sw/sbi/`) providing the console, timer, and rdtime
+emulation that supervisor-mode kernels expect.
 
-*(Datasheet to be written as the design solidifies — see PLAN.md.
-Sections to cover: memory map, boot flow, pinout, video timing,
-SBI firmware interface, how to build the kernel + rootfs.)*
+### CPU
+
+5-stage pipeline (F/D/E/M/W) with full forwarding, load-use
+interlock, and predict-not-taken branches. Non-blocking pair fetch
+with a skid buffer; the whole pipe freezes on data-port waits.
+Iterative 32-cycle multiply/divide. AMOs execute as a 2-phase
+read-modify-write in M; LR/SC via a reservation that dies on any
+store, SC, RMW, or trap. The register file is sync-read (its output
+register is the operand pipeline register), matching the planned
+32x32 RF macro.
+
+Precise exceptions, all taken at EX: ECALL (8/9/11), illegal
+instruction (2, mtval = instruction), misaligned load/store/AMO
+(4/6, mtval = address), misaligned fetch target (0), and sv32 page
+faults (12/13/15, xtval = VA). Interrupts: M/S timer, software,
+external, with mideleg/medeleg delegation. **EBREAK halts the core**
+(raises the HALTED pin) instead of trapping — the chip's debug-stop.
+
+### MMU
+
+sv32, 2-entry fully-associative I and D TLBs with fault-caching
+entries; two hardware page walkers (I-side rides the fetch port,
+D-side borrows the data port at EX). SUM and MXR implemented; A=0 or
+D=0-on-store PTEs fault (kernels pre-set these bits). sfence.vma
+flushes both TLBs and serializes; satp writes flush as well.
+
+### Memory map
+
+| Range | What |
+|---|---|
+| 0x0000_0000+ | flash XIP: code + rodata (boots serial 03h; quad opt-in) |
+| 0x0001_0000 | core MMIO: +0 LED (w), +4 UART tx/busy, +8 GPIO in, +C QSPI_CFG |
+| 0x0002_0000 | CLINT: +0 MSIP, +8/+C MTIMECMP, +10/+14 MTIME |
+| 0x0004_0000 | VGA/PS2: +0 CTRL, +4 charbuf base, +8 colors, +C keyboard |
+| 0x0100_0000+ | PSRAM 8 MiB: data, stack, page tables, charbuf |
+
+VGA/PS2 registers: CTRL bit0 = VGA_EN (switches the uo pins from the
+headless personality to the Tiny VGA Pmod), bit1 = UART on the blue
+LSB (uo[6]). Colors: {bg[13:8], fg[5:0]}. Keyboard: {avail[8],
+scancode[7:0]}, read clears avail; a pending byte drives the
+external interrupt (meip).
+
+### Video
+
+640x480@60 from the 25 MHz system clock. 40x30 characters in 16x16
+cells (8x8 font, pixels doubled both ways; lowercase folds to
+uppercase — 64 glyphs, C64 style). The character buffer lives in
+PSRAM; the controller prefetches one text row ahead into ping-pong
+line buffers through a 3-port memory arbiter (video > data > fetch).
 
 ## How to test
 
-Headless v1: attach the QSPI Pmod (uio), program the flash, select
-25 MHz, release reset. The CPU boots in plain SPI, executes in place,
-and software may switch to quad via QSPI_CFG (MMIO 0x1000C). UART TX
-on uo[0] (115200 8N1), HALTED (EBREAK) on uo[1], LED[5:0] on uo[7:2],
-GPIO in on ui. CLINT (mtime/mtimecmp/msip) at 0x0002_0000.
+Attach the QSPI Pmod (uio), program `sw/sbi/sbi_test.bin` (or
+`sw/hello.bin`) into flash, select 25 MHz, release reset. The chip
+boots headless: UART on uo[0] at 115200 8N1, HALTED on uo[1], LEDs
+on uo[7:2]. Software that enables VGA_EN switches uo to the Tiny VGA
+Pmod (attach it and a monitor); the SBI firmware mirrors its console
+to both UART (moved to uo[6]) and the screen. A PS/2 keyboard (or
+USB keyboard in PS/2 fallback) connects to ui[0] (clock) and ui[1]
+(data).
 
-The video milestone replaces uo with the Tiny VGA Pmod and puts a
-PS/2 keyboard on ui[1:0] — see PLAN.md.
+The repo carries four simulation suites (muldiv unit vectors,
+15 directed instruction tests, all 58 official rv32ui/um/ua
+riscv-tests, and pin-level SoC tests including a GCC-compiled C
+hello and the full SBI boot) — `test/run*.py`.
 
 ## External hardware
 
-- TinyTapeout QSPI Pmod (flash + 2x PSRAM) — required
-- USB-serial adapter on uo[0], LEDs optional
-- Later: Tiny VGA Pmod + monitor, PS/2 keyboard
+- **TinyTapeout QSPI Pmod** (W25Q128 flash + 2x APS6404 PSRAM) — required
+- **Tiny VGA Pmod** + monitor for the console
+- **PS/2 keyboard** on ui[1:0]
+- USB-serial adapter (uo[0] headless, uo[6] in VGA mode) for the UART

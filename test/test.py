@@ -428,3 +428,67 @@ async def test_ps2_and_vga_text(dut):
     want = [0xFF if (krow >> i) & 1 else 0x88 for i in range(8)]
     ok = any(samples[i:i + 8] == want for i in range(len(samples) - 7))
     assert ok, f"'K' row not on the wire: {[hex(s) for s in samples]}"
+
+
+# ---------------------------------------------------------------- C hello
+
+UART_DIV = 217  # 115200 8N1 @ 25 MHz
+
+
+async def uart_rx(dut, nbytes, timeout=1_500_000):
+    """Decode nbytes of 8N1 from uo[0] (headless personality)."""
+    got = bytearray()
+    waited = 0
+    while len(got) < nbytes:
+        # start bit: falling edge
+        while True:
+            await RisingEdge(dut.clk)
+            waited += 1
+            assert waited < timeout, f"UART stalled after {bytes(got)!r}"
+            if not int(dut.uo_out.value) & 1:
+                break
+        await ClockCycles(dut.clk, UART_DIV + UART_DIV // 2)
+        b = 0
+        for i in range(8):
+            b |= (int(dut.uo_out.value) & 1) << i
+            await ClockCycles(dut.clk, UART_DIV)
+        assert int(dut.uo_out.value) & 1, "missing stop bit"
+        got.append(b)
+        waited += 10 * UART_DIV
+    return bytes(got)
+
+
+@cocotb.test()
+async def test_hello_c(dut):
+    """sw/hello.bin (GCC C): UART banner decoded from the pin, then
+    the VGA console text lands in the PSRAM charbuf."""
+    clock = Clock(dut.clk, 40, unit="ns")  # 25 MHz
+    cocotb.start_soon(clock.start())
+
+    hello = (Path(__file__).parent.parent / "sw" / "hello.bin").read_bytes()
+    flash = SpiMem(1 << 16, writable=False)
+    ram = SpiMem(1 << 16, writable=True)
+    flash.mem[:len(hello)] = hello
+    cocotb.start_soon(spi_bus(dut, flash, ram))
+
+    dut.ena.value = 1
+    dut.ui_in.value = 0
+    dut.uio_in.value = 0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 10)
+    dut.rst_n.value = 1
+
+    banner = b"Koti-1: hello from my own SoC\r\n"
+    assert await uart_rx(dut, len(banner)) == banner
+
+    # console text appears in the charbuf (0x8000 in the PSRAM model)
+    row1_want = b"hello, visible world"
+    for _ in range(200):
+        await ClockCycles(dut.clk, 10_000)
+        if ram.mem[0x8050:0x8050 + len(row1_want)] == row1_want:
+            break
+    else:
+        raise AssertionError(
+            f"charbuf row1: {bytes(ram.mem[0x8050:0x80A0])!r}")
+    assert ram.mem[0x8000:0x8006] == b"KOTI-1"
+    assert all(c == 0x20 for c in ram.mem[0x8006:0x8050]), "row 0 tail"

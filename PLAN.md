@@ -188,8 +188,15 @@ comfort. KianV's firmware is the reference.
        interrupting a spin loop — 7/7 in test/run_cpu.py). Open: wire
        CLINT's mtip/msip to the core in the SoC top; official riscv
        privilege tests once the XIP harness exists.
-7. [ ] nommu uLinux boots in Verilator, console on UART (rung 1
-       secured — this alone is submittable).
+7. [~] Software track started (2026-07-18): `sw/` — crt0 (flash XIP,
+       .data copy to PSRAM, bss zero, EBREAK on return), link.ld,
+       koti.h MMIO map, console.c (80x30 VGA console: cursor/newline/
+       scroll — the future SBI console), build.py (xpack gcc,
+       rv32ima_zicsr). hello.c (601 B) proven pin-level: UART banner
+       decoded bit-by-bit at uo[0], then the VGA console brings the
+       pins up and "KOTI-1 / hello, visible world" lands in the
+       charbuf. hello.bin committed so CI runs it. Next: M-mode SBI
+       stub + xv6, then nommu uLinux on UART (rung 1).
 8. [~] S/U privilege plumbing DONE (2026-07-18): `src/csr.sv` rewrote
        with M/S/U modes, full mstatus (MPP/SPP/xPIE/xIE stack),
        S-mode CSR set (sstatus/sie/sip/stvec/sepc/scause/stval/

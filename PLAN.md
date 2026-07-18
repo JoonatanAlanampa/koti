@@ -88,8 +88,14 @@ comfort. KianV's firmware is the reference.
 
 ## Software ladder
 
-1. riscv-tests rv32ui/um/ua + privilege tests, pin-level (extend
-   tt-riscv harness).
+1. riscv-tests rv32ui/um/ua — DONE 2026-07-18: **all 58 official
+   tests pass** on koti_core over the XIP model (fence_i and ma_data
+   skipped as on tt-riscv: XIP ROM / no misalign support). Koti env
+   uses EBREAK for pass/fail (ECALL traps here). Prebuilt bins
+   committed (44 KB) so CI runs the suite without the toolchain;
+   rebuild with test/build_riscv_tests.py (needs CPU repo + xpack
+   gcc). Privilege (rv32mi subset) deferred until illegal-instr +
+   misalign traps exist (milestone 8).
 2. xv6-riscv (rv32 port) — sv32 smoke test, far faster to debug than
    Linux.
 3. Buildroot nommu uLinux — rung 1, de-risks everything but the MMU.

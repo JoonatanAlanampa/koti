@@ -25,3 +25,7 @@ jobs:
       - name: instruction-level pipeline tests
         run: python run_cpu.py
         working-directory: test
+
+      - name: official riscv-tests (rv32ui+um+ua, prebuilt bins)
+        run: python run_riscv.py
+        working-directory: test

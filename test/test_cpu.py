@@ -98,6 +98,15 @@ def csrrsi(rd, csr, z):
     return _csr(6, rd, csr, z)
 
 
+def amo(f5, rd, rs1, rs2):          # rd = M[rs1] op= rs2 (word)
+    return (f5 << 27) | (rs2 << 20) | (rs1 << 15) | (2 << 12) | \
+        (rd << 7) | 0x2F
+
+
+LR, SC = 0b00010, 0b00011
+ASWAP, AADD, AXOR, AOR, AAND = 0b00001, 0b00000, 0b00100, 0b01000, 0b01100
+AMIN, AMAX, AMINU, AMAXU = 0b10000, 0b10100, 0b11000, 0b11100
+
 ECALL = 0x0000_0073
 EBREAK = 0x0010_0073
 MRET = 0x3020_0073
@@ -217,6 +226,59 @@ async def test_loaduse_and_branch_with_muldiv(dut):
     assert reg(dut, 4) == 36
     assert reg(dut, 9) == 99, "flushed mul wrote its register"
     assert reg(dut, 5) == 30
+
+
+@cocotb.test()
+async def test_amo_rmw(dut):
+    """Every AMO op read-modify-writes memory; old value lands in rd."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    prog = (li(1, 7) + li(2, 0x100) + li(3, 0xFF) + li(4, 0x0F)
+            + li(5, 0xF0) + li(6, 0xFFFF_FFFB) + li(7, 5) + [   # x6 = -5
+        sw(7, 2, 0),                # mem = 5
+        amo(AADD, 10, 2, 1),        # x10 = 5,    mem = 12
+        amo(ASWAP, 11, 2, 1),       # x11 = 12,   mem = 7
+        amo(AXOR, 12, 2, 3),        # x12 = 7,    mem = 0xF8
+        amo(AOR, 13, 2, 4),         # x13 = 0xF8, mem = 0xFF
+        amo(AAND, 14, 2, 5),        # x14 = 0xFF, mem = 0xF0
+        amo(AMIN, 15, 2, 6),        # x15 = 0xF0, mem = -5
+        amo(AMAX, 16, 2, 1),        # x16 = -5,   mem = 7
+        amo(AMINU, 17, 2, 6),       # x17 = 7,    mem = 7
+        amo(AMAXU, 18, 2, 6),       # x18 = 7,    mem = 0xFFFFFFFB
+        amo(AADD, 20, 2, 1),        # x20 = -5,   mem = 2
+        add(22, 20, 1),             # AMO result hazard: x22 = 2
+        lw(19, 2, 0),               # x19 = 2
+        EBREAK,
+    ])
+    await run_program(dut, prog)
+    exp = {10: 5, 11: 12, 12: 7, 13: 0xF8, 14: 0xFF, 15: 0xF0,
+           16: 0xFFFF_FFFB, 17: 7, 18: 7, 20: 0xFFFF_FFFB,
+           22: 2, 19: 2}
+    for rd, val in exp.items():
+        assert reg(dut, rd) == val, f"x{rd}"
+
+
+@cocotb.test()
+async def test_lr_sc(dut):
+    """SC succeeds only under a live reservation; stores kill it."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    prog = (li(1, 42) + li(2, 0x100) + li(3, 77) + li(4, 5) + [
+        sw(4, 2, 0),                # mem = 5
+        amo(LR, 10, 2, 0),          # x10 = 5, reservation armed
+        amo(SC, 11, 2, 1),          # x11 = 0 (ok),  mem = 42
+        amo(SC, 12, 2, 3),          # x12 = 1 (fail), mem stays 42
+        amo(LR, 13, 2, 0),          # x13 = 42, re-arm
+        sw(3, 2, 0),                # intervening store kills it
+        amo(SC, 14, 2, 1),          # x14 = 1 (fail), mem stays 77
+        lw(15, 2, 0),               # x15 = 77
+        EBREAK,
+    ])
+    await run_program(dut, prog)
+    assert reg(dut, 10) == 5
+    assert reg(dut, 11) == 0, "first SC should succeed"
+    assert reg(dut, 12) == 1, "SC without reservation must fail"
+    assert reg(dut, 13) == 42
+    assert reg(dut, 14) == 1, "SC after intervening store must fail"
+    assert reg(dut, 15) == 77
 
 
 @cocotb.test()

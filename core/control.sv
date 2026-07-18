@@ -11,6 +11,8 @@ module control (
                                    // 0000000/0100000/0000001, so bit 0
                                    // alone selects RV32M
     output logic       is_muldiv,  // route funct3 to the muldiv unit
+    output logic       is_amo,     // A extension (funct5 refined in
+                                   // cpu_pipe; cpu.sv leaves it open)
     output logic       reg_write,
     output logic [2:0] imm_sel,    // 0=I 1=S 2=B 3=U 4=J
     output logic [1:0] alu_a_src,  // 0=rs1 1=PC 2=zero
@@ -29,6 +31,7 @@ module control (
         reg_write = 0; imm_sel = 3'd0; alu_a_src = 2'd0; alu_b_src = 0;
         alu_op = 4'd0; mem_write = 0; wb_src = 2'd0;
         is_branch = 0; is_jump = 0; is_system = 0; is_muldiv = 0;
+        is_amo = 0;
         case (opcode)
             7'b0110111: begin reg_write = 1; imm_sel = 3'd3;            // LUI
                               alu_a_src = 2'd2; alu_b_src = 1; end      //   0 + immU
@@ -55,6 +58,9 @@ module control (
             7'b0110011: begin reg_write = 1;                            // ALU-reg
                               if (funct7b0) is_muldiv = 1;              //   RV32M
                               else alu_op = {funct7b5, funct3}; end
+            7'b0101111: begin is_amo = 1; reg_write = 1;                // A ext
+                              alu_b_src = 1; imm_sel = 3'd5;            //   addr =
+                              wb_src = 2'd1; end                        //   rs1 + 0
             7'b1110011: begin is_system = 1;                            // SYSTEM
                               if (funct3 != 3'b000) reg_write = 1; end  //   CSRR*
             default: ;                                                  // FENCE = NOP

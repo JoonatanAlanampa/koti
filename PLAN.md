@@ -22,13 +22,17 @@ over; it becomes a 3-port arbiter (ifetch / data / video DMA).
    wide aspect ratio hurts routing, that conversation is the fallback.
 2. **M extension**: iterative multiplier/divider (32 cycles, tiny).
    CPI is memory-dominated anyway; do not spend area on a fast one.
-3. **A extension**: LR/SC as a reservation flag in the memory
-   controller; AMOs as a locked read-modify-write sequence holding the
-   bus. No other master exists besides video DMA, which never touches
-   AMO targets mid-sequence (video reads are read-only bursts).
-   *Sequenced with milestone 5's bus unification* — AMOs are RMW
-   sequences in the memory controller, and building them against the
-   vendored core's FPGA dmem model would be throwaway work.
+3. **A extension** — DONE 2026-07-18, in the core, not the controller
+   (revising the earlier sequencing note): AMOs are a 2-phase M-stage
+   RMW microsequence (astall) that rides whatever memory M talks to,
+   so the same logic works over BRAM now and QSPI after unification —
+   nothing throwaway. LR = load + reservation; SC = conditional store
+   + success flag, no FSM. Uniprocessor reservation rules: dies on any
+   store/SC/RMW/trap. 2 tests: all 9 AMO ops with hazard checks; the
+   LR/SC protocol incl. intervening-store kill. Bonus fix while adding
+   commit gating: EX commands (trap/mret/csr-write) held across a
+   multi-cycle stall used to re-fire and clobber the MPIE/MIE stack —
+   all now gated on the actual commit cycle (!pstall).
 4. **Privilege + CSR**: M/S/U modes, trap/mret/sret, wfi-as-nop,
    mstatus/mie/mip/mtvec/mepc/mcause/mscratch + S-mode twins, medeleg/
    mideleg, satp. One `csr.sv` module — M-mode half DONE 2026-07-18:
@@ -122,7 +126,9 @@ comfort. KianV's firmware is the reference.
          branch killing a speculative mul. CI runs both core suites
          (core-tests.yaml). This harness is the vehicle for the
          official riscv-tests later.
-       - Open: A extension (milestone 5, see above).
+       - A extension DONE in-core (see delta 3). Core ISA is now
+         RV32IMA + Zicsr + M-mode traps — KianV-class. 9/9
+         instruction-level tests green.
 2. [x] Peripheral trio: `vga_timing.sv`, `ps2_rx.sv`, `clint.sv`
        (2026-07-18).
 3. [~] cocotb suite (2026-07-18): bring-up top `tt_um_koti` (VGA

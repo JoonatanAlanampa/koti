@@ -55,7 +55,8 @@ module cpu #(
     logic        stall, flush_ex;        // defined in D/E below
     logic        mstall;                 // SDRAM wait, defined in M below
     logic        md_stall;               // muldiv wait, defined in E below
-    wire         pstall = mstall || md_stall;   // whole-pipe freezes
+    logic        astall;                 // AMO RMW wait, defined in M below
+    wire         pstall = mstall || md_stall || astall;  // whole-pipe freezes
     logic [31:0] target_ex;
 
     wire [31:0] fetch_addr = rst               ? 32'd0
@@ -88,13 +89,13 @@ module cpu #(
     wire [4:0] rd_d  = instr_d[11:7];
 
     logic       c_reg_write, c_alu_b_src, c_mem_write, c_is_branch, c_is_jump;
-    logic       c_is_md, c_is_sys;
+    logic       c_is_md, c_is_sys, c_is_amo;
     logic [2:0] c_imm_sel;
     logic [1:0] c_alu_a_src, c_wb_src;
     logic [3:0] c_alu_op;
     control ctl (.opcode(instr_d[6:0]), .funct3(instr_d[14:12]),
                  .funct7b5(instr_d[30]), .funct7b0(instr_d[25]),
-                 .is_muldiv(c_is_md),
+                 .is_muldiv(c_is_md), .is_amo(c_is_amo),
                  .reg_write(c_reg_write), .imm_sel(c_imm_sel),
                  .alu_a_src(c_alu_a_src), .alu_b_src(c_alu_b_src),
                  .alu_op(c_alu_op), .mem_write(c_mem_write), .wb_src(c_wb_src),
@@ -129,8 +130,9 @@ module cpu #(
 
     // ---- ID/EX ----
     logic        valid_e, reg_write_e, alu_b_src_e, mem_write_e;
-    logic        is_branch_e, is_jump_e, is_md_e;
+    logic        is_branch_e, is_jump_e, is_md_e, is_amo_e;
     logic        ebreak_e, ecall_e, mret_e, csr_e;
+    logic [4:0]  amo5_e;
     logic [1:0]  alu_a_src_e, wb_src_e;
     logic [3:0]  alu_op_e;
     logic [2:0]  funct3_e;
@@ -154,6 +156,7 @@ module cpu #(
                 is_md_e     <= c_is_md;
                 ebreak_e    <= is_ebreak_d; ecall_e     <= is_ecall_d;
                 mret_e      <= is_mret_d;   csr_e       <= is_csr_d;
+                is_amo_e    <= c_is_amo;    amo5_e      <= instr_d[31:27];
                 alu_a_src_e <= c_alu_a_src; wb_src_e    <= c_wb_src;
                 alu_op_e    <= c_alu_op;    funct3_e    <= instr_d[14:12];
                 rs1_e <= rs1_d; rs2_e <= rs2_d; rd_e <= rd_d;
@@ -210,14 +213,17 @@ module cpu #(
     logic        csr_irq;
     logic [31:0] csr_rval, csr_irq_cause, csr_tvec, csr_epc;
 
-    // never inject onto an in-flight muldiv (would orphan the unit);
-    // the next instruction is at most ~35 cycles away
-    wire irq_take  = valid_e && csr_irq && !is_md_e && !mstall && !halted;
-    wire trap_take = irq_take || (valid_e && ecall_e);
-    wire mret_take = valid_e && mret_e && !trap_take;
+    // EX commands (trap/mret/csr-write) fire only on the commit cycle:
+    // held across a multi-cycle stall they would rewrite the MPIE/MIE
+    // stack with already-updated values. Never inject an irq onto an
+    // in-flight muldiv (would orphan the unit); the next instruction
+    // is at most ~35 cycles away.
+    wire irq_take  = valid_e && csr_irq && !is_md_e && !pstall && !halted;
+    wire trap_take = irq_take || (valid_e && ecall_e && !pstall && !halted);
+    wire mret_take = valid_e && mret_e && !pstall && !halted && !trap_take;
     wire [31:0] trap_cause = irq_take ? csr_irq_cause : 32'd11; // M-ecall
 
-    wire csr_en  = valid_e && csr_e && !irq_take && !mstall && !halted;
+    wire csr_en  = valid_e && csr_e && !irq_take && !pstall && !halted;
     wire csr_wen = (funct3_e[1:0] == 2'b01) || (rs1_e != 5'd0);
     wire [31:0] csr_wval = funct3_e[2] ? {27'd0, rs1_e} : fwd1;
 
@@ -242,7 +248,8 @@ module cpu #(
     // ---- EX/MEM ----
     logic [2:0]  funct3_m;
     logic [31:0] st_m;
-    logic        halt_m;
+    logic        halt_m, is_amo_m;
+    logic [4:0]  amo5_m;
     always_ff @(posedge clk)
         if (rst) valid_m <= 1'b0;
         else if (!halted && !pstall) begin
@@ -258,6 +265,7 @@ module cpu #(
             rd_m        <= rd_e;
             st_m        <= fwd2;                          // store data, forwarded
             halt_m      <= valid_e && ebreak_e;
+            is_amo_m    <= is_amo_e; amo5_m <= amo5_e;
             value_m     <= csr_e              ? csr_rval
                          : is_md_e            ? md_result
                          : (wb_src_e == 2'd2) ? pc_e + 32'd4   // JAL/JALR link
@@ -281,6 +289,38 @@ module cpu #(
     wire vid_m = addr_m[17] && !sdram_m;
     wire io_m  = addr_m[16] && !vid_m && !sdram_m;
 
+    // ---- A extension: LR/SC bookkeeping + AMO read-modify-write.
+    // LR is a load that sets the reservation; SC a conditional store
+    // with a success flag; AMOs a 2-phase RMW microsequence (astall)
+    // that rides whatever memory the M stage talks to — BRAM today,
+    // the QSPI controller after bus unification. Uniprocessor rules:
+    // reservation dies on any store, any SC, any RMW, or a trap.
+    wire lr_m  = valid_m && is_amo_m && amo5_m == 5'b00010;
+    wire sc_m  = valid_m && is_amo_m && amo5_m == 5'b00011;
+    wire rmw_m = valid_m && is_amo_m && amo5_m != 5'b00010
+                                     && amo5_m != 5'b00011;
+
+    logic        res_valid, amo_wr;      // amo_wr: RMW write-back phase
+    logic [31:0] res_addr, old_q;
+    wire sc_ok = res_valid && (res_addr == addr_m);
+
+    logic [31:0] amo_new;
+    always_comb
+        case (amo5_m)
+            5'b00000: amo_new = old_q + st_m;                    // ADD
+            5'b00001: amo_new = st_m;                            // SWAP
+            5'b00100: amo_new = old_q ^ st_m;                    // XOR
+            5'b01000: amo_new = old_q | st_m;                    // OR
+            5'b01100: amo_new = old_q & st_m;                    // AND
+            5'b10000: amo_new = ($signed(old_q) < $signed(st_m))
+                                ? old_q : st_m;                  // MIN
+            5'b10100: amo_new = ($signed(old_q) < $signed(st_m))
+                                ? st_m : old_q;                  // MAX
+            5'b11000: amo_new = (old_q < st_m) ? old_q : st_m;   // MINU
+            5'b11100: amo_new = (old_q < st_m) ? st_m : old_q;   // MAXU
+            default:  amo_new = st_m;
+        endcase
+
     // memory stall: SDRAM transactions freeze the entire pipeline until ack.
     // An access can also complete while md_stall keeps M frozen: remember
     // the ack (sd_seen) and hold the data, otherwise the dropped-req rule
@@ -288,25 +328,54 @@ module cpu #(
     logic        sd_seen;
     logic [31:0] sd_data_r;
     wire sd_active = valid_m && sdram_m && (mem_write_m || is_load_m)
-                  && !halted && !sd_seen;
+                  && !halted && !sd_seen && !(sc_m && !sc_ok);
     assign mstall  = sd_active && !sd_ack;
 
     always_ff @(posedge clk)
         if (rst) sd_seen <= 1'b0;
         else begin
-            if (sd_active && sd_ack) begin
+            // RMW read data goes to old_q instead, and the write-back
+            // phase must issue a fresh transaction — no sd_seen there
+            if (sd_active && sd_ack && !rmw_m) begin
                 sd_data_r <= sd_rdata;
                 sd_seen   <= 1'b1;
             end
             if (!halted && !pstall) sd_seen <= 1'b0;   // M advanced
         end
+
+    // AMO RMW sequencing: read phase completes like a load (!mstall),
+    // write phase drives the store and releases the pipe on wr_ok
+    wire wr_ok = !sdram_m || (sd_active && sd_ack);
+    assign astall = rmw_m && !halted && !(amo_wr && wr_ok);
+
+    always_ff @(posedge clk)
+        if (rst) amo_wr <= 1'b0;
+        else if (rmw_m && !halted) begin
+            if (!amo_wr && !mstall) begin
+                old_q  <= mem_word;
+                amo_wr <= 1'b1;
+            end else if (amo_wr && wr_ok)
+                amo_wr <= 1'b0;
+        end
+
+    always_ff @(posedge clk)
+        if (rst) res_valid <= 1'b0;
+        else begin
+            if (lr_m && !halted && !pstall) begin
+                res_valid <= 1'b1;
+                res_addr  <= addr_m;
+            end
+            if ((!halted && !pstall && valid_m
+                 && (sc_m || mem_write_m || rmw_m)) || trap_take)
+                res_valid <= 1'b0;                     // clear wins
+        end
     // drop req the moment ack arrives: otherwise req is still combinationally
     // high for the cycle before M advances, and the controller re-triggers a
     // spurious duplicate transaction whose ack corrupts a later access
     assign sd_req   = sd_active && !sd_ack;
-    assign sd_we    = mem_write_m;
+    assign sd_we    = mem_write_m || amo_wr || (sc_m && sc_ok);
     assign sd_addr  = addr_m[24:2];
-    assign sd_wdata = st_data;
+    assign sd_wdata = amo_wr ? amo_new : st_data;
     assign sd_be    = be_m;
     assign vid_we    = mem_write_m && valid_m && vid_m && !halted;
     assign vid_addr  = addr_m[17:0];
@@ -314,8 +383,10 @@ module cpu #(
 
     logic [31:0] ld_word;
     dmem dm (.clk(clk),
-             .we(mem_write_m && valid_m && !io_m && !vid_m && !sdram_m && !halted),
-             .be(be_m), .addr(addr_m), .wdata(st_data), .rdata(ld_word));
+             .we((mem_write_m || amo_wr || (sc_m && sc_ok))
+                 && valid_m && !io_m && !vid_m && !sdram_m && !halted),
+             .be(be_m), .addr(addr_m),
+             .wdata(amo_wr ? amo_new : st_data), .rdata(ld_word));
 
     // I/O sub-decode: 0x10000 LED, 0x10004 UART, 0x10010+ audio (bit 4)
     wire io_aud_m  = addr_m[4];
@@ -360,11 +431,13 @@ module cpu #(
             reg_write_w <= reg_write_m;
             rd_w        <= rd_m;
             halt_w      <= halt_m;
-            wb_w        <= is_load_m
+            wb_w        <= rmw_m ? old_q                   // AMO: old value
+                         : sc_m  ? {31'd0, !sc_ok}         // SC: 0 = success
+                         : is_load_m
                          ? (io_m ? (addr_m[3] ? (addr_m[2] ? {16'd0, pad}
                                                            : vid_status)
                                               : {31'd0, uart_busy})
-                                 : ld_ext)
+                                 : ld_ext)                 // LR rides ld_ext
                          : value_m;
         end
 

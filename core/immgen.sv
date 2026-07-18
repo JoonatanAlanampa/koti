@@ -23,6 +23,7 @@ module immgen (
             // J: JAL — 20 scrambled bits, imm[0] forced 0
             3'd4: imm = {{11{instr[31]}}, instr[31], instr[19:12],
                          instr[20], instr[30:21], 1'b0};
+            // 5+ = zero (AMOs: address is rs1 + 0)
             default: imm = 32'd0;
         endcase
 endmodule

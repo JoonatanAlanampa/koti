@@ -106,9 +106,15 @@ comfort. KianV's firmware is the reference.
        - Found+fixed latent hazard: SDRAM ack landing while the pipe
          is frozen by md_stall would re-issue the transaction; added
          sd_seen/sd_data_r capture in M.
-       - Open: A (moved to milestone 5, see above); pipeline-level
-         rv32um tests need an instruction-level harness (imem/dmem sim
-         models) — that harness is also the vehicle for riscv-tests.
+       - Instruction-level harness landed (same day): sim imem/dmem/
+         audio_gen models + tb_cpu + a tiny Python assembler
+         (`test/run_cpu.py`). 4 directed programs green on the real
+         pipeline: 32-reg exercise, M ops incl. div-zero/overflow,
+         M-result forwarding chains, load-use into muldiv, taken
+         branch killing a speculative mul. CI runs both core suites
+         (core-tests.yaml). This harness is the vehicle for the
+         official riscv-tests later.
+       - Open: A extension (milestone 5, see above).
 2. [x] Peripheral trio: `vga_timing.sv`, `ps2_rx.sv`, `clint.sv`
        (2026-07-18).
 3. [~] cocotb suite (2026-07-18): bring-up top `tt_um_koti` (VGA

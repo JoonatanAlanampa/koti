@@ -1,0 +1,27 @@
+name: core-tests
+
+on: [push, workflow_dispatch]
+
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: install iverilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install cocotb
+        run: pip install "cocotb>=2.0"
+
+      - name: muldiv unit tests
+        run: python run_core.py
+        working-directory: test
+
+      - name: instruction-level pipeline tests
+        run: python run_cpu.py
+        working-directory: test

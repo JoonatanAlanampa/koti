@@ -1,9 +1,11 @@
 ## How it works
 
 Koti-1 is a single-chip home computer: an RV32IMA RISC-V CPU with
-M/S/U privilege modes and an sv32 MMU, booting mainline Linux from
-QSPI flash/PSRAM with the console rendered as 80x30 VGA text and a
-PS/2 keyboard for input.
+M/S/U privilege modes and an sv32 MMU, booting from QSPI flash/PSRAM
+(Linux-track), with the console rendered as 40x30 VGA text (16x16
+cells, C64-class density; lowercase folds to uppercase) and a PS/2
+keyboard for input. The uo pins boot headless (UART/HALTED/LED) and
+switch to the Tiny VGA Pmod when software sets VGA_EN.
 
 *(Datasheet to be written as the design solidifies — see PLAN.md.
 Sections to cover: memory map, boot flow, pinout, video timing,

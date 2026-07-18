@@ -83,13 +83,17 @@ module vga_text (
             if (swap && ce) cur <= !cur;
         end
 
-    // pixel pipeline (combinational: exact sync alignment at 25 MHz);
-    // pixels double both ways, lowercase folds to uppercase
+    // pixel pipeline, registered: linebuf mux + font ROM was both a
+    // long path and a slew source straight onto the pads. One pixel
+    // (40 ns) of delay against the syncs is invisible on a monitor.
+    // Pixels double both ways; lowercase folds to uppercase.
     `include "font_rom.svh"
     wire [7:0] ch   = lb[cur][x[9:4]];
     wire [7:0] chf  = (ch[6:5] == 2'b11) ? ch - 8'h20 : ch;
     wire [7:0] grow = font_row(chf, y[3:1]);
-    assign pix = en && active && grow[x[3:1]];
+    always_ff @(posedge clk)
+        if (rst)     pix <= 1'b0;
+        else if (ce) pix <= en && active && grow[x[3:1]];
 
     wire _unused = &{frame_start, 1'b0};
 endmodule

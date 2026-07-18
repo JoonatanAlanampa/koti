@@ -182,14 +182,21 @@ comfort. KianV's firmware is the reference.
           network, TLB-after-ALU), not the video path.
        **Conclusion**: flop-everything RV32IMA+MMU+VGA saturates 8x2
        at ~70% pre-repair; the flow needs ~10-15% more headroom than
-       exists. Next-session plan, in order: (a) TT RAM macros for the
-       regfile (1024 flops — biggest block and mux-congestion source)
-       and line buffers, per tinytapeout.com/specs/memory; (b)
-       failing that, prune: iterate muldiv 2 bits/cycle tradeoffs,
-       merge I/D walkers, register the pstall fanout; (c) failing
-       that, the colossal-tile / density conversation with TT. The
-       design is CLOSE — it places and mostly times at the real
-       clock; only repair margin is missing.
+       exists. The design is CLOSE — it places and mostly times at
+       the real clock; only repair margin is missing.
+       **RF-macro research (2026-07-18)**: TT has an experimental
+       **32x32 register file macro by Sylvain Munaut** — *exactly*
+       our regfile: 2 read ports + 1 write port, 32x32, ~88% of ONE
+       tile (vs our multi-tile flop version), no DRC waivers,
+       validated on ttsky25b (tt_um_tnt_rf_validation; repo cloned
+       to ../rf-val for reference — public sources are a stub, the
+       macro GDS/LEF/lib/model are NOT publicly packaged).
+       **ACTION (human)**: ask on the TT Discord / contact tnt for
+       the macro files + read-timing spec (combinational vs sync
+       read decides whether it drops into regfile.sv or needs the
+       WB->ID bypass moved to E). Fallbacks: DFFRAM RAM32 (128 B,
+       1RW — fits the line buffers, not the 2R regfile), then
+       fanout pruning, then the colossal-tile conversation.
 5. [~] Bus unification (2026-07-18): `src/koti_core.sv` is now THE
        core — rv32_core.sv's fetch FSM/data port/MMIO merged with the
        RV32IMA+Zicsr pipeline; `src/qspi_ctrl.sv` (+2:1 arbiter)

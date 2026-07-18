@@ -8,7 +8,7 @@ TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
 PROJECT_SOURCES = project.sv koti_core.sv qspi_ctrl.sv clint.sv \
                   control.sv alu.sv branch.sv immgen.sv regfile.sv \
-                  muldiv.sv csr.sv uart_tx.sv
+                  muldiv.sv csr.sv tlb.sv uart_tx.sv
 
 ifneq ($(GATES),yes)
 

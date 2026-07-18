@@ -47,25 +47,74 @@ module koti_core #(
     input  logic        d_ack,
     input  logic [31:0] d_rdata
 );
-    // ================= F: fetch FSM =================
+    // ================= F: fetch FSM + ITLB / i-walker =================
     logic [31:0] instr_d, pc_d;          // IF/ID
-    logic        valid_d;
+    logic        valid_d, ipf_d;         // ipf: poisoned fetch, traps at EX
 
     logic        stall, flush_ex;        // defined in D/E below
     logic        mstall;                 // data-port wait, defined in M below
     logic        md_stall;               // muldiv wait, defined in E below
     logic        astall;                 // AMO RMW wait, defined in M below
-    wire         pstall = mstall || md_stall || astall;
+    logic        tlb_stall;              // DTLB walk wait, defined in E below
+    wire         pstall = mstall || md_stall || astall || tlb_stall;
     logic [31:0] target_ex;
+    logic        tlb_flush;              // sfence.vma / satp write (EX)
+    logic        m_port_busy;            // M owns the data port (M below)
+
+    // MMU context from csr0 (instance in EX)
+    logic [31:0] csr_satp;
+    logic [1:0]  csr_priv;
+    logic        csr_sum, csr_mxr;
+    wire mmu_i_on = csr_satp[31] && csr_priv != 2'b11;
 
     logic        fbusy, fdrop;
-    logic [31:0] fpc;                    // address of the in-flight fetch
-    logic [31:0] npc;                    // next address to fetch
+    logic [31:0] fpc;                    // VA of the in-flight fetch
+    logic [31:0] fpc_pa;                 // its translation (= fpc when off)
+    logic [31:0] npc;                    // next VA to fetch
     logic [31:0] fbuf;                   // skid: second word of the pair
     logic        fbuf_v;
 
-    assign if_req  = fbusy;
-    assign if_addr = fpc[24:2];
+    // ITLB: looked up on npc while idle
+    wire [19:0] i_vpn = npc[31:12];
+    logic        itlb_hit;
+    logic [21:0] itlb_ppn;
+    logic        itlb_r, itlb_w, itlb_x, itlb_u, itlb_pd, itlb_f;
+    tlb #(.N(4)) itlb0 (
+        .clk(clk), .rst(rst), .flush(tlb_flush),
+        .vpn(i_vpn), .hit(itlb_hit), .ppn(itlb_ppn),
+        .p_r(itlb_r), .p_w(itlb_w), .p_x(itlb_x), .p_u(itlb_u),
+        .p_d(itlb_pd), .p_fault(itlb_f),
+        .fill(iw_fill), .f_vpn(iw_vpn), .f_ppn(iw_fppn),
+        .f_r(ipte[1]), .f_w(ipte[2]), .f_x(ipte[3]), .f_u(ipte[4]),
+        .f_d(ipte[7]), .f_fault(iw_pte_fault));
+
+    // execute permission at current privilege (S never runs U pages)
+    wire itlb_xfault = itlb_f || !itlb_x
+                    || (csr_priv == 2'b00 && !itlb_u)
+                    || (csr_priv == 2'b01 &&  itlb_u);
+
+    // i-walker: two PTE reads through the fetch port (pair's first word).
+    // Fills are path-independent, so a redirect mid-walk needs no abort:
+    // the walk completes against its latched vpn and simply fills.
+    logic [1:0]  iw_state;               // 0 idle, 1 level-1, 2 level-0
+    logic [19:0] iw_vpn;
+    logic [22:0] iw_addr;
+
+    assign if_req  = fbusy || (iw_state != 2'd0);
+    assign if_addr = (iw_state != 2'd0) ? iw_addr : fpc_pa[24:2];
+
+    wire [31:0] ipte     = if_rdata;
+    wire        ipte_bad = !ipte[0] || (!ipte[1] && ipte[2]);   // !V, W&!R
+    wire        ipte_leaf = ipte[1] || ipte[3];                 // R or X
+    wire        iw_l1 = if_ack && iw_state == 2'd1;
+    wire        iw_l0 = if_ack && iw_state == 2'd2;
+    wire        iw_pte_fault = ipte_bad
+                    || (iw_l1 && ipte_leaf && ipte[19:10] != 10'd0)
+                    || (iw_l0 && !ipte_leaf)
+                    || (ipte_leaf && !ipte[6]);                 // A = 0
+    wire        iw_fill = (iw_l1 && (ipte_bad || ipte_leaf)) || iw_l0;
+    wire [21:0] iw_fppn = iw_l1 ? {ipte[31:20], iw_vpn[9:0]}    // megapage
+                                : ipte[31:10];
 
     wire advance = !halted && !pstall;
     wire consume = advance && valid_d && !stall && !flush_ex;
@@ -73,9 +122,11 @@ module koti_core #(
     always_ff @(posedge clk)
         if (rst) begin
             fbusy <= 1'b0; fdrop <= 1'b0;
-            fpc   <= 32'd0; npc <= 32'd0;
+            fpc   <= 32'd0; fpc_pa <= 32'd0; npc <= 32'd0;
             fbuf  <= 32'd0; fbuf_v <= 1'b0;
             valid_d <= 1'b0; pc_d <= 32'd0; instr_d <= 32'd0;
+            ipf_d <= 1'b0;
+            iw_state <= 2'd0; iw_vpn <= 20'd0; iw_addr <= 23'd0;
         end else begin
             if (consume) begin
                 if (fbuf_v) begin       // promote the pair's second word
@@ -86,7 +137,17 @@ module koti_core #(
                     valid_d <= 1'b0;
             end
 
-            if (if_ack) begin
+            if (iw_l1) begin
+                if (ipte_bad || ipte_leaf)
+                    iw_state <= 2'd0;   // filled (translation or fault)
+                else begin
+                    iw_addr  <= {ipte[22:10], iw_vpn[9:0]};   // level-0 PTE
+                    iw_state <= 2'd2;
+                end
+            end else if (iw_l0)
+                iw_state <= 2'd0;
+
+            if (if_ack && iw_state == 2'd0) begin
                 // a fetch is only in flight while head+skid are empty, so
                 // delivery never collides with consume/promote
                 fbusy <= 1'b0;
@@ -95,21 +156,40 @@ module koti_core #(
                     instr_d <= if_rdata;
                     pc_d    <= fpc;
                     valid_d <= 1'b1;
+                    ipf_d   <= 1'b0;
                     fbuf    <= if_rdata2;
-                    fbuf_v  <= 1'b1;
+                    // a pair straddling a page boundary would carry the
+                    // wrong translation for its second word: drop it
+                    fbuf_v  <= !(mmu_i_on && fpc[11:2] == 10'h3FF);
                     npc     <= fpc + 32'd8;
                 end
-            end else if (!fbusy && !valid_d && !fbuf_v && !halted && !flush_ex) begin
+            end else if (iw_state == 2'd0 && !fbusy && !valid_d && !fbuf_v
+                         && !halted && !flush_ex) begin
                 // !flush_ex: a redirect lands this same edge and rewrites
                 // npc — starting now would fetch the stale wrong-path npc
                 // (see rv32_core.sv for the full war story)
-                fbusy <= 1'b1;
-                fpc   <= npc;
+                if (!mmu_i_on) begin
+                    fbusy <= 1'b1; fpc <= npc; fpc_pa <= npc;
+                end else if (itlb_hit && !itlb_xfault) begin
+                    fbusy  <= 1'b1; fpc <= npc;
+                    fpc_pa <= {itlb_ppn[19:0], npc[11:0]};
+                end else if (itlb_hit) begin
+                    // execute fault: poison one NOP; EX takes the trap
+                    instr_d <= 32'h0000_0013;
+                    pc_d    <= npc;
+                    valid_d <= 1'b1;
+                    ipf_d   <= 1'b1;
+                end else begin
+                    iw_vpn   <= i_vpn;
+                    iw_addr  <= {csr_satp[12:0], i_vpn[19:10]};
+                    iw_state <= 2'd1;
+                end
             end
 
             // redirect last: overrides a same-cycle delivery/promotion
             if (advance && flush_ex) begin
                 valid_d <= 1'b0;
+                ipf_d   <= 1'b0;
                 fbuf_v  <= 1'b0;
                 npc     <= target_ex;
                 if (fbusy && !if_ack) fdrop <= 1'b1;
@@ -144,6 +224,8 @@ module koti_core #(
     wire is_ebreak_d = c_is_sys && instr_d[14:12] == 3'b000 && sys12 == 12'h001;
     wire is_mret_d   = c_is_sys && instr_d[14:12] == 3'b000 && sys12 == 12'h302;
     wire is_sret_d   = c_is_sys && instr_d[14:12] == 3'b000 && sys12 == 12'h102;
+    wire is_sfence_d = c_is_sys && instr_d[14:12] == 3'b000
+                     && instr_d[31:25] == 7'b0001001;   // sfence.vma
 
     logic [31:0] imm_d;
     immgen ig (.instr(instr_d), .sel(c_imm_sel), .imm(imm_d));
@@ -166,6 +248,7 @@ module koti_core #(
     logic        valid_e, reg_write_e, alu_b_src_e, mem_write_e;
     logic        is_branch_e, is_jump_e, is_md_e, is_amo_e;
     logic        ebreak_e, ecall_e, mret_e, sret_e, csr_e;
+    logic        ipf_e, sfence_e;
     logic [4:0]  amo5_e;
     logic [1:0]  alu_a_src_e, wb_src_e;
     logic [3:0]  alu_op_e;
@@ -190,7 +273,8 @@ module koti_core #(
                 is_md_e     <= c_is_md;
                 ebreak_e    <= is_ebreak_d; ecall_e     <= is_ecall_d;
                 mret_e      <= is_mret_d;   csr_e       <= is_csr_d;
-                sret_e      <= is_sret_d;
+                sret_e      <= is_sret_d;   sfence_e    <= is_sfence_d;
+                ipf_e       <= ipf_d;
                 is_amo_e    <= c_is_amo;    amo5_e      <= instr_d[31:27];
                 alu_a_src_e <= c_alu_a_src; wb_src_e    <= c_wb_src;
                 alu_op_e    <= c_alu_op;    funct3_e    <= instr_d[14:12];
@@ -244,30 +328,119 @@ module koti_core #(
     logic        csr_irq;
     logic [31:0] csr_rval, csr_trap_vec, csr_mepc, csr_sepc;
 
+    // ---- sv32 data-side translation, at EX so traps stay precise and
+    // stval gets the faulting VA ----
+    wire mmu_d_on  = csr_satp[31] && csr_priv != 2'b11;   // (no MPRV)
+    wire dmem_op_e = valid_e && (mem_write_e || wb_src_e == 2'd1);
+    wire d_isstore = mem_write_e
+                  || (is_amo_e && amo5_e != 5'b00010);    // SC/AMO: store pf
+
+    wire [19:0] d_vpn = alu_y[31:12];
+    logic        dtlb_hit;
+    logic [21:0] dtlb_ppn;
+    logic        dtlb_r, dtlb_w, dtlb_x, dtlb_u, dtlb_pd, dtlb_f;
+    tlb #(.N(4)) dtlb0 (
+        .clk(clk), .rst(rst), .flush(tlb_flush),
+        .vpn(d_vpn), .hit(dtlb_hit), .ppn(dtlb_ppn),
+        .p_r(dtlb_r), .p_w(dtlb_w), .p_x(dtlb_x), .p_u(dtlb_u),
+        .p_d(dtlb_pd), .p_fault(dtlb_f),
+        .fill(dw_fill), .f_vpn(dw_vpn), .f_ppn(dw_fppn),
+        .f_r(dpte[1]), .f_w(dpte[2]), .f_x(dpte[3]), .f_u(dpte[4]),
+        .f_d(dpte[7]), .f_fault(dw_pte_fault));
+
+    wire dtlb_pfault = dtlb_f
+        || (csr_priv == 2'b00 && !dtlb_u)
+        || (csr_priv == 2'b01 &&  dtlb_u && !csr_sum)
+        || (d_isstore ? (!dtlb_w || !dtlb_pd)             // D=0 store faults
+                      : !(dtlb_r || (csr_mxr && dtlb_x)));
+    wire d_xlate = dmem_op_e && mmu_d_on;
+    assign tlb_stall = d_xlate && !dtlb_hit;              // walk in progress
+    wire [31:0] d_pa = mmu_d_on ? {dtlb_ppn[19:0], alu_y[11:0]} : alu_y;
+
+    // d-walker: two PTE reads on the data port, issued only while the
+    // M stage isn't mid-transaction (its op completes under d_seen).
+    // Never aborted: irqs are gated on !pstall, and nothing older than
+    // EX can flush it.
+    logic [1:0]  dw_state;
+    logic [19:0] dw_vpn;
+    logic [22:0] dw_addr;
+    wire dw_req  = (dw_state != 2'd0) && !m_port_busy;
+    wire dw_ack  = d_ack && dw_req;
+    wire [31:0] dpte     = d_rdata;
+    wire        dpte_bad = !dpte[0] || (!dpte[1] && dpte[2]);
+    wire        dpte_leaf = dpte[1] || dpte[3];
+    wire        dw_l1 = dw_ack && dw_state == 2'd1;
+    wire        dw_l0 = dw_ack && dw_state == 2'd2;
+    wire        dw_pte_fault = dpte_bad
+                    || (dw_l1 && dpte_leaf && dpte[19:10] != 10'd0)
+                    || (dw_l0 && !dpte_leaf)
+                    || (dpte_leaf && !dpte[6]);           // A = 0
+    wire        dw_fill = (dw_l1 && (dpte_bad || dpte_leaf)) || dw_l0;
+    wire [21:0] dw_fppn = dw_l1 ? {dpte[31:20], dw_vpn[9:0]}
+                                : dpte[31:10];
+
+    always_ff @(posedge clk)
+        if (rst) begin
+            dw_state <= 2'd0; dw_vpn <= 20'd0; dw_addr <= 23'd0;
+        end else if (dw_state == 2'd0) begin
+            if (d_xlate && !dtlb_hit && !halted) begin
+                dw_vpn   <= d_vpn;
+                dw_addr  <= {csr_satp[12:0], d_vpn[19:10]};
+                dw_state <= 2'd1;
+            end
+        end else if (dw_l1) begin
+            if (dpte_bad || dpte_leaf)
+                dw_state <= 2'd0;
+            else begin
+                dw_addr  <= {dpte[22:10], dw_vpn[9:0]};
+                dw_state <= 2'd2;
+            end
+        end else if (dw_l0)
+            dw_state <= 2'd0;
+
+    // ---- traps: EX commands fire only on the commit cycle ----
     wire irq_take  = valid_e && csr_irq && !is_md_e && !pstall && !halted;
-    wire trap_take = irq_take || (valid_e && ecall_e && !pstall && !halted);
+    wire ipf_take  = valid_e && ipf_e && !irq_take && !pstall && !halted;
+    wire dpf_take  = d_xlate && dtlb_hit && dtlb_pfault
+                  && !irq_take && !pstall && !halted;
+    wire ecl_take  = valid_e && ecall_e && !irq_take && !pstall && !halted;
+    wire trap_take = irq_take || ipf_take || dpf_take || ecl_take;
     wire mret_take = valid_e && mret_e && !pstall && !halted && !trap_take;
     wire sret_take = valid_e && sret_e && !pstall && !halted && !trap_take;
+    wire sfence_take = valid_e && sfence_e && !pstall && !halted
+                    && !trap_take;
+
+    wire [1:0]  trap_kind = ipf_take ? 2'd1
+                          : dpf_take ? (d_isstore ? 2'd3 : 2'd2) : 2'd0;
+    wire [31:0] trap_tval = ipf_take ? pc_e
+                          : dpf_take ? alu_y : 32'd0;
 
     wire csr_en  = valid_e && csr_e && !irq_take && !pstall && !halted;
     wire csr_wen = (funct3_e[1:0] == 2'b01) || (rs1_e != 5'd0);
     wire [31:0] csr_wval = funct3_e[2] ? {27'd0, rs1_e} : fwd1;
 
+    assign tlb_flush = sfence_take
+                    || (csr_en && csr_wen && imm_e[11:0] == 12'h180);
+
     csr csr0 (.clk(clk), .rst(rst),
               .en(csr_en), .op(funct3_e[1:0]), .wen(csr_wen),
               .addr(imm_e[11:0]), .wval(csr_wval), .rval(csr_rval),
-              .trap(trap_take), .trap_ecall(!irq_take), .trap_pc(pc_e),
+              .trap(trap_take), .trap_irq(irq_take), .trap_kind(trap_kind),
+              .trap_pc(pc_e), .trap_tval(trap_tval),
               .mret(mret_take), .sret(sret_take),
               .mtip(mtip), .msip(msip), .meip(meip),
               .irq(csr_irq), .trap_vec(csr_trap_vec),
-              .mepc_rd(csr_mepc), .sepc_rd(csr_sepc));
+              .mepc_rd(csr_mepc), .sepc_rd(csr_sepc),
+              .satp_rd(csr_satp), .priv_rd(csr_priv),
+              .sum_rd(csr_sum), .mxr_rd(csr_mxr));
 
     wire take_ex  = valid_e && (is_jump_e || (is_branch_e && br_taken));
     assign flush_ex  = take_ex || trap_take || mret_take || sret_take
-                     || (valid_e && ebreak_e);
+                     || sfence_take || (valid_e && ebreak_e);
     assign target_ex = trap_take             ? csr_trap_vec
                      : mret_take             ? csr_mepc
                      : sret_take             ? csr_sepc
+                     : sfence_take           ? pc_e + 32'd4  // serialize
                      : (valid_e && ebreak_e) ? pc_e          // spin + drain
                      : {alu_y[31:1], 1'b0};
 
@@ -291,6 +464,7 @@ module koti_core #(
             value_m     <= csr_e              ? csr_rval
                          : is_md_e            ? md_result
                          : (wb_src_e == 2'd2) ? pc_e + 32'd4   // JAL/JALR link
+                         : dmem_op_e          ? d_pa           // translated
                                               : alu_y;
         end
 
@@ -350,10 +524,14 @@ module koti_core #(
     logic [31:0] d_data_r;
     wire d_active = valid_m && !io_m && (mem_write_m || is_load_m)
                  && !halted && !d_seen && !(sc_m && !sc_ok);
-    assign mstall = d_active && !d_ack;
-    assign d_req   = d_active && !d_ack;
-    assign d_we    = mem_write_m || amo_wr || (sc_m && sc_ok);
-    assign d_addr  = addr_m[24:2];
+    assign m_port_busy = d_active;
+    wire m_ack_here = d_ack && !dw_req;       // else the walker owns it
+    assign mstall = d_active && !m_ack_here;
+    // port muxes: the EX-side page walker borrows the port only while
+    // the M stage is quiet
+    assign d_req   = (d_active && !m_ack_here) || dw_req;
+    assign d_we    = !dw_req && (mem_write_m || amo_wr || (sc_m && sc_ok));
+    assign d_addr  = dw_req ? dw_addr : addr_m[24:2];
     assign d_wdata = amo_wr ? amo_new : st_data;
     assign d_be    = be_m;
 

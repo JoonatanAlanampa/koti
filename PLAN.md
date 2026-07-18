@@ -183,9 +183,25 @@ comfort. KianV's firmware is the reference.
        3 new tests: delegated ecall-from-S handled in S + sret;
        ecall-from-U to M with MPP=U; and the Linux timer flow — M
        takes MTI, masks, injects STIP, delegated S-timer trap lands
-       at stvec. 12/12 directed + 58/58 official + pin-level all
-       green. Open: sv32 TLBs + hardware walker + page-fault causes
-       + permission checks; then xv6.
+       at stvec.
+       **sv32 MMU DONE (same day)**: `src/tlb.sv` (4-entry fully-assoc
+       I and D TLBs, FAULT-caching entries, uniform 4K fills — mega-
+       pages fill as the resolved 4K entry); i-walker embedded in the
+       fetch FSM (PTE reads ride the fetch port; walks complete even
+       across redirects — fills are path-independent); d-walker at EX
+       borrowing the data port while M is quiet, so ALL traps stay at
+       the one precise EX commit point and stval gets the faulting VA
+       (Linux do_page_fault needs it). SUM + MXR in mstatus; A=0 or
+       D=0-on-store fault (spec-allowed, kernels cope); page-crossing
+       pair fetches drop the skid word; sfence.vma flushes both TLBs
+       and serializes the pipe; satp writes flush too. Fetch faults
+       poison one NOP that traps at EX (cause 12); load/store faults
+       are causes 13/15 with tval. End-to-end test: M builds real
+       tables, S runs translated, RW 4K page round-trips to its PA,
+       RO store + unmapped load + unmapped fetch fault in order with
+       correct mtval, RO page physically untouched. 13/13 directed +
+       58/58 official + pin-level green. Open: xv6 boot (software),
+       MPRV gap logged.
 9. [ ] Mainline Linux sv32 boots to shell on fbcon, Verilator + ULX3S.
 10. [ ] Harden at 8x2 @ ~55%; iterate. Submit to the next shuttle
         after TTSKY26c (this is NOT a TTSKY26c project — no rushing a

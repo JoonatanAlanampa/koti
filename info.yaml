@@ -28,6 +28,7 @@ project:
     - "regfile.sv"
     - "muldiv.sv"
     - "csr.sv"
+    - "tlb.sv"
     - "uart_tx.sv"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.

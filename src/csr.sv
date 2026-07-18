@@ -24,21 +24,28 @@ module csr (
     output logic [31:0] rval,
     // trap entry / returns (single-cycle commands from EX)
     input  logic        trap,        // take a trap now
-    input  logic        trap_ecall,  // else: the pending irq we report
+    input  logic        trap_irq,    // it is the pending irq we report
+    input  logic [1:0]  trap_kind,   // else: 0 ecall, 1 ipf, 2 lpf, 3 spf
     input  logic [31:0] trap_pc,
+    input  logic [31:0] trap_tval,
     input  logic        mret, sret,
     // interrupt lines (level)
     input  logic        mtip, msip, meip,
     // to the pipeline
     output logic        irq,         // take an interrupt now
     output logic [31:0] trap_vec,    // where this cycle's trap goes
-    output logic [31:0] mepc_rd, sepc_rd
+    output logic [31:0] mepc_rd, sepc_rd,
+    // MMU context
+    output logic [31:0] satp_rd,
+    output logic [1:0]  priv_rd,
+    output logic        sum_rd, mxr_rd
 );
     // privilege: 11 = M, 01 = S, 00 = U
     logic [1:0]  priv;
 
     // mstatus fields
     logic        sie_g, mie_g, spie, mpie, spp;
+    logic        sum_b, mxr_b;
     logic [1:0]  mpp;
     // interrupt enables (mie register bits)
     logic        ssie, stie, seie, msie, mtie, meie;
@@ -50,9 +57,11 @@ module csr (
     logic [31:0] satp_q;
     logic [31:0] medeleg_q, mideleg_q;
 
-    wire [31:0] mstatus_r = {19'd0, mpp, 2'd0, spp, mpie, 1'b0, spie,
-                             1'b0, mie_g, 1'b0, sie_g, 1'b0};
-    wire [31:0] sstatus_r = {23'd0, spp, 2'd0, spie, 3'd0, sie_g, 1'b0};
+    wire [31:0] mstatus_r = {12'd0, mxr_b, sum_b, 5'd0, mpp, 2'd0, spp,
+                             mpie, 1'b0, spie, 1'b0, mie_g, 1'b0,
+                             sie_g, 1'b0};
+    wire [31:0] sstatus_r = {12'd0, mxr_b, sum_b, 9'd0, spp, 2'd0, spie,
+                             3'd0, sie_g, 1'b0};
     wire [31:0] mie_r = {20'd0, meie, 1'b0, seie, 1'b0, mtie, 1'b0, stie,
                          1'b0, msie, 1'b0, ssie, 1'b0};
     wire [31:0] sie_r = {22'd0, seie, 3'd0, stie, 3'd0, ssie, 1'b0};
@@ -119,20 +128,27 @@ module csr (
     // ---- trap routing ----
     wire [31:0] ecall_cause = (priv == 2'b11) ? 32'd11
                             : (priv == 2'b01) ? 32'd9 : 32'd8;
-    wire [31:0] cause  = trap_ecall ? ecall_cause : irq_cause;
-    wire trap_to_s = trap_ecall
-                   ? (medeleg_q[ecall_cause[4:0]] && priv != 2'b11)
-                   : take_s;
+    wire [31:0] exc_cause = (trap_kind == 2'd1) ? 32'd12
+                          : (trap_kind == 2'd2) ? 32'd13
+                          : (trap_kind == 2'd3) ? 32'd15
+                          :                       ecall_cause;
+    wire [31:0] cause  = trap_irq ? irq_cause : exc_cause;
+    wire trap_to_s = trap_irq ? take_s
+                   : (medeleg_q[cause[4:0]] && priv != 2'b11);
     assign trap_vec = trap_to_s ? {stvec_q[31:2], 2'b00}
                                 : {mtvec_q[31:2], 2'b00};
     assign mepc_rd = mepc_q;
     assign sepc_rd = sepc_q;
+    assign satp_rd = satp_q;
+    assign priv_rd = priv;
+    assign sum_rd  = sum_b;
+    assign mxr_rd  = mxr_b;
 
     always_ff @(posedge clk)
         if (rst) begin
             priv <= 2'b11;
             sie_g <= 1'b0; mie_g <= 1'b0; spie <= 1'b0; mpie <= 1'b0;
-            spp <= 1'b0; mpp <= 2'b00;
+            spp <= 1'b0; mpp <= 2'b00; sum_b <= 1'b0; mxr_b <= 1'b0;
             ssie <= 1'b0; stie <= 1'b0; seie <= 1'b0;
             msie <= 1'b0; mtie <= 1'b0; meie <= 1'b0;
             ssip <= 1'b0; stip <= 1'b0; seip <= 1'b0;
@@ -145,7 +161,7 @@ module csr (
             if (trap_to_s) begin
                 sepc_q   <= {trap_pc[31:1], 1'b0};
                 scause_q <= cause;
-                stval_q  <= 32'd0;
+                stval_q  <= trap_tval;
                 spie     <= sie_g;
                 sie_g    <= 1'b0;
                 spp      <= priv[0];
@@ -153,7 +169,7 @@ module csr (
             end else begin
                 mepc_q   <= {trap_pc[31:1], 1'b0};
                 mcause_q <= cause;
-                mtval_q  <= 32'd0;
+                mtval_q  <= trap_tval;
                 mpie     <= mie_g;
                 mie_g    <= 1'b0;
                 mpp      <= priv;
@@ -172,7 +188,8 @@ module csr (
         end else if (en && wen)
             case (addr)
                 12'h100: begin sie_g <= wnew[1]; spie <= wnew[5];
-                               spp <= wnew[8]; end
+                               spp <= wnew[8]; sum_b <= wnew[18];
+                               mxr_b <= wnew[19]; end
                 12'h104: begin ssie <= wnew[1]; stie <= wnew[5];
                                seie <= wnew[9]; end
                 12'h105: stvec_q    <= wnew;
@@ -184,7 +201,8 @@ module csr (
                 12'h180: satp_q     <= wnew;
                 12'h300: begin sie_g <= wnew[1]; mie_g <= wnew[3];
                                spie <= wnew[5]; mpie <= wnew[7];
-                               spp <= wnew[8]; mpp <= wnew[12:11]; end
+                               spp <= wnew[8]; mpp <= wnew[12:11];
+                               sum_b <= wnew[18]; mxr_b <= wnew[19]; end
                 12'h302: medeleg_q  <= wnew;
                 12'h303: mideleg_q  <= wnew;
                 12'h304: begin ssie <= wnew[1]; msie <= wnew[3];

@@ -21,6 +21,7 @@ MSCRATCH, MEPC, MCAUSE, MIP = 0x340, 0x341, 0x342, 0x344
 MEDELEG, MIDELEG = 0x302, 0x303
 SSTATUS, SIE, STVEC = 0x100, 0x104, 0x105
 SEPC, SCAUSE = 0x141, 0x142
+MTVAL, SATP = 0x343, 0x180
 
 # ---- tiny assembler ----------------------------------------------------
 
@@ -72,6 +73,22 @@ def sw(rs2, rs1, imm):
         ((imm & 0x1F) << 7) | 0x23
 
 
+def jalr(rd, rs1, imm):
+    return ((imm & 0xFFF) << 20) | (rs1 << 15) | (0 << 12) | (rd << 7) | 0x67
+
+
+def slli(rd, rs1, sh):
+    return ((sh & 0x1F) << 20) | (rs1 << 15) | (1 << 12) | (rd << 7) | 0x13
+
+
+def andi(rd, rs1, imm):
+    return ((imm & 0xFFF) << 20) | (rs1 << 15) | (7 << 12) | (rd << 7) | 0x13
+
+
+def or_(rd, rs1, rs2):
+    return _r(0x00, rs2, rs1, 6, rd, 0x33)
+
+
 def beq(rs1, rs2, off):
     off &= 0x1FFF
     return ((off >> 12) << 31) | (((off >> 5) & 0x3F) << 25) | (rs2 << 20) | \
@@ -116,6 +133,7 @@ ECALL = 0x0000_0073
 EBREAK = 0x0010_0073
 MRET = 0x3020_0073
 SRET = 0x1020_0073
+SFENCE = 0x1200_0073  # sfence.vma x0, x0
 
 HANDLER = 48  # word index of trap handlers in trap tests
 
@@ -131,7 +149,8 @@ def layout(main, sections):
 # ---- harness -----------------------------------------------------------
 
 
-async def run_program(dut, words, max_cycles=20000, mtip_at=None):
+async def run_program(dut, words, max_cycles=20000, mtip_at=None,
+                      ram_zero=()):
     dut.rst.value = 1
     dut.mtip.value = 0
     dut.msip.value = 0
@@ -139,6 +158,9 @@ async def run_program(dut, words, max_cycles=20000, mtip_at=None):
     await ClockCycles(dut.clk, 5)
     for i, w in enumerate(words):
         dut.mem.flash[i].value = w
+    for start, count in ram_zero:      # e.g. page-table pages: a real
+        for i in range(start, start + count):  # kernel zeroes them too
+            dut.mem.ram[i].value = 0
     # pad with EBREAK so runaway fetch halts instead of executing X
     for i in range(len(words), len(words) + 16):
         dut.mem.flash[i].value = EBREAK
@@ -448,6 +470,72 @@ async def test_sbi_timer_path(dut):
                       mtip_at=200)
     assert reg(dut, 14) == 0x8000_0007, "M did not take the MTI"
     assert reg(dut, 16) == 0x8000_0005, "S did not take the injected STI"
+
+
+@cocotb.test()
+async def test_sv32_translation_and_faults(dut):
+    """M builds page tables, S runs translated: 4K RW page works, RO
+    store / unmapped load / unmapped fetch raise causes 15/13/12 with
+    correct mtval, and the RO page stays unmodified."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+
+    ROOT, L0 = 0x0100_2000, 0x0100_3000
+    # PTEs: root[0] identity 4MB megapage (code+MMIO, RWXAD);
+    # root[0x100] -> L0; L0[0]: VA 0x40000000 -> PA 0x01001000 RW+AD;
+    # L0[1]: VA 0x40001000 -> PA 0x01004000 RO+A
+    main = ([addi(24, 0, 0), addi(26, 0, 0)]   # fault accumulators
+            + li(5, ROOT)
+            + li(6, 0x0000_00CF) + [sw(6, 5, 0)]
+            + li(6, (L0 >> 12) << 10 | 1) + [sw(6, 5, 0x400)]
+            + li(7, L0)
+            + li(6, 0x1001 << 10 | 0xC7) + [sw(6, 7, 0)]
+            + li(6, 0x1004 << 10 | 0x43) + [sw(6, 7, 4)]
+            + li(8, 0x0100_4000) + li(9, 0x1234) + [sw(9, 8, 0)]
+            + li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
+            + li(2, 0x8000_0000 | (ROOT >> 12)) + [csrrw(0, SATP, 2),
+                                                   SFENCE]
+            + li(3, S_ENTRY * 4) + [csrrw(0, MEPC, 3)]
+            + li(4, 0x800) + [csrrs(0, MSTATUS, 4),      # MPP = S
+                              MRET])
+    s_entry = (li(10, 0x4000_0000) + li(11, 0xBEEF) + [
+        sw(11, 10, 0),              # translated store
+        lw(12, 10, 0),              # x12 = 0xBEEF back through the TLB
+    ] + li(13, 0x4000_1000) + [
+        lw(14, 13, 0),              # RO page read: x14 = 0x1234
+        sw(11, 13, 0),              # RO store -> cause 15, skipped
+    ] + li(15, 0x5000_0000) + [
+        lw(16, 15, 0),              # unmapped load -> cause 13, skipped
+        jalr(17, 15, 0),            # unmapped fetch -> cause 12, halt
+    ])
+    m_handler = [
+        csrrs(20, MCAUSE, 0),
+        slli(24, 24, 4),            # accumulate cause nibbles in x24
+        andi(22, 20, 15),
+        or_(24, 24, 22),
+        csrrs(21, MTVAL, 0),
+        add(25, 0, 26),             # x25/x26: last two tvals
+        add(26, 0, 21),
+        addi(22, 0, 12),
+        beq(20, 22, 20),            # instruction fault: stop
+        csrrs(23, MEPC, 0),         # else skip the faulting instr
+        addi(23, 23, 4),
+        csrrw(0, MEPC, 23),
+        MRET,
+        EBREAK,
+    ]
+    # zero the two page-table pages (root + L0), as a kernel would
+    await run_program(dut, layout(main, {HANDLER: m_handler,
+                                         S_ENTRY: s_entry}),
+                      ram_zero=[((ROOT - 0x0100_0000) >> 2, 2048)])
+    assert reg(dut, 12) == 0xBEEF, "translated store/load round-trip"
+    assert reg(dut, 14) == 0x1234, "RO page read through the TLB"
+    assert reg(dut, 24) == 0xFDC, \
+        f"fault sequence {reg(dut, 24):#x} != store/load/fetch (F,D,C)"
+    assert reg(dut, 25) == 0x5000_0000, "mtval of the load fault"
+    assert reg(dut, 26) == 0x5000_0000, "mtval of the fetch fault"
+    # physical effects: RW page written at its PA, RO page untouched
+    assert int(dut.mem.ram[(0x0100_1000 - 0x0100_0000) >> 2].value) == 0xBEEF
+    assert int(dut.mem.ram[(0x0100_4000 - 0x0100_0000) >> 2].value) == 0x1234
 
 
 @cocotb.test()

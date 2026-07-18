@@ -21,6 +21,7 @@ SOURCES = [
     SRC_DIR / "regfile.sv",
     SRC_DIR / "muldiv.sv",
     SRC_DIR / "csr.sv",
+    SRC_DIR / "tlb.sv",
     SRC_DIR / "uart_tx.sv",
     TEST_DIR / "tb.v",
 ]

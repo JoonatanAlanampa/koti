@@ -3,9 +3,16 @@
 ## TODO (state as of 2026-07-19: hardware-complete, 6 suites green)
 
 User actions — everything below is blocked on one of these:
-1. [ ] **Ask the TT Discord / tnt** for the 32x32 RF macro files
-       (GDS/LEF/lib/model + read timing). Pipeline is already
-       sync-read/macro-ready; this unblocks the 8x2 harden.
+1. [ ] **Generate the RF macro with DFFRAM — NOT a human ask** (CORRECTED
+       2026-07-22, verified). AUCOHL/DFFRAM's docs list a sky130 config
+       "Register File: 32x32 (2R1W)" that emits netlist + LEF + GDS + lib for
+       OpenLane/LibreLane — exactly this regfile. The old "ask tnt" line was for
+       Munaut's ONE unpackaged macro, and the "DFFRAM is 1RW-only" claim below is
+       WRONG. Command shape: `dffram.py -p sky130A -s sky130_fd_sc_hd -b <rf-2r1w>
+       32x32` — an OpenLane/nix flow, i.e. a LINUX env, so run it in **CI** or
+       under **WSL** (TODO #4 unblocks it locally; this machine has no docker/
+       WSL/nix). Pipeline is already sync-read/macro-ready; this unblocks the 8x2
+       harden. => Claude/CI-executable, no person required.
 2. [ ] **Submit TinyRV32 + ServoCtl-8 to TTSKY26c** — hard deadline
        ~2026-09-07. Both repos are ready; form-filling only.
 3. [ ] **Order the ULX3S 85F** (~$155 Crowd Supply, ~1 month lead).
@@ -238,10 +245,17 @@ comfort. KianV's firmware is the reference.
        registers so operands stay coherent through stalls. All
        suites green first run. The macro is now a body-swap in
        regfile.sv + LibreLane config.
-       **ACTION (human)**: ask on the TT Discord / contact tnt for
-       the macro files (GDS/LEF/lib/model) + confirm read timing. Fallbacks: DFFRAM RAM32 (128 B,
-       1RW — fits the line buffers, not the 2R regfile), then
-       fanout pruning, then the colossal-tile conversation.
+       **CORRECTED 2026-07-22 (verified, NOT a human ask):** AUCOHL/DFFRAM
+       generates the sky130 32x32 2R1W register file directly (netlist+LEF+GDS+
+       lib) — its docs list "Register File: 32x32 (2R1W)". The old fallback line
+       was WRONG: DFFRAM is not 1RW-only. Path: run dffram.py under OpenLane/nix
+       (CI, or WSL once installed) -> commit the macro -> body-swap regfile.sv
+       (guard a USE_MACRO branch, keep the behavioral model for sim) + LibreLane
+       EXTRA_LEFS/GDS/LIB + macro placement -> re-harden 8x2. CONFIRM the DFFRAM
+       RF read timing (comb vs registered) vs regfile.sv's sync-read/read-first
+       model; add an input address register if the macro reads combinationally.
+       Deeper fallbacks (fanout pruning, colossal tile) unchanged, now unlikely
+       needed.
 5. [~] Bus unification (2026-07-18): `src/koti_core.sv` is now THE
        core — rv32_core.sv's fetch FSM/data port/MMIO merged with the
        RV32IMA+Zicsr pipeline; `src/qspi_ctrl.sv` (+2:1 arbiter)

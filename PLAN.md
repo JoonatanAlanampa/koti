@@ -3,16 +3,15 @@
 ## TODO (state as of 2026-07-19: hardware-complete, 6 suites green)
 
 User actions — everything below is blocked on one of these:
-1. [ ] **Generate the RF macro with DFFRAM — NOT a human ask** (CORRECTED
-       2026-07-22, verified). AUCOHL/DFFRAM's docs list a sky130 config
-       "Register File: 32x32 (2R1W)" that emits netlist + LEF + GDS + lib for
-       OpenLane/LibreLane — exactly this regfile. The old "ask tnt" line was for
-       Munaut's ONE unpackaged macro, and the "DFFRAM is 1RW-only" claim below is
-       WRONG. Command shape: `dffram.py -p sky130A -s sky130_fd_sc_hd -b <rf-2r1w>
-       32x32` — an OpenLane/nix flow, i.e. a LINUX env, so run it in **CI** or
-       under **WSL** (TODO #4 unblocks it locally; this machine has no docker/
-       WSL/nix). Pipeline is already sync-read/macro-ready; this unblocks the 8x2
-       harden. => Claude/CI-executable, no person required.
+1. [x] **RF macro — DONE 2026-07-23, no generation needed.** The DFFRAM flow is a
+       Nix job (macOS/Linux + Nix per its Usage.md), and WSL is NOT usable on the
+       dev host (virtualization disabled in firmware; no distro; no docker) — but
+       generation turned out to be UNNECESSARY: AUCOHL/DFFRAM's 2025.11.10 release
+       ships a `merged-artifacts.tgz` with the PREBUILT, signoff-clean DFFRF_2R1W
+       (design of `dffram.py -s 32x32 -b ::rf -v 2R1W`): .gds/.lef/.nl.v/.pnl.v +
+       9-corner .lib + 3 .spef. Vendored verbatim to macros/ (Apache-2.0, see
+       macros/README.txt). Interface CLK/WE/RA/RB/RW[4:0]/DW[31:0]->DA/DB[31:0],
+       power VPWR/VGND; COMBINATIONAL read, SYNC write, R0_ZERO (x0 reads 0).
 2. [ ] **Submit TinyRV32 + ServoCtl-8 to TTSKY26c** — hard deadline
        ~2026-09-07. Both repos are ready; form-filling only.
 3. [ ] **Order the ULX3S 85F** (~$155 Crowd Supply, ~1 month lead).
@@ -20,8 +19,18 @@ User actions — everything below is blocked on one of these:
        the kernel ladder.
 
 Then, in order (mostly Claude-executable once unblocked):
-5. [ ] Integrate the RF macro (body swap in src/regfile.sv +
-       LibreLane EXTRA_LEFS/GDS + placement); re-harden 8x2.
+5. [~] Integrate the RF macro — RTL + config DONE 2026-07-23 (commits 0c29e07,
+       cdb4af0; NOT pushed). regfile.sv has a USE_MACRO branch that instantiates
+       DFFRF_2R1W and REGISTERS ITS OUTPUT to recover the registered read-first
+       timing (the macro is comb-read; output-register = exact, input-address-reg
+       would be write-first). Read-timing question CLOSED. Proven cycle-identical
+       to the behavioural regfile: run_cpu_macro 15/15 + run_riscv_macro 58/58.
+       src/config.json wires MACROS(gds/lef/nl/9lib/3spef) + VERILOG_DEFINES=
+       USE_MACRO + EXTRA_VERILOG_MODELS + PDN align (VPITCH 153.6/VOFFSET 106.32).
+       REMAINING = the 8x2 harden itself, blind (no local Linux) -> CI-iterate.
+       Main open risk: macro POWER connection under the STANDARD tt-gds-action
+       (tt06 used a custom odb power step; we rely on PDN-stripe overlap). Iterate
+       placement/VOFFSET/density in CI (gds+precheck).
 6. [ ] xv6 rv32 port on the SBI firmware (first sv32 workload).
 7. [ ] Buildroot nommu uLinux, console on UART (frontier rung 1 —
        submittable on its own).

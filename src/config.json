@@ -40,7 +40,7 @@
   "MACROS": {
     "DFFRF_2R1W": {
       "instances": {
-        "rf1": {
+        "core.rf.u_rf": {
           "location": [90, 24],
           "orientation": "N"
         }

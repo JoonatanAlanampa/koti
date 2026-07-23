@@ -56,7 +56,13 @@ async def test_riscv_suite(dut):
         for _ in range(400_000):
             await ClockCycles(dut.clk, 16)
             if dut.halted.value:
-                a0 = int(dut.c0.rf.regs[10].value)
+                # behavioural regfile keeps the array at rf.regs; the
+                # USE_MACRO wrapper nests it at rf.u_rf.regs.
+                try:
+                    regs = dut.c0.rf.regs
+                except AttributeError:
+                    regs = dut.c0.rf.u_rf.regs
+                a0 = int(regs[10].value)
                 verdict = "PASS" if a0 == 1 else f"FAIL (test #{a0 >> 1})"
                 break
 

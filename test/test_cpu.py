@@ -175,9 +175,19 @@ async def run_program(dut, words, max_cycles=20000, mtip_at=None,
     raise AssertionError("program never halted")
 
 
+def _rf_regs(dut):
+    # behavioural regfile.sv keeps the array at rf.regs; the USE_MACRO
+    # wrapper nests it in the macro instance at rf.u_rf.regs.
+    rf = dut.c0.rf
+    try:
+        return rf.regs
+    except AttributeError:
+        return rf.u_rf.regs
+
+
 def reg(dut, n):
     assert n != 0
-    return int(dut.c0.rf.regs[n].value)
+    return int(_rf_regs(dut)[n].value)
 
 
 def with_handler(main, handler):

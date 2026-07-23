@@ -27,10 +27,32 @@ Then, in order (mostly Claude-executable once unblocked):
        to the behavioural regfile: run_cpu_macro 15/15 + run_riscv_macro 58/58.
        src/config.json wires MACROS(gds/lef/nl/9lib/3spef) + VERILOG_DEFINES=
        USE_MACRO + EXTRA_VERILOG_MODELS + PDN align (VPITCH 153.6/VOFFSET 106.32).
-       REMAINING = the 8x2 harden itself, blind (no local Linux) -> CI-iterate.
-       Main open risk: macro POWER connection under the STANDARD tt-gds-action
-       (tt06 used a custom odb power step; we rely on PDN-stripe overlap). Iterate
-       placement/VOFFSET/density in CI (gds+precheck).
+       All on branch `rf-macro-harden` (main = behavioural, untouched).
+       HARDEN STATUS 2026-07-23: BANKED (user: "harden later"). CI got through
+       synthesis + floorplan + MACRO PLACEMENT (core.rf.u_rf @ [90,24], 78.2%
+       util) then BLOCKED at PDN generation:
+         [PDN-0232] grid "macro - core.rf.u_rf" does not contain any shapes/vias
+         [PDN-0233] Failed to generate full power grid
+       ROOT CAUSE: the macro's VPWR/VGND pins are on **met4**; standard pdngen
+       wires a macro's top-layer straps FROM THE LAYER ABOVE (met5), but TT
+       forbids met5 (RT_MAX_LAYER=met4) -> auto macro-grid yields nothing. The
+       tt05/tt06 dffram examples fix this with a CUSTOM build.py + odb_power.py
+       (draw met4 stripes over the pins) + pdn_cfg.tcl -- but that is the
+       @openlane2 mechanism; the @ttsky26c action runs `tt_tool.py --harden`
+       (fixed LibreLane Classic flow), NOT a repo build.py, so it does NOT port.
+       RESUME OPTIONS (pick when revisiting):
+         (a) custom FP_PDN_CFG tcl: stdcell grid + a macro grid that straps met4
+             OVER the macro and connects met4->met4 (no met5). Standard flow reads
+             FP_PDN_CFG; iterate in CI (~5 min/round, fails fast at PDN). Uncertain
+             whether met4-met4 connects without an odb step.
+         (b) TT Discord: ask the supported ttsky26c way to power a met4 user-macro
+             (met5 forbidden, no build.py hook). Then configure per their answer.
+         (c) DFFRAM has a LATCH-based variant too; check whether either variant
+             ships met3-or-lower power pins (would let a met4 stripe connect from
+             above) -- would sidestep the whole issue if so.
+       Macro geometry for a custom pdn/odb: VPWR met4 straps at macro-x +
+       {18.28,171.88,325.48}um, VGND at +{21.58,175.18,328.78}um, y-span
+       +{2.48..174.32}um, 153.6um pitch (from macros/DFFRF_2R1W.lef).
 6. [ ] xv6 rv32 port on the SBI firmware (first sv32 workload).
 7. [ ] Buildroot nommu uLinux, console on UART (frontier rung 1 —
        submittable on its own).

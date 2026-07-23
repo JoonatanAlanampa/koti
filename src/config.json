@@ -32,6 +32,42 @@
   "//": "https://tinytapeout.com/faq/#how-can-i-map-an-additional-external-clock-to-one-of-the-gpios",
   "CLOCK_PORT": "clk",
 
+  "//": "===== DFFRAM 32x32 2R1W register-file macro (see macros/README.txt) =====",
+  "//": "regfile.sv uses its USE_MACRO branch (the hard block) when this is set.",
+  "VERILOG_DEFINES": ["USE_MACRO"],
+  "//": "black-box model so synthesis elaborates the DFFRF_2R1W instance.",
+  "EXTRA_VERILOG_MODELS": ["dir::DFFRF_2R1W.v"],
+  "MACROS": {
+    "DFFRF_2R1W": {
+      "instances": {
+        "rf1": {
+          "//": "primary placement knob; x drives FP_PDN_VOFFSET below (x + 16.32).",
+          "location": [90, 24],
+          "orientation": "N"
+        }
+      },
+      "gds": ["dir::../macros/DFFRF_2R1W.gds"],
+      "lef": ["dir::../macros/DFFRF_2R1W.lef"],
+      "nl":  ["dir::../macros/DFFRF_2R1W.nl.v"],
+      "spef": {
+        "min_*": ["dir::../macros/DFFRF_2R1W.min_.spef"],
+        "nom_*": ["dir::../macros/DFFRF_2R1W.nom_.spef"],
+        "max_*": ["dir::../macros/DFFRF_2R1W.max_.spef"]
+      },
+      "lib": {
+        "min_tt_025C_1v80": "dir::../macros/DFFRF_2R1W.lib/min_tt_025C_1v80/DFFRF_2R1W__min_tt_025C_1v80.lib",
+        "nom_tt_025C_1v80": "dir::../macros/DFFRF_2R1W.lib/nom_tt_025C_1v80/DFFRF_2R1W__nom_tt_025C_1v80.lib",
+        "max_tt_025C_1v80": "dir::../macros/DFFRF_2R1W.lib/max_tt_025C_1v80/DFFRF_2R1W__max_tt_025C_1v80.lib",
+        "min_ss_100C_1v60": "dir::../macros/DFFRF_2R1W.lib/min_ss_100C_1v60/DFFRF_2R1W__min_ss_100C_1v60.lib",
+        "nom_ss_100C_1v60": "dir::../macros/DFFRF_2R1W.lib/nom_ss_100C_1v60/DFFRF_2R1W__nom_ss_100C_1v60.lib",
+        "max_ss_100C_1v60": "dir::../macros/DFFRF_2R1W.lib/max_ss_100C_1v60/DFFRF_2R1W__max_ss_100C_1v60.lib",
+        "min_ff_n40C_1v95": "dir::../macros/DFFRF_2R1W.lib/min_ff_n40C_1v95/DFFRF_2R1W__min_ff_n40C_1v95.lib",
+        "nom_ff_n40C_1v95": "dir::../macros/DFFRF_2R1W.lib/nom_ff_n40C_1v95/DFFRF_2R1W__nom_ff_n40C_1v95.lib",
+        "max_ff_n40C_1v95": "dir::../macros/DFFRF_2R1W.lib/max_ff_n40C_1v95/DFFRF_2R1W__max_ff_n40C_1v95.lib"
+      }
+    }
+  },
+
   "//": "Configuration docs: https://librelane.readthedocs.io/en/latest/reference/configuration.html",
 
   "//": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
@@ -59,7 +95,14 @@
   "FP_IO_HLENGTH": 2,
   "FP_IO_VLENGTH": 2,
 
-  "FP_PDN_VPITCH": 38.87,
+  "//": "Match the design PDN to the DFFRF_2R1W macro's met4 power straps",
+  "//": "(measured 153.6um pitch); VOFFSET = macro x-location + 16.32 so a design",
+  "//": "stripe lands on the macro's first VPWR strap (per tt06-dffram-example).",
+  "FP_PDN_VPITCH": 153.6,
+  "FP_PDN_VOFFSET": 106.32,
+  "//": "the macro's VPWR/VGND are connected by PDN-stripe overlap, not the",
+  "//": "std-cell grid, so relax strict node checking (per tt06-dffram-example).",
+  "FP_PDN_CHECK_NODES": false,
 
   "//": "Clock",
   "RUN_CTS": 1,

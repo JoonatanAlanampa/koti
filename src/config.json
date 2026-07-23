@@ -41,7 +41,6 @@
     "DFFRF_2R1W": {
       "instances": {
         "rf1": {
-          "//": "primary placement knob; x drives FP_PDN_VOFFSET below (x + 16.32).",
           "location": [90, 24],
           "orientation": "N"
         }
@@ -101,8 +100,9 @@
   "FP_PDN_VPITCH": 153.6,
   "FP_PDN_VOFFSET": 106.32,
   "//": "the macro's VPWR/VGND are connected by PDN-stripe overlap, not the",
-  "//": "std-cell grid, so relax strict node checking (per tt06-dffram-example).",
-  "FP_PDN_CHECK_NODES": false,
+  "//": "std-cell grid, so don't hard-fail on PDN violations (this LibreLane",
+  "//": "renamed FP_PDN_CHECK_NODES -> ERROR_ON_PDN_VIOLATIONS).",
+  "ERROR_ON_PDN_VIOLATIONS": false,
 
   "//": "Clock",
   "RUN_CTS": 1,

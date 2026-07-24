@@ -164,10 +164,14 @@ module koti_core #(
                     npc     <= fpc + 32'd8;
                 end
             end else if (iw_state == 2'd0 && !fbusy && !valid_d && !fbuf_v
-                         && !halted && !flush_ex) begin
+                         && !halted && !pstall && !flush_ex) begin
                 // !flush_ex: a redirect lands this same edge and rewrites
                 // npc — starting now would fetch the stale wrong-path npc
                 // (see rv32_core.sv for the full war story)
+                // !pstall: never launch a fetch/ITLB walk while an older
+                // stage is stalled — a satp write held behind a bus txn
+                // could otherwise start an old-root walk that outlives the
+                // flush at its commit edge (F2).
                 if (!mmu_i_on) begin
                     fbusy <= 1'b1; fpc <= npc; fpc_pa <= npc;
                 end else if (itlb_hit && !itlb_xfault) begin
@@ -510,8 +514,11 @@ module koti_core #(
     wire csr_wen = csr_wen0;
     wire [31:0] csr_wval = funct3_e[2] ? {27'd0, rs1_e} : fwd1;
 
-    assign tlb_flush = sfence_take
-                    || (csr_en && csr_wen && imm_e[11:0] == 12'h180);
+    // a satp write serializes fetch exactly like sfence.vma: flush the
+    // TLBs AND redirect so no instruction fetched under the old root can
+    // retire under the new translation (F2).
+    wire satp_take = csr_en && csr_wen && imm_e[11:0] == 12'h180;
+    assign tlb_flush = sfence_take || satp_take;
 
     csr csr0 (.clk(clk), .rst(rst),
               .retire(valid_w && !pstall && !halted),
@@ -527,11 +534,12 @@ module koti_core #(
               .sum_rd(csr_sum), .mxr_rd(csr_mxr), .known(csr_known));
 
     assign flush_ex  = (take_ex && !imis_take) || trap_take || mret_take
-                     || sret_take
+                     || sret_take || satp_take
                      || sfence_take || (valid_e && ebreak_e);
     assign target_ex = trap_take             ? csr_trap_vec
                      : mret_take             ? csr_mepc
                      : sret_take             ? csr_sepc
+                     : satp_take             ? pc_e + 32'd4  // serialize
                      : sfence_take           ? pc_e + 32'd4  // serialize
                      : (valid_e && ebreak_e) ? pc_e          // spin + drain
                      : {alu_y[31:1], 1'b0};

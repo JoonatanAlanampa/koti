@@ -539,6 +539,53 @@ async def test_sv32_translation_and_faults(dut):
 
 
 @cocotb.test()
+async def test_satp_commit_squashes_old_fetch(dut):
+    """F2 regression: a committed `satp` write must serialize fetch like
+    sfence.vma. S code fetched under root A runs `csrw satp,B`; the marker
+    instruction right after it — already prefetched under root A — must
+    NOT retire. It has to be squashed and refetched under root B, which
+    leaves the code VA unmapped, so the fix faults (cause 12) before the
+    marker runs. The old RTL kept the stale fetch and ran the marker
+    (x20=1) under the switched-in root B."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+
+    ROOT_A, L0_A, ROOT_B = 0x0100_2000, 0x0100_3000, 0x0100_5000
+    PA_X = 0x0000_1000                  # flash frame that holds the S code
+    VA = 0x4000_0000                    # S-code VA (VPN1=0x100, VPN0=0)
+    SATP_A = 0x8000_0000 | (ROOT_A >> 12)
+    SATP_B = 0x8000_0000 | (ROOT_B >> 12)
+    S_CODE = PA_X >> 2                   # flash word index of the S code
+
+    # M builds root A: root[0x100] -> L0_A, L0_A[0] -> PA_X (RWX+A+D, S).
+    # Root B is a zeroed page, so VA is unmapped under B (=> cause 12).
+    main = ([addi(20, 0, 0), addi(21, 0, 0)]          # known-zero marker/cause
+            + li(5, ROOT_A)
+            + li(6, (L0_A >> 12) << 10 | 1) + [sw(6, 5, 0x400)]
+            + li(7, L0_A)
+            + li(6, (PA_X >> 12) << 10 | 0xCF) + [sw(6, 7, 0)]
+            + li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
+            + li(2, SATP_A) + [csrrw(0, SATP, 2), SFENCE]
+            + li(3, VA) + [csrrw(0, MEPC, 3)]
+            + li(4, 0x800) + [csrrs(0, MSTATUS, 4), MRET])   # MPP=S, enter S
+
+    s_code = (li(2, SATP_B) + [
+        csrrw(0, SATP, 2),     # switch A->B: must serialize / squash fetch
+        addi(20, 0, 1),        # marker: retires only if the fetch wasn't squashed
+        EBREAK,                # buggy path halts here after running the marker
+    ])
+    m_handler = [csrrs(21, MCAUSE, 0), EBREAK]        # cause 12 -> halt
+
+    await run_program(dut,
+                      layout(main, {HANDLER: m_handler, S_CODE: s_code}),
+                      ram_zero=[(0x0800, 4096)])       # zero rootA/L0/rootB pages
+
+    assert reg(dut, 20) == 0, \
+        "marker after `csrw satp` retired — fetch was not serialized (F2)"
+    assert reg(dut, 21) == 12, \
+        f"expected instruction page fault (cause 12), got {reg(dut, 21):#x}"
+
+
+@cocotb.test()
 async def test_illegal_and_misaligned(dut):
     """Causes 4/6/0/2 with correct mtval: misaligned loads/stores/
     fetch targets/AMOs, then unknown-encoding and unknown-CSR

@@ -397,6 +397,66 @@ async def test_flash_data_aperture_no_mmio_alias(dut):
         f"{[hex(v) for v in expected]} — flash data aliased into MMIO"
 
 
+# ---------------------------------------------------------------- F3 arbiter
+
+
+@cocotb.test()
+async def test_vga_disable_does_not_park_grant(dut):
+    """F3 regression: an in-flight row refill must keep its request
+    asserted even after software clears VGA_EN, so an already-granted
+    transaction still reaches ACK and the arbiter releases the grant. The
+    old RTL tied v_req = f_busy && en, so clearing en mid-refill withdrew
+    a granted request and parked the arbiter forever (blocking all CPU
+    fetch/data). Halt the CPU so only video drives the bus, enable video,
+    then withdraw VGA_EN once a refill is in flight and require v_req to
+    stay asserted until the refill completes."""
+    clock = Clock(dut.clk, 40, unit="ns")  # 25 MHz
+    cocotb.start_soon(clock.start())
+
+    flash = SpiMem(1 << 16, writable=False)
+    ram = SpiMem(1 << 16, writable=True)
+    flash.mem[0:4] = EBREAK.to_bytes(4, "little")   # CPU halts, frees the bus
+    cocotb.start_soon(spi_bus(dut, flash, ram))
+
+    dut.ena.value = 1
+    dut.ui_in.value = 0
+    dut.uio_in.value = 0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 10)
+    dut.rst_n.value = 1
+
+    for _ in range(3000):                           # wait for EBREAK halt
+        await RisingEdge(dut.clk)
+        if (int(dut.uo_out.value) >> 1) & 1:
+            break
+    else:
+        raise AssertionError("CPU never halted")
+
+    # enable video by hand — vga_en/vga_base only change on an MMIO write
+    # or reset, so a deposit sticks with the CPU halted.
+    dut.user_project.vga_base.value = 0x40_2000     # charbuf in PSRAM
+    dut.user_project.vga_en.value = 1
+
+    vt = dut.user_project.vt
+    for _ in range(50000):                          # wait for a refill to start
+        await RisingEdge(dut.clk)
+        if int(vt.f_busy.value):
+            break
+    else:
+        raise AssertionError("no row refill started")
+
+    # the race: clear VGA_EN with the refill in flight
+    dut.user_project.vga_en.value = 0
+    for _ in range(4000):
+        await RisingEdge(dut.clk)
+        if not int(vt.f_busy.value):                # refill finished -> not parked
+            return
+        assert int(vt.v_req.value) == 1, \
+            "v_req dropped mid-refill after VGA_EN cleared — the arbiter's " \
+            "granted video transaction can never ACK (F3)"
+    raise AssertionError("row refill never completed after VGA_EN cleared (F3)")
+
+
 # ---------------------------------------------------------------- VGA + PS/2
 
 

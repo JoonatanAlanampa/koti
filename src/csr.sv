@@ -26,9 +26,10 @@ module csr (
     // trap entry / returns (single-cycle commands from EX)
     input  logic        trap,        // take a trap now
     input  logic        trap_irq,    // it is the pending irq we report
-    input  logic [2:0]  trap_kind,   // else: 0 ecall, 1 ipf, 2 lpf,
+    input  logic [3:0]  trap_kind,   // else: 0 ecall, 1 ipf, 2 lpf,
                                      // 3 spf, 4 illegal, 5 misaligned
-                                     // fetch, 6 misload, 7 misstore
+                                     // fetch, 6 misload, 7 misstore,
+                                     // 8 load-access, 9 store/AMO-access
     input  logic [31:0] trap_pc,
     input  logic [31:0] trap_tval,
     input  logic        mret, sret,
@@ -70,10 +71,16 @@ module csr (
                              3'd0, sie_g, 1'b0};
     wire [31:0] mie_r = {20'd0, meie, 1'b0, seie, 1'b0, mtie, 1'b0, stie,
                          1'b0, msie, 1'b0, ssie, 1'b0};
-    wire [31:0] sie_r = {22'd0, seie, 3'd0, stie, 3'd0, ssie, 1'b0};
+    // sie/sip are mideleg-masked views/aliases of mie/mip: a bit not
+    // delegated to S must read 0 and be unwritable through them (F6).
+    wire [31:0] sie_r = {22'd0, seie && mideleg_q[9], 3'd0,
+                         stie && mideleg_q[5], 3'd0,
+                         ssie && mideleg_q[1], 1'b0};
     wire [31:0] mip_r = {20'd0, meip, 1'b0, seip, 1'b0, mtip, 1'b0, stip,
                          1'b0, msip, 1'b0, ssip, 1'b0};
-    wire [31:0] sip_r = {22'd0, seip, 3'd0, stip, 3'd0, ssip, 1'b0};
+    wire [31:0] sip_r = {22'd0, seip && mideleg_q[9], 3'd0,
+                         stip && mideleg_q[5], 3'd0,
+                         ssip && mideleg_q[1], 1'b0};
 
     always_comb
         case (addr)
@@ -87,7 +94,7 @@ module csr (
             12'h144: rval = sip_r;
             12'h180: rval = satp_q;
             12'h300: rval = mstatus_r;
-            12'h301: rval = 32'h4014_1100;       // misa: RV32IMA + S + U
+            12'h301: rval = 32'h4014_1101;       // misa: RV32IMA + S + U (A=bit0)
             12'h302: rval = medeleg_q;
             12'h303: rval = mideleg_q;
             12'h304: rval = mie_r;
@@ -124,12 +131,15 @@ module csr (
     logic [31:0] irq_cause;
     always_comb
         if (take_m)
-            irq_cause = p_mei ? 32'h8000_000B
-                      : p_msi ? 32'h8000_0003
-                      : p_mti ? 32'h8000_0007
-                      : p_sei ? 32'h8000_0009
-                      : p_ssi ? 32'h8000_0001
-                      :         32'h8000_0005;
+            // only NON-delegated supervisor sources are eligible in M;
+            // a delegated one pending alongside a machine source must not
+            // be reported as the M cause (F5).
+            irq_cause = p_mei              ? 32'h8000_000B
+                      : p_msi              ? 32'h8000_0003
+                      : p_mti              ? 32'h8000_0007
+                      : (p_sei && !d_sei)  ? 32'h8000_0009
+                      : (p_ssi && !d_ssi)  ? 32'h8000_0001
+                      :                      32'h8000_0005;
         else
             irq_cause = (p_sei && d_sei) ? 32'h8000_0009
                       : (p_ssi && d_ssi) ? 32'h8000_0001
@@ -141,13 +151,15 @@ module csr (
     logic [31:0] exc_cause;
     always_comb
         case (trap_kind)
-            3'd1:    exc_cause = 32'd12;      // instruction page fault
-            3'd2:    exc_cause = 32'd13;      // load page fault
-            3'd3:    exc_cause = 32'd15;      // store/AMO page fault
-            3'd4:    exc_cause = 32'd2;       // illegal instruction
-            3'd5:    exc_cause = 32'd0;       // fetch addr misaligned
-            3'd6:    exc_cause = 32'd4;       // load addr misaligned
-            3'd7:    exc_cause = 32'd6;       // store/AMO misaligned
+            4'd1:    exc_cause = 32'd12;      // instruction page fault
+            4'd2:    exc_cause = 32'd13;      // load page fault
+            4'd3:    exc_cause = 32'd15;      // store/AMO page fault
+            4'd4:    exc_cause = 32'd2;       // illegal instruction
+            4'd5:    exc_cause = 32'd0;       // fetch addr misaligned
+            4'd6:    exc_cause = 32'd4;       // load addr misaligned
+            4'd7:    exc_cause = 32'd6;       // store/AMO misaligned
+            4'd8:    exc_cause = 32'd5;       // load access fault
+            4'd9:    exc_cause = 32'd7;       // store/AMO access fault
             default: exc_cause = ecall_cause;
         endcase
     wire [31:0] cause  = trap_irq ? irq_cause : exc_cause;
@@ -236,25 +248,32 @@ module csr (
                 12'h100: begin sie_g <= wnew[1]; spie <= wnew[5];
                                spp <= wnew[8]; sum_b <= wnew[18];
                                mxr_b <= wnew[19]; end
-                12'h104: begin ssie <= wnew[1]; stie <= wnew[5];
-                               seie <= wnew[9]; end
-                12'h105: stvec_q    <= wnew;
+                12'h104: begin                    // sie: only delegated bits
+                    if (mideleg_q[1]) ssie <= wnew[1];
+                    if (mideleg_q[5]) stie <= wnew[5];
+                    if (mideleg_q[9]) seie <= wnew[9];
+                end
+                12'h105: stvec_q    <= {wnew[31:2], 2'b00};  // Direct only (WARL)
                 12'h140: sscratch_q <= wnew;
                 12'h141: sepc_q     <= {wnew[31:1], 1'b0};
                 12'h142: scause_q   <= wnew;
                 12'h143: stval_q    <= wnew;
-                12'h144: ssip       <= wnew[1];   // S may pend software
+                12'h144: if (mideleg_q[1]) ssip <= wnew[1];  // only if delegated
                 12'h180: satp_q     <= wnew;
                 12'h300: begin sie_g <= wnew[1]; mie_g <= wnew[3];
                                spie <= wnew[5]; mpie <= wnew[7];
-                               spp <= wnew[8]; mpp <= wnew[12:11];
+                               spp <= wnew[8];
+                               // MPP is WARL: coerce the reserved 2'b10 to U
+                               mpp <= (wnew[12:11] == 2'b01 ||
+                                       wnew[12:11] == 2'b11)
+                                    ? wnew[12:11] : 2'b00;   // (F8)
                                sum_b <= wnew[18]; mxr_b <= wnew[19]; end
                 12'h302: medeleg_q  <= wnew;
                 12'h303: mideleg_q  <= wnew;
                 12'h304: begin ssie <= wnew[1]; msie <= wnew[3];
                                stie <= wnew[5]; mtie <= wnew[7];
                                seie <= wnew[9]; meie <= wnew[11]; end
-                12'h305: mtvec_q    <= wnew;
+                12'h305: mtvec_q    <= {wnew[31:2], 2'b00};  // Direct only (WARL, F7)
                 12'h340: mscratch_q <= wnew;
                 12'h341: mepc_q     <= {wnew[31:1], 1'b0};
                 12'h342: mcause_q   <= wnew;

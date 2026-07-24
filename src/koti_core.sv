@@ -164,10 +164,14 @@ module koti_core #(
                     npc     <= fpc + 32'd8;
                 end
             end else if (iw_state == 2'd0 && !fbusy && !valid_d && !fbuf_v
-                         && !halted && !flush_ex) begin
+                         && !halted && !pstall && !flush_ex) begin
                 // !flush_ex: a redirect lands this same edge and rewrites
                 // npc — starting now would fetch the stale wrong-path npc
                 // (see rv32_core.sv for the full war story)
+                // !pstall: never launch a fetch/ITLB walk while an older
+                // stage is stalled — a satp write held behind a bus txn
+                // could otherwise start an old-root walk that outlives the
+                // flush at its commit edge (F2).
                 if (!mmu_i_on) begin
                     fbusy <= 1'b1; fpc <= npc; fpc_pa <= npc;
                 end else if (itlb_hit && !itlb_xfault) begin
@@ -432,6 +436,18 @@ module koti_core #(
     assign tlb_stall = d_xlate && !dtlb_hit;              // walk in progress
     wire [31:0] d_pa = mmu_d_on ? {dtlb_ppn[19:0], alu_y[11:0]} : alu_y;
 
+    // ---- physical access faults (PMA), on the resolved physical
+    // address: writes to read-only flash and any access to the APS6404
+    // 8 MiB high mirror (addr[24] && addr[23]). Device MMIO pages
+    // (io_m 0x0001, CLINT 0x0002, PLIC 0x0003, VGA 0x0004) are writable;
+    // everything else in flash space (addr[24]=0) is read-only XIP.
+    wire pa_dev      = !d_pa[24] && d_pa[23:16] >= 8'h01
+                                 && d_pa[23:16] <= 8'h04;
+    wire pa_flash_ro = !d_pa[24] && !pa_dev;
+    wire pa_psram_hi =  d_pa[24] &&  d_pa[23];
+    wire dacc_fault  = dmem_op_e
+                    && ((d_isstore && pa_flash_ro) || pa_psram_hi);
+
     // d-walker: two PTE reads on the data port, issued only while the
     // M stage isn't mid-transaction (its op completes under d_seen).
     // Never aborted: irqs are gated on !pstall, and nothing older than
@@ -489,29 +505,37 @@ module koti_core #(
     wire dpf_take  = d_xlate && dtlb_hit && dtlb_pfault
                   && !irq_take && commit;
     wire dmis_take = dmis && !dpf_take && !irq_take && commit;
+    // access fault: only once misalign and page fault are ruled out
+    wire dacc_take = dacc_fault && !dmis_take && !dpf_take && !irq_take
+                  && commit;
     wire trap_take = irq_take || ipf_take || ill_take || ecl_take
-                  || imis_take || dpf_take || dmis_take;
+                  || imis_take || dpf_take || dmis_take || dacc_take;
     wire mret_take = valid_e && mret_e && commit && !trap_take;
     wire sret_take = valid_e && sret_e && commit && !trap_take;
     wire sfence_take = valid_e && sfence_e && commit && !trap_take;
 
-    wire [2:0]  trap_kind = ipf_take  ? 3'd1
-                          : ill_take  ? 3'd4
-                          : imis_take ? 3'd5
-                          : dpf_take  ? (d_isstore ? 3'd3 : 3'd2)
-                          : dmis_take ? (d_isstore ? 3'd7 : 3'd6)
-                          :             3'd0;
+    wire [3:0]  trap_kind = ipf_take  ? 4'd1
+                          : ill_take  ? 4'd4
+                          : imis_take ? 4'd5
+                          : dpf_take  ? (d_isstore ? 4'd3 : 4'd2)
+                          : dmis_take ? (d_isstore ? 4'd7 : 4'd6)
+                          : dacc_take ? (d_isstore ? 4'd9 : 4'd8)
+                          :             4'd0;
     wire [31:0] trap_tval = ipf_take  ? pc_e
                           : ill_take  ? instr_e
                           : imis_take ? {alu_y[31:1], 1'b0}
-                          : (dpf_take || dmis_take) ? alu_y : 32'd0;
+                          : (dpf_take || dmis_take || dacc_take) ? alu_y
+                          :             32'd0;
 
     wire csr_en  = valid_e && csr_e && !ill_e && !irq_take && commit;
     wire csr_wen = csr_wen0;
     wire [31:0] csr_wval = funct3_e[2] ? {27'd0, rs1_e} : fwd1;
 
-    assign tlb_flush = sfence_take
-                    || (csr_en && csr_wen && imm_e[11:0] == 12'h180);
+    // a satp write serializes fetch exactly like sfence.vma: flush the
+    // TLBs AND redirect so no instruction fetched under the old root can
+    // retire under the new translation (F2).
+    wire satp_take = csr_en && csr_wen && imm_e[11:0] == 12'h180;
+    assign tlb_flush = sfence_take || satp_take;
 
     csr csr0 (.clk(clk), .rst(rst),
               .retire(valid_w && !pstall && !halted),
@@ -527,11 +551,12 @@ module koti_core #(
               .sum_rd(csr_sum), .mxr_rd(csr_mxr), .known(csr_known));
 
     assign flush_ex  = (take_ex && !imis_take) || trap_take || mret_take
-                     || sret_take
+                     || sret_take || satp_take
                      || sfence_take || (valid_e && ebreak_e);
     assign target_ex = trap_take             ? csr_trap_vec
                      : mret_take             ? csr_mepc
                      : sret_take             ? csr_sepc
+                     : satp_take             ? pc_e + 32'd4  // serialize
                      : sfence_take           ? pc_e + 32'd4  // serialize
                      : (valid_e && ebreak_e) ? pc_e          // spin + drain
                      : {alu_y[31:1], 1'b0};
@@ -576,8 +601,10 @@ module koti_core #(
     // core-internal MMIO carve-out at 0x0001_0000 (inside the flash
     // window: keep code+rodata below 64 KB). CLINT/PLIC/VGA registers
     // live higher (0x0002_0000+) and go out the data port; the SoC
-    // top decodes and acks them.
-    wire io_m = addr_m[16] && !addr_m[24] && !addr_m[17];
+    // top decodes and acks them. Decode the FULL 64 KB window
+    // (addr[31:16]==0x0001) — a partial 3-bit compare aliased flash data
+    // past 64 KB into this carve-out every 512 KB (F1).
+    wire io_m = addr_m[31:16] == 16'h0001;
 
     // ---- A extension: LR/SC bookkeeping + AMO read-modify-write.
     // AMOs to the MMIO carve-out are meaningless and skipped.

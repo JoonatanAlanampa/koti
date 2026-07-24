@@ -48,14 +48,19 @@ module vga_text (
     logic       cur;                    // buffer being displayed
 
     // row fetch FSM: 5 transactions x 8 chars into lb[!cur]
-    logic       f_busy;
-    logic [3:0] f_txn;                  // 0..4
-    logic [4:0] f_row;                  // text row being fetched (0..29)
+    logic        f_busy;
+    logic [3:0]  f_txn;                 // 0..4
+    logic [4:0]  f_row;                 // text row being fetched (0..29)
+    logic [22:0] f_base;                // charbuf base latched at fetch start
 
     // 10 words per row: base + row*10 + txn*2  (row*10 = row*8 + row*2)
     wire [22:0] row_off = ({18'd0, f_row} << 3) + ({18'd0, f_row} << 1);
-    assign v_req  = f_busy && en;
-    assign v_addr = base + row_off + {18'd0, f_txn, 1'b0};
+    // Once a refill is accepted for arbitration it must finish even if
+    // software clears `en` (or moves `base`) mid-row: withdrawing v_req
+    // after a grant but before the ACK parks the arbiter forever (F3).
+    // New refills still only START while en is high (fetch_trigger below).
+    assign v_req  = f_busy;
+    assign v_addr = f_base + row_off + {18'd0, f_txn, 1'b0};
 
     wire fetch_trigger = hblank_start
                       && ((y[3:0] == 4'd0 && y < 10'd464)   // next row
@@ -66,12 +71,14 @@ module vga_text (
 
     always_ff @(posedge clk)
         if (rst) begin
-            f_busy <= 1'b0; f_txn <= 4'd0; f_row <= 5'd0; cur <= 1'b0;
+            f_busy <= 1'b0; f_txn <= 4'd0; f_row <= 5'd0;
+            f_base <= 23'd0; cur <= 1'b0;
         end else begin
             if (fetch_trigger && en && !f_busy) begin
                 f_busy <= 1'b1;
                 f_txn  <= 4'd0;
                 f_row  <= fetch_row;
+                f_base <= base;
             end else if (f_busy && v_ack) begin
                 for (int i = 0; i < 4; i++) begin
                     lb[!cur][{f_txn, 3'd0} + i]     <= v_rdata[8*i +: 8];

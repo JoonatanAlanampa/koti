@@ -20,7 +20,7 @@ MSTATUS, MISA, MIE, MTVEC = 0x300, 0x301, 0x304, 0x305
 MSCRATCH, MEPC, MCAUSE, MIP = 0x340, 0x341, 0x342, 0x344
 MEDELEG, MIDELEG = 0x302, 0x303
 SSTATUS, SIE, STVEC = 0x100, 0x104, 0x105
-SEPC, SCAUSE = 0x141, 0x142
+SEPC, SCAUSE, SIP = 0x141, 0x142, 0x144
 MTVAL, SATP = 0x343, 0x180
 
 # ---- tiny assembler ----------------------------------------------------
@@ -352,7 +352,142 @@ async def test_csr_ops(dut):
     assert reg(dut, 7) == 21
     assert reg(dut, 8) == 31
     assert reg(dut, 9) == (0x1234_5678 + 31) & M32
-    assert reg(dut, 10) == 0x4014_1100
+    # misa must advertise A (bit0) — LR/SC/AMO are implemented (F9)
+    assert reg(dut, 10) == 0x4014_1101
+
+
+@cocotb.test()
+async def test_sie_sip_masked_by_mideleg(dut):
+    """F6: sie/sip are mideleg-masked aliases of mie/mip. A supervisor
+    interrupt bit that M has NOT delegated must read 0 through sie/sip
+    and be unwritable through them."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    prog = (
+        # mideleg = 0: nothing delegated
+        [csrrw(0, MIDELEG, 0)]
+        + li(1, 0x2) + [csrrs(0, SIE, 1)]     # try to set sie.SSIE (bit1)
+        + [csrrs(11, SIE, 0)]                 # x11 = sie  (must stay 0)
+        + [csrrs(12, MIE, 0)]                 # x12 = mie  (ssie must stay 0)
+        + li(2, 0x2) + [csrrs(0, SIP, 2)]     # try to set sip.SSIP (bit1)
+        + [csrrs(13, SIP, 0)]                 # x13 = sip  (must stay 0)
+        # now delegate SSI (bit1); the alias becomes writable/visible
+        + li(3, 0x2) + [csrrw(0, MIDELEG, 3)]
+        + li(4, 0x2) + [csrrs(0, SIE, 4)]     # set sie.SSIE, now delegated
+        + [csrrs(14, SIE, 0)]                 # x14 = sie -> 0x2
+        + [csrrs(15, MIE, 0)]                 # x15 = mie -> ssie set (bit1)
+        + [EBREAK])
+    await run_program(dut, prog)
+    assert reg(dut, 11) == 0, "sie exposed a non-delegated SSIE"
+    assert reg(dut, 12) & 0x2 == 0, "sie write set a non-delegated mie.SSIE"
+    assert reg(dut, 13) == 0, "sip exposed a non-delegated SSIP"
+    assert reg(dut, 14) == 0x2, "sie.SSIE not visible once delegated"
+    assert reg(dut, 15) & 0x2 == 0x2, "sie write did not reach mie once delegated"
+
+
+@cocotb.test()
+async def test_mixed_delegation_reports_eligible_cause(dut):
+    """F5: with SEI delegated but SSI not, both pending in S mode, the
+    non-delegated SSI drives take_m; M must record the eligible SSI cause
+    (0x80000001), not the delegated SEI (0x80000009)."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    S_ENTRY = 80
+    main = (li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
+            + li(2, 0x200) + [csrrw(0, MIDELEG, 2)]   # delegate SEI (bit9) only
+            + li(3, 0x202) + [csrrw(0, MIE, 3)]       # enable seie + ssie
+            + li(4, 0x202) + [csrrw(0, MIP, 4)]       # pend seip + ssip
+            + li(5, S_ENTRY * 4) + [csrrw(0, MEPC, 5)]
+            + li(6, 0x800) + [csrrs(0, MSTATUS, 6),   # MPP = S
+                              MRET])                  # enter S -> take_m fires
+    s_entry = [addi(20, 0, 1), EBREAK]                # must not retire before the trap
+    m_handler = [csrrs(21, MCAUSE, 0), EBREAK]
+    await run_program(dut, layout(main, {HANDLER: m_handler, S_ENTRY: s_entry}))
+    assert reg(dut, 21) == 0x8000_0001, \
+        f"M reported {reg(dut, 21):#x}, expected eligible SSI 0x80000001 (F5)"
+
+
+@cocotb.test()
+async def test_vectored_or_warl_direct_tvec(dut):
+    """F7: mtvec/stvec are Direct-only here; a vectored-mode write must
+    read back with mode 0 (WARL), consistent with trap_vec always using
+    BASE."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    main = (li(1, (HANDLER * 4) | 3) + [csrrw(0, MTVEC, 1)]   # write base|3
+            + [csrrs(2, MTVEC, 0)]                            # readback
+            + li(3, (0x400) | 1) + [csrrw(0, STVEC, 3)]       # stvec base|1
+            + [csrrs(4, STVEC, 0)]                            # readback
+            + [ECALL])                                        # trap -> mtvec BASE
+    m_handler = [csrrs(5, MCAUSE, 0), EBREAK]
+    await run_program(dut, with_handler(main, m_handler))
+    assert reg(dut, 2) == HANDLER * 4, "mtvec kept a vectored/reserved mode (F7)"
+    assert reg(dut, 4) == 0x400, "stvec kept a vectored mode (F7)"
+    assert reg(dut, 5) == 11, "ECALL-from-M did not vector to BASE"
+
+
+@cocotb.test()
+async def test_mstatus_mpp_warl(dut):
+    """F8: mstatus.MPP is WARL — the reserved value 2'b10 must be coerced
+    (to U), never loaded into the live privilege by MRET."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    prog = (li(1, 1 << 12) + [csrrs(0, MSTATUS, 1)]   # attempt MPP = 2'b10
+            + [csrrs(2, MSTATUS, 0),                   # readback
+               EBREAK])
+    await run_program(dut, prog)
+    assert (reg(dut, 2) >> 11) & 3 == 0, \
+        f"MPP={(reg(dut, 2) >> 11) & 3} — reserved 2'b10 not WARL-coerced (F8)"
+
+
+@cocotb.test()
+async def test_flash_lrsc_store_access_fault(dut):
+    """F4: flash is read-only. LR reads fine, but SC and plain stores to
+    flash must raise a store/AMO access fault (cause 7), not a silent
+    no-op 'success' that reports the store as completed."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    FLASH_RO = 0x0000_2000        # a flash data word (RO), above the code
+    main = ([addi(24, 0, 0), addi(11, 0, 0x5A)]      # cause acc, SC-rd sentinel
+            + li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
+            + li(2, FLASH_RO) + [
+                amo(LR, 10, 2, 0),        # LR from flash: reads, no fault
+                amo(SC, 11, 2, 0)]        # SC to flash: cause 7, x11 untouched
+            + li(6, 0x1234) + [
+                sw(6, 2, 0),              # plain store to flash: cause 7
+                EBREAK])
+    m_handler = [
+        csrrs(20, MCAUSE, 0),
+        slli(24, 24, 4), andi(22, 20, 15), or_(24, 24, 22),
+        csrrs(23, MEPC, 0), addi(23, 23, 4), csrrw(0, MEPC, 23),
+        MRET,
+    ]
+    await run_program(dut, with_handler(main, m_handler))
+    assert reg(dut, 24) == 0x77, \
+        f"cause seq {reg(dut, 24):#x} != 7,7 (SC + store to flash access-fault)"
+    assert reg(dut, 11) == 0x5A, "SC to flash reported success (rd was written)"
+
+
+@cocotb.test()
+async def test_psram_upper_bound_access_fault(dut):
+    """F4: the APS6404 is 8 MiB; the high mirror (addr[24] && addr[23],
+    0x0180_0000+) must access-fault (store cause 7, load cause 5) rather
+    than silently alias into the low 8 MiB."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    PSRAM_HI = 0x0180_0000
+    main = ([addi(24, 0, 0)]
+            + li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
+            + li(2, PSRAM_HI) + li(3, 0xABCD) + [
+                sw(3, 2, 0),              # store to high mirror: cause 7
+                lw(10, 2, 0),             # load from high mirror: cause 5
+                EBREAK])
+    m_handler = [
+        csrrs(20, MCAUSE, 0),
+        slli(24, 24, 4), andi(22, 20, 15), or_(24, 24, 22),
+        csrrs(23, MEPC, 0), addi(23, 23, 4), csrrw(0, MEPC, 23),
+        MRET,
+    ]
+    await run_program(dut, with_handler(main, m_handler),
+                      ram_zero=[(0, 4)])
+    assert reg(dut, 24) == 0x75, \
+        f"cause seq {reg(dut, 24):#x} != 7,5 (store/load high-mirror access-fault)"
+    # the faulting store must not have aliased into the low 8 MiB
+    assert int(dut.mem.ram[0].value) == 0, "high-mirror store aliased to low PSRAM"
 
 
 @cocotb.test()
@@ -546,6 +681,53 @@ async def test_sv32_translation_and_faults(dut):
     # physical effects: RW page written at its PA, RO page untouched
     assert int(dut.mem.ram[(0x0100_1000 - 0x0100_0000) >> 2].value) == 0xBEEF
     assert int(dut.mem.ram[(0x0100_4000 - 0x0100_0000) >> 2].value) == 0x1234
+
+
+@cocotb.test()
+async def test_satp_commit_squashes_old_fetch(dut):
+    """F2 regression: a committed `satp` write must serialize fetch like
+    sfence.vma. S code fetched under root A runs `csrw satp,B`; the marker
+    instruction right after it — already prefetched under root A — must
+    NOT retire. It has to be squashed and refetched under root B, which
+    leaves the code VA unmapped, so the fix faults (cause 12) before the
+    marker runs. The old RTL kept the stale fetch and ran the marker
+    (x20=1) under the switched-in root B."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+
+    ROOT_A, L0_A, ROOT_B = 0x0100_2000, 0x0100_3000, 0x0100_5000
+    PA_X = 0x0000_1000                  # flash frame that holds the S code
+    VA = 0x4000_0000                    # S-code VA (VPN1=0x100, VPN0=0)
+    SATP_A = 0x8000_0000 | (ROOT_A >> 12)
+    SATP_B = 0x8000_0000 | (ROOT_B >> 12)
+    S_CODE = PA_X >> 2                   # flash word index of the S code
+
+    # M builds root A: root[0x100] -> L0_A, L0_A[0] -> PA_X (RWX+A+D, S).
+    # Root B is a zeroed page, so VA is unmapped under B (=> cause 12).
+    main = ([addi(20, 0, 0), addi(21, 0, 0)]          # known-zero marker/cause
+            + li(5, ROOT_A)
+            + li(6, (L0_A >> 12) << 10 | 1) + [sw(6, 5, 0x400)]
+            + li(7, L0_A)
+            + li(6, (PA_X >> 12) << 10 | 0xCF) + [sw(6, 7, 0)]
+            + li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
+            + li(2, SATP_A) + [csrrw(0, SATP, 2), SFENCE]
+            + li(3, VA) + [csrrw(0, MEPC, 3)]
+            + li(4, 0x800) + [csrrs(0, MSTATUS, 4), MRET])   # MPP=S, enter S
+
+    s_code = (li(2, SATP_B) + [
+        csrrw(0, SATP, 2),     # switch A->B: must serialize / squash fetch
+        addi(20, 0, 1),        # marker: retires only if the fetch wasn't squashed
+        EBREAK,                # buggy path halts here after running the marker
+    ])
+    m_handler = [csrrs(21, MCAUSE, 0), EBREAK]        # cause 12 -> halt
+
+    await run_program(dut,
+                      layout(main, {HANDLER: m_handler, S_CODE: s_code}),
+                      ram_zero=[(0x0800, 4096)])       # zero rootA/L0/rootB pages
+
+    assert reg(dut, 20) == 0, \
+        "marker after `csrw satp` retired — fetch was not serialized (F2)"
+    assert reg(dut, 21) == 12, \
+        f"expected instruction page fault (cause 12), got {reg(dut, 21):#x}"
 
 
 @cocotb.test()

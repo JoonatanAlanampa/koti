@@ -69,12 +69,13 @@ module tt_um_koti (
       .d_be(d_be), .d_ack(d_ack), .d_rdata(d_rdata)
   );
 
-  // SoC MMIO intercepts on the data port (d_addr = addr[24:2], so bit
-  // 22 = PSRAM select, bit 16 = addr[18], bit 15 = addr[17]):
-  // CLINT at 0x0002_0000, VGA/PS2 block at 0x0004_0000. 1-cycle ack,
-  // never reaches the arbiter.
-  wire clint_range = !d_addr[22] && d_addr[15] && !d_addr[16];
-  wire vga_range   = !d_addr[22] && d_addr[16];
+  // SoC MMIO intercepts on the data port. d_addr = byte_addr[24:2], so
+  // d_addr[22:14] == byte_addr[24:16]. Decode the FULL 64 KB windows:
+  // CLINT at 0x0002_0000 (byte[24:16]==0x002), VGA/PS2 at 0x0004_0000
+  // (0x004). 1-cycle ack, never reaches the arbiter. A partial compare
+  // aliased flash data past 64 KB into these windows every 512 KB (F1).
+  wire clint_range = d_addr[22:14] == 9'h002;
+  wire vga_range   = d_addr[22:14] == 9'h004;
   wire clint_sel   = d_req && clint_range;
   wire vga_sel     = d_req && vga_range;
   reg  clint_ack, vga_ack;

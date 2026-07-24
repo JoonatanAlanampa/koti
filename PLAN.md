@@ -53,6 +53,31 @@ Then, in order (mostly Claude-executable once unblocked):
        Macro geometry for a custom pdn/odb: VPWR met4 straps at macro-x +
        {18.28,171.88,325.48}um, VGND at +{21.58,175.18,328.78}um, y-span
        +{2.48..174.32}um, 153.6um pitch (from macros/DFFRF_2R1W.lef).
+       UPDATE 2026-07-24 (Opus, F-fix session): (1) the Codex F1-F9 RTL fixes
+       are now MERGED into this branch (fast-forward of main) and RE-VALIDATED
+       against the macro: run_cpu_macro 22/22 + run_riscv_macro 58/58 green — so
+       a fresh harden here builds the CORRECT (fixed) RTL. F4 widened trap_kind
+       and added an EX-stage access-fault path; nothing in the RF/macro path
+       changed, so placement/PDN behaviour is unchanged (util may tick up
+       slightly). (2) The **WSL EDA toolchain is now installed + verified**:
+       Docker + LibreLane images (ghcr.io/librelane/librelane 3.0.3/3.0.5) +
+       sky130A PDK at ~/claude-work/pdk + ttsetup/venv + tt-gds-action all work;
+       the console session runs `tt_tool.py --harden` locally there. So option
+       (a) can now iterate LOCALLY (~real-time, not CI round-trips). RECIPE when
+       the shared env is FREE (it is a shared WSL — the console session hardens
+       there too; DON'T run two heavy OpenROAD hardens at once):
+         source ~/claude-work/ttsetup/venv/bin/activate
+         export PDK_ROOT=~/claude-work/pdk PDK=sky130A
+         cd <koti checkout in /mnt/c or a WSL copy>; ./tt/tt_tool.py --harden
+       (needs the repo's tt/ harness = tt-support-tools; the tt-gds-action clone
+       in ~/claude-work has it — mirror how console-h is laid out). (3) Option
+       (a) refinement: author FP_PDN_CFG as a LibreLane pdn.tcl that (i) builds
+       the stdcell grid (met1 followpins + met4 vstripes @153.6um) and (ii) for
+       core.rf.u_rf defines a macro grid with `add_pdn_connect ... met4 met4`
+       (same-layer, over the macro's met4 pins) INSTEAD of the default
+       met4->met5 via. The open risk stays: whether pdngen makes a met4-met4
+       connection by shape-overlap without an odb step; the local loop is how to
+       settle it fast. Do NOT resume until the shared harden env is free.
 6. [ ] xv6 rv32 port on the SBI firmware (first sv32 workload).
 7. [ ] Buildroot nommu uLinux, console on UART (frontier rung 1 —
        submittable on its own).

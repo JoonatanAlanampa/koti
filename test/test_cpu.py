@@ -427,6 +427,60 @@ async def test_mstatus_mpp_warl(dut):
 
 
 @cocotb.test()
+async def test_flash_lrsc_store_access_fault(dut):
+    """F4: flash is read-only. LR reads fine, but SC and plain stores to
+    flash must raise a store/AMO access fault (cause 7), not a silent
+    no-op 'success' that reports the store as completed."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    FLASH_RO = 0x0000_2000        # a flash data word (RO), above the code
+    main = ([addi(24, 0, 0), addi(11, 0, 0x5A)]      # cause acc, SC-rd sentinel
+            + li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
+            + li(2, FLASH_RO) + [
+                amo(LR, 10, 2, 0),        # LR from flash: reads, no fault
+                amo(SC, 11, 2, 0)]        # SC to flash: cause 7, x11 untouched
+            + li(6, 0x1234) + [
+                sw(6, 2, 0),              # plain store to flash: cause 7
+                EBREAK])
+    m_handler = [
+        csrrs(20, MCAUSE, 0),
+        slli(24, 24, 4), andi(22, 20, 15), or_(24, 24, 22),
+        csrrs(23, MEPC, 0), addi(23, 23, 4), csrrw(0, MEPC, 23),
+        MRET,
+    ]
+    await run_program(dut, with_handler(main, m_handler))
+    assert reg(dut, 24) == 0x77, \
+        f"cause seq {reg(dut, 24):#x} != 7,7 (SC + store to flash access-fault)"
+    assert reg(dut, 11) == 0x5A, "SC to flash reported success (rd was written)"
+
+
+@cocotb.test()
+async def test_psram_upper_bound_access_fault(dut):
+    """F4: the APS6404 is 8 MiB; the high mirror (addr[24] && addr[23],
+    0x0180_0000+) must access-fault (store cause 7, load cause 5) rather
+    than silently alias into the low 8 MiB."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    PSRAM_HI = 0x0180_0000
+    main = ([addi(24, 0, 0)]
+            + li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
+            + li(2, PSRAM_HI) + li(3, 0xABCD) + [
+                sw(3, 2, 0),              # store to high mirror: cause 7
+                lw(10, 2, 0),             # load from high mirror: cause 5
+                EBREAK])
+    m_handler = [
+        csrrs(20, MCAUSE, 0),
+        slli(24, 24, 4), andi(22, 20, 15), or_(24, 24, 22),
+        csrrs(23, MEPC, 0), addi(23, 23, 4), csrrw(0, MEPC, 23),
+        MRET,
+    ]
+    await run_program(dut, with_handler(main, m_handler),
+                      ram_zero=[(0, 4)])
+    assert reg(dut, 24) == 0x75, \
+        f"cause seq {reg(dut, 24):#x} != 7,5 (store/load high-mirror access-fault)"
+    # the faulting store must not have aliased into the low 8 MiB
+    assert int(dut.mem.ram[0].value) == 0, "high-mirror store aliased to low PSRAM"
+
+
+@cocotb.test()
 async def test_ecall_trap_and_mret(dut):
     """ECALL enters the handler precisely; MRET resumes after it."""
     cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())

@@ -26,9 +26,10 @@ module csr (
     // trap entry / returns (single-cycle commands from EX)
     input  logic        trap,        // take a trap now
     input  logic        trap_irq,    // it is the pending irq we report
-    input  logic [2:0]  trap_kind,   // else: 0 ecall, 1 ipf, 2 lpf,
+    input  logic [3:0]  trap_kind,   // else: 0 ecall, 1 ipf, 2 lpf,
                                      // 3 spf, 4 illegal, 5 misaligned
-                                     // fetch, 6 misload, 7 misstore
+                                     // fetch, 6 misload, 7 misstore,
+                                     // 8 load-access, 9 store/AMO-access
     input  logic [31:0] trap_pc,
     input  logic [31:0] trap_tval,
     input  logic        mret, sret,
@@ -150,13 +151,15 @@ module csr (
     logic [31:0] exc_cause;
     always_comb
         case (trap_kind)
-            3'd1:    exc_cause = 32'd12;      // instruction page fault
-            3'd2:    exc_cause = 32'd13;      // load page fault
-            3'd3:    exc_cause = 32'd15;      // store/AMO page fault
-            3'd4:    exc_cause = 32'd2;       // illegal instruction
-            3'd5:    exc_cause = 32'd0;       // fetch addr misaligned
-            3'd6:    exc_cause = 32'd4;       // load addr misaligned
-            3'd7:    exc_cause = 32'd6;       // store/AMO misaligned
+            4'd1:    exc_cause = 32'd12;      // instruction page fault
+            4'd2:    exc_cause = 32'd13;      // load page fault
+            4'd3:    exc_cause = 32'd15;      // store/AMO page fault
+            4'd4:    exc_cause = 32'd2;       // illegal instruction
+            4'd5:    exc_cause = 32'd0;       // fetch addr misaligned
+            4'd6:    exc_cause = 32'd4;       // load addr misaligned
+            4'd7:    exc_cause = 32'd6;       // store/AMO misaligned
+            4'd8:    exc_cause = 32'd5;       // load access fault
+            4'd9:    exc_cause = 32'd7;       // store/AMO access fault
             default: exc_cause = ecall_cause;
         endcase
     wire [31:0] cause  = trap_irq ? irq_cause : exc_cause;

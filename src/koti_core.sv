@@ -436,6 +436,18 @@ module koti_core #(
     assign tlb_stall = d_xlate && !dtlb_hit;              // walk in progress
     wire [31:0] d_pa = mmu_d_on ? {dtlb_ppn[19:0], alu_y[11:0]} : alu_y;
 
+    // ---- physical access faults (PMA), on the resolved physical
+    // address: writes to read-only flash and any access to the APS6404
+    // 8 MiB high mirror (addr[24] && addr[23]). Device MMIO pages
+    // (io_m 0x0001, CLINT 0x0002, PLIC 0x0003, VGA 0x0004) are writable;
+    // everything else in flash space (addr[24]=0) is read-only XIP.
+    wire pa_dev      = !d_pa[24] && d_pa[23:16] >= 8'h01
+                                 && d_pa[23:16] <= 8'h04;
+    wire pa_flash_ro = !d_pa[24] && !pa_dev;
+    wire pa_psram_hi =  d_pa[24] &&  d_pa[23];
+    wire dacc_fault  = dmem_op_e
+                    && ((d_isstore && pa_flash_ro) || pa_psram_hi);
+
     // d-walker: two PTE reads on the data port, issued only while the
     // M stage isn't mid-transaction (its op completes under d_seen).
     // Never aborted: irqs are gated on !pstall, and nothing older than
@@ -493,22 +505,27 @@ module koti_core #(
     wire dpf_take  = d_xlate && dtlb_hit && dtlb_pfault
                   && !irq_take && commit;
     wire dmis_take = dmis && !dpf_take && !irq_take && commit;
+    // access fault: only once misalign and page fault are ruled out
+    wire dacc_take = dacc_fault && !dmis_take && !dpf_take && !irq_take
+                  && commit;
     wire trap_take = irq_take || ipf_take || ill_take || ecl_take
-                  || imis_take || dpf_take || dmis_take;
+                  || imis_take || dpf_take || dmis_take || dacc_take;
     wire mret_take = valid_e && mret_e && commit && !trap_take;
     wire sret_take = valid_e && sret_e && commit && !trap_take;
     wire sfence_take = valid_e && sfence_e && commit && !trap_take;
 
-    wire [2:0]  trap_kind = ipf_take  ? 3'd1
-                          : ill_take  ? 3'd4
-                          : imis_take ? 3'd5
-                          : dpf_take  ? (d_isstore ? 3'd3 : 3'd2)
-                          : dmis_take ? (d_isstore ? 3'd7 : 3'd6)
-                          :             3'd0;
+    wire [3:0]  trap_kind = ipf_take  ? 4'd1
+                          : ill_take  ? 4'd4
+                          : imis_take ? 4'd5
+                          : dpf_take  ? (d_isstore ? 4'd3 : 4'd2)
+                          : dmis_take ? (d_isstore ? 4'd7 : 4'd6)
+                          : dacc_take ? (d_isstore ? 4'd9 : 4'd8)
+                          :             4'd0;
     wire [31:0] trap_tval = ipf_take  ? pc_e
                           : ill_take  ? instr_e
                           : imis_take ? {alu_y[31:1], 1'b0}
-                          : (dpf_take || dmis_take) ? alu_y : 32'd0;
+                          : (dpf_take || dmis_take || dacc_take) ? alu_y
+                          :             32'd0;
 
     wire csr_en  = valid_e && csr_e && !ill_e && !irq_take && commit;
     wire csr_wen = csr_wen0;

@@ -20,7 +20,7 @@ MSTATUS, MISA, MIE, MTVEC = 0x300, 0x301, 0x304, 0x305
 MSCRATCH, MEPC, MCAUSE, MIP = 0x340, 0x341, 0x342, 0x344
 MEDELEG, MIDELEG = 0x302, 0x303
 SSTATUS, SIE, STVEC = 0x100, 0x104, 0x105
-SEPC, SCAUSE = 0x141, 0x142
+SEPC, SCAUSE, SIP = 0x141, 0x142, 0x144
 MTVAL, SATP = 0x343, 0x180
 
 # ---- tiny assembler ----------------------------------------------------
@@ -342,7 +342,88 @@ async def test_csr_ops(dut):
     assert reg(dut, 7) == 21
     assert reg(dut, 8) == 31
     assert reg(dut, 9) == (0x1234_5678 + 31) & M32
-    assert reg(dut, 10) == 0x4014_1100
+    # misa must advertise A (bit0) — LR/SC/AMO are implemented (F9)
+    assert reg(dut, 10) == 0x4014_1101
+
+
+@cocotb.test()
+async def test_sie_sip_masked_by_mideleg(dut):
+    """F6: sie/sip are mideleg-masked aliases of mie/mip. A supervisor
+    interrupt bit that M has NOT delegated must read 0 through sie/sip
+    and be unwritable through them."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    prog = (
+        # mideleg = 0: nothing delegated
+        [csrrw(0, MIDELEG, 0)]
+        + li(1, 0x2) + [csrrs(0, SIE, 1)]     # try to set sie.SSIE (bit1)
+        + [csrrs(11, SIE, 0)]                 # x11 = sie  (must stay 0)
+        + [csrrs(12, MIE, 0)]                 # x12 = mie  (ssie must stay 0)
+        + li(2, 0x2) + [csrrs(0, SIP, 2)]     # try to set sip.SSIP (bit1)
+        + [csrrs(13, SIP, 0)]                 # x13 = sip  (must stay 0)
+        # now delegate SSI (bit1); the alias becomes writable/visible
+        + li(3, 0x2) + [csrrw(0, MIDELEG, 3)]
+        + li(4, 0x2) + [csrrs(0, SIE, 4)]     # set sie.SSIE, now delegated
+        + [csrrs(14, SIE, 0)]                 # x14 = sie -> 0x2
+        + [csrrs(15, MIE, 0)]                 # x15 = mie -> ssie set (bit1)
+        + [EBREAK])
+    await run_program(dut, prog)
+    assert reg(dut, 11) == 0, "sie exposed a non-delegated SSIE"
+    assert reg(dut, 12) & 0x2 == 0, "sie write set a non-delegated mie.SSIE"
+    assert reg(dut, 13) == 0, "sip exposed a non-delegated SSIP"
+    assert reg(dut, 14) == 0x2, "sie.SSIE not visible once delegated"
+    assert reg(dut, 15) & 0x2 == 0x2, "sie write did not reach mie once delegated"
+
+
+@cocotb.test()
+async def test_mixed_delegation_reports_eligible_cause(dut):
+    """F5: with SEI delegated but SSI not, both pending in S mode, the
+    non-delegated SSI drives take_m; M must record the eligible SSI cause
+    (0x80000001), not the delegated SEI (0x80000009)."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    S_ENTRY = 80
+    main = (li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
+            + li(2, 0x200) + [csrrw(0, MIDELEG, 2)]   # delegate SEI (bit9) only
+            + li(3, 0x202) + [csrrw(0, MIE, 3)]       # enable seie + ssie
+            + li(4, 0x202) + [csrrw(0, MIP, 4)]       # pend seip + ssip
+            + li(5, S_ENTRY * 4) + [csrrw(0, MEPC, 5)]
+            + li(6, 0x800) + [csrrs(0, MSTATUS, 6),   # MPP = S
+                              MRET])                  # enter S -> take_m fires
+    s_entry = [addi(20, 0, 1), EBREAK]                # must not retire before the trap
+    m_handler = [csrrs(21, MCAUSE, 0), EBREAK]
+    await run_program(dut, layout(main, {HANDLER: m_handler, S_ENTRY: s_entry}))
+    assert reg(dut, 21) == 0x8000_0001, \
+        f"M reported {reg(dut, 21):#x}, expected eligible SSI 0x80000001 (F5)"
+
+
+@cocotb.test()
+async def test_vectored_or_warl_direct_tvec(dut):
+    """F7: mtvec/stvec are Direct-only here; a vectored-mode write must
+    read back with mode 0 (WARL), consistent with trap_vec always using
+    BASE."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    main = (li(1, (HANDLER * 4) | 3) + [csrrw(0, MTVEC, 1)]   # write base|3
+            + [csrrs(2, MTVEC, 0)]                            # readback
+            + li(3, (0x400) | 1) + [csrrw(0, STVEC, 3)]       # stvec base|1
+            + [csrrs(4, STVEC, 0)]                            # readback
+            + [ECALL])                                        # trap -> mtvec BASE
+    m_handler = [csrrs(5, MCAUSE, 0), EBREAK]
+    await run_program(dut, with_handler(main, m_handler))
+    assert reg(dut, 2) == HANDLER * 4, "mtvec kept a vectored/reserved mode (F7)"
+    assert reg(dut, 4) == 0x400, "stvec kept a vectored mode (F7)"
+    assert reg(dut, 5) == 11, "ECALL-from-M did not vector to BASE"
+
+
+@cocotb.test()
+async def test_mstatus_mpp_warl(dut):
+    """F8: mstatus.MPP is WARL — the reserved value 2'b10 must be coerced
+    (to U), never loaded into the live privilege by MRET."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    prog = (li(1, 1 << 12) + [csrrs(0, MSTATUS, 1)]   # attempt MPP = 2'b10
+            + [csrrs(2, MSTATUS, 0),                   # readback
+               EBREAK])
+    await run_program(dut, prog)
+    assert (reg(dut, 2) >> 11) & 3 == 0, \
+        f"MPP={(reg(dut, 2) >> 11) & 3} — reserved 2'b10 not WARL-coerced (F8)"
 
 
 @cocotb.test()

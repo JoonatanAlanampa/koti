@@ -335,6 +335,68 @@ async def test_koti_boot_and_timer(dut):
     assert ram.mem[8:12] == bytes([0xFD, 0xFF, 0xFF, 0xFF]), ram.mem[0:12].hex()
 
 
+# ---------------------------------------------------------------- F1 aperture
+
+# Flash byte addresses that the OLD 3-bit MMIO decode aliased into device
+# registers (every 512 KiB): 0x0011_0000 -> core MMIO (io_m),
+# 0x0012_0000 -> CLINT, 0x0014_0000 -> VGA/PS2. Each sentinel low byte is
+# distinct and != 0/1, so a misdecoded register read (uart_busy=0,
+# CLINT/VGA regs) cannot masquerade as the flash value.
+APERTURES = [(0x0011_0000, 0x15),   # core-MMIO alias
+             (0x0012_0000, 0x2A),   # CLINT alias
+             (0x0014_0000, 0x33)]   # VGA alias
+
+
+@cocotb.test()
+async def test_flash_data_aperture_no_mmio_alias(dut):
+    """F1 regression: a flash *data* load past the first 64 KiB of a
+    512 KiB span must return flash contents, not an aliased MMIO
+    register. Seed a sentinel at each aliasing flash address, echo each
+    to the LEDs, and require the real flash byte back."""
+    clock = Clock(dut.clk, 40, unit="ns")  # 25 MHz
+    cocotb.start_soon(clock.start())
+
+    x0, x5, x6, x7 = 0, 5, 6, 7
+    prog = [lui(x5, MMIO_HI)]                     # x5 = LED MMIO base
+    for baddr, _ in APERTURES:
+        prog += [lui(x6, baddr >> 12),           # x6 = flash aperture addr
+                 lw(x7, 0, x6),                   # load the flash word
+                 sw(x7, 0, x5)]                   # echo low byte to the LEDs
+    prog += [EBREAK]
+
+    flash = SpiMem(1 << 21, writable=False)       # 2 MiB: covers the aliases
+    ram = SpiMem(1 << 16, writable=True)
+    for i, insn in enumerate(prog):
+        flash.mem[4 * i:4 * i + 4] = insn.to_bytes(4, "little")
+    for baddr, val in APERTURES:
+        flash.mem[baddr:baddr + 4] = val.to_bytes(4, "little")
+    cocotb.start_soon(spi_bus(dut, flash, ram))
+
+    dut.ena.value = 1
+    dut.ui_in.value = 0
+    dut.uio_in.value = 0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 10)
+    dut.rst_n.value = 1
+
+    led_seq = []
+    halted = False
+    for _ in range(60000):
+        await RisingEdge(dut.clk)
+        led = int(dut.uo_out.value) >> 2
+        if not led_seq or led != led_seq[-1]:
+            led_seq.append(led)
+        if (int(dut.uo_out.value) >> 1) & 1:
+            halted = True
+            break
+
+    assert halted, f"CPU never halted; LED history: {[hex(v) for v in led_seq]}"
+    expected = [0x00] + [val for _, val in APERTURES]
+    assert led_seq == expected, \
+        f"aperture LED seq {[hex(v) for v in led_seq]} != " \
+        f"{[hex(v) for v in expected]} — flash data aliased into MMIO"
+
+
 # ---------------------------------------------------------------- VGA + PS/2
 
 

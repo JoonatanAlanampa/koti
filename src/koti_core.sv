@@ -576,8 +576,10 @@ module koti_core #(
     // core-internal MMIO carve-out at 0x0001_0000 (inside the flash
     // window: keep code+rodata below 64 KB). CLINT/PLIC/VGA registers
     // live higher (0x0002_0000+) and go out the data port; the SoC
-    // top decodes and acks them.
-    wire io_m = addr_m[16] && !addr_m[24] && !addr_m[17];
+    // top decodes and acks them. Decode the FULL 64 KB window
+    // (addr[31:16]==0x0001) — a partial 3-bit compare aliased flash data
+    // past 64 KB into this carve-out every 512 KB (F1).
+    wire io_m = addr_m[31:16] == 16'h0001;
 
     // ---- A extension: LR/SC bookkeeping + AMO read-modify-write.
     // AMOs to the MMIO carve-out are meaningless and skipped.

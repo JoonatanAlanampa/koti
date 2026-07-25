@@ -64,6 +64,17 @@
 
   "GRT_ALLOW_CONGESTION": 1,
 
+  "//": "Fix antenna violations with routing JUMPERS instead of diode CELLS.",
+  "//": "With the default (diodes), global routing finds 1562 antenna violations",
+  "//": "and repair_antennas inserts >1000 sky130_fd_sc_hd__diode_2 instances into",
+  "//": "a placement already running at ~98.6% density (GPL-0079). That displaces",
+  "//": "existing cells and the follow-up detailed_placement in antenna_repair.tcl",
+  "//": "dies: [DPL-0034] 140 instances -> [DPL-0036] (114 of the 140 are ordinary",
+  "//": "synthesis cells, i.e. collateral, not the diodes themselves).",
+  "//": "Jumpers hop the offending net up a metal layer instead, so ZERO cells are",
+  "//": "added and there is nothing new to legalize.",
+  "GRT_ANTENNA_REPAIR_JUMPER_ONLY": true,
+
   "FP_IO_HLENGTH": 2,
   "FP_IO_VLENGTH": 2,
 

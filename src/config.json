@@ -32,6 +32,17 @@
   "PL_RESIZER_HOLD_SLACK_MARGIN": 0.02,
   "GRT_RESIZER_HOLD_SLACK_MARGIN": 0.01,
 
+  "//": "EXP 2B ONLY (not on the 2A branch): also drop the design-repair slew and",
+  "//": "cap PADDING from the LibreLane default 20% to 0. This does NOT relax the",
+  "//": "real electrical limit - repair still meets the liberty max_transition /",
+  "//": "max_capacitance that signoff STA checks against; it only stops buffering",
+  "//": "nets that are already legal but sit within 20% of the limit. Those extra",
+  "//": "buffers cost 3076 insts / 28394 um2 = 9.4% of the whole core on a design",
+  "//": "that is out of room. Kept on a separate branch so its effect is",
+  "//": "attributable independently of the jumper-only antenna change.",
+  "DESIGN_REPAIR_MAX_SLEW_PCT": 0,
+  "DESIGN_REPAIR_MAX_CAP_PCT": 0,
+
   "//": "RUN_LINTER, LINTER_INCLUDE_PDK_MODELS - Disabling the linter is not recommended!",
   "RUN_LINTER": 1,
   "LINTER_INCLUDE_PDK_MODELS": 1,

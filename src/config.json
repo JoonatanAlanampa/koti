@@ -32,6 +32,17 @@
   "PL_RESIZER_HOLD_SLACK_MARGIN": 0.02,
   "GRT_RESIZER_HOLD_SLACK_MARGIN": 0.01,
 
+  "//": "EXP 2C: buy back area so the ~1000 antenna DIODES can legalize, instead of",
+  "//": "avoiding diodes altogether (that is branch harden-hold-margin / exp 2A).",
+  "//": "repair_design runs with -slew_margin 20 -cap_margin 20, i.e. it buffers any",
+  "//": "net within 20% of the liberty limit, not just violating ones: 3076 buffers /",
+  "//": "28394 um2 = 9.4% of the core, on a design whose base util is already 0.749.",
+  "//": "Setting the padding to 0 still meets the library's real max_transition and",
+  "//": "max_capacitance -- the limits signoff STA checks -- so this removes",
+  "//": "conservatism, not correctness.",
+  "DESIGN_REPAIR_MAX_SLEW_PCT": 0,
+  "DESIGN_REPAIR_MAX_CAP_PCT": 0,
+
   "//": "RUN_LINTER, LINTER_INCLUDE_PDK_MODELS - Disabling the linter is not recommended!",
   "RUN_LINTER": 1,
   "LINTER_INCLUDE_PDK_MODELS": 1,

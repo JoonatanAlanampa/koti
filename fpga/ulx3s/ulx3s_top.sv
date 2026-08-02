@@ -1,18 +1,41 @@
 // ulx3s_top.sv — Koti-1 on the ULX3S 85F (ECP5): the pre-tapeout
-// validation build. Wraps the exact TT top (tt_um_koti) so what runs
-// on the FPGA is what gets hardened; only the pad ring differs.
+// validation build.
 //
-// STATUS: UNTESTED SCAFFOLD — written before the board is in hand.
-// Pin sites in ulx3s.lpf must be verified against the official
-// constraint file before first use (see README.md here).
+// Wraps the UNCHANGED `tt_um_koti`, so what runs on the FPGA is what gets
+// hardened — only the pad ring differs. Everything in this file is harness:
+// header permutation, straps, tristates. None of it exists on silicon, where
+// the TT mux drives the pins directly.
+//
+// WHAT CHANGED FROM THE 2026-07-19 SCAFFOLD, AND WHY
+// --------------------------------------------------
+// The scaffold mapped `uio[7:0]` onto `gp[0..7]` and the VGA outputs onto
+// `gn[0..7]`. Those are not Pmod footprints. On the ULX3S the 12-pin blocks
+// are J1 = gp/gn[0..3] and J2 = gp/gn[4..7], so a Pmod wired gp[0..7] would
+// straddle two physical connectors and could never be plugged in. Each Pmod
+// now gets one header, with the row assignment selectable at runtime.
+//
+// HEADER ORIENTATION. A Pmod can be seated either way round, and a reversed
+// one is a silent failure that looks like dead gateware. SW1 flips the J1
+// rows, SW2 flips J2 — a switch flip instead of a rebuild. Same trick as
+// tt-riscv/fpga and console/fpga.
+//
+// KOTI'S TWO PERSONALITIES. `uo` is not a fixed pinout: at reset the chip is
+// headless (uo[0]=UART, uo[1]=HALTED, uo[7:2]=LEDs) and stays that way until
+// software sets VGA_EN, after which uo carries Tiny VGA Pmod colour/sync and
+// the UART optionally moves to the blue LSB, uo[6]. The harness cannot see
+// VGA_EN — it is an internal register with no pin — so SW3 selects which uo
+// bit feeds the serial line. Both personalities reach J2 regardless; a
+// monitor simply sees no sync while the chip is headless, which is correct.
 //
 // Mapping:
-//   clk_25mhz  -> clk (the design's real frequency)
-//   btn[1]     -> reset (active high; btn[0] is the power button)
-//   uo[7:0]    -> both led[5:0]+ftdi (headless view) AND gp VGA pins
-//                 (the design's own VGA_EN mux decides what uo carries)
-//   uio[7:0]   -> QSPI Pmod on gp/gn with per-pin tristates
-//   ui[1:0]    -> PS/2 keyboard (needs pull-ups; US2 port or Pmod)
+//   clk_25mhz    -> clk (the design's real frequency)
+//   btn[0] (PWR) -> reset, active low, gated with a power-on-reset counter
+//   btn[6:1]     -> ui[7:2] GPIO inputs (MMIO 0x10008)
+//   gp[8]/gp[9]  -> ui[1:0] PS/2 clock / data  (external pull-ups needed!)
+//   J1 gp/gn0-3  -> uio[7:0] QSPI memory Pmod  (SW1 flips rows)
+//   J2 gp/gn4-7  -> uo[7:0]  Tiny VGA Pmod     (SW2 flips rows)
+//   ftdi_rxd     -> uo[0] or uo[6]             (SW3 selects)
+//   led[7:0]     -> uo[7:0] raw, or a frame counter (SW4 selects)
 //
 // Copyright (c) 2026 Joonatan Alanampa
 // SPDX-License-Identifier: Apache-2.0
@@ -21,51 +44,118 @@
 
 module ulx3s_top (
     input  wire        clk_25mhz,
-    input  wire [6:0]  btn,
-    output wire [7:0]  led,
-    output wire        ftdi_rxd,    // FPGA -> host serial
-    inout  wire [27:0] gp,
-    inout  wire [27:0] gn,
-    output wire        wifi_gpio0   // keep the board powered
+    input  wire  [6:0] btn,
+    input  wire  [3:0] sw,
+    output logic [7:0] led,
+    output logic       ftdi_rxd,
+    output logic       wifi_gpio0,
+
+    // J1 header: QSPI memory Pmod (Cartridge Pmod or stock TT QSPI Pmod)
+    inout  wire  [3:0] pmod_gp,
+    inout  wire  [3:0] pmod_gn,
+
+    // J2 header: Tiny VGA Pmod (outputs only)
+    output logic [3:0] vga_gp,
+    output logic [3:0] vga_gn,
+
+    // PS/2 keyboard: gp[8] = clock, gp[9] = data. Inputs only — koti's
+    // ps2_rx samples the bus and never drives it, which is also why this
+    // works on silicon, where `ui` is input-only.
+    input  wire  [1:0] ps2_gp
 );
-    assign wifi_gpio0 = 1'b1;
 
-    wire clk = clk_25mhz;
-    wire rst_n = ~btn[1];
+  assign wifi_gpio0 = 1'b1;                  // keep the ESP32 booted
 
-    wire [7:0] ui_in, uo_out, uio_in, uio_out, uio_oe;
+  // ------------------------------------------------------- reset
+  // BTN0 (PWR) is pulled up and reads 0 when pressed. The POR counter holds
+  // reset for ~2.6 ms after configuration so the QSPI flash — which has its
+  // own power-on timing — is ready before the first fetch goes out.
+  logic [15:0] por = '0;
+  always_ff @(posedge clk_25mhz) if (!(&por)) por <= por + 16'd1;
 
-    tt_um_koti dut (
-        .ui_in(ui_in), .uo_out(uo_out),
-        .uio_in(uio_in), .uio_out(uio_out), .uio_oe(uio_oe),
-        .ena(1'b1), .clk(clk), .rst_n(rst_n)
-    );
+  wire por_done = &por;
+  wire rst_n    = btn[0] && por_done;
 
-    // headless view: LEDs + serial (harmless duplicates in VGA mode)
-    assign led = {uo_out[7:2], 2'b00};
-    assign ftdi_rxd = uo_out[0];
+  // ------------------------------------------------------- the chip
+  wire [7:0] uo_out, uio_out, uio_oe;
+  wire [7:0] uio_in;
 
-    // QSPI Pmod on gp[0..7] (verify sites in the LPF first!)
-    genvar i;
-    generate
-        for (i = 0; i < 8; i = i + 1) begin : qspi_io
-            assign gp[i] = uio_oe[i] ? uio_out[i] : 1'bz;
-        end
-    endgenerate
-    assign uio_in = gp[7:0];
+  // ui[1:0] = PS/2 clock/data, ui[7:2] = the six board buttons as GPIO.
+  // btn[1..6] are pulled down, so a press reads 1 at MMIO 0x10008.
+  wire [7:0] ui_in = {btn[6:1], ps2_gp[1], ps2_gp[0]};
 
-    // VGA (via resistor DAC / Digilent VGA Pmod) on gn[0..7]:
-    // R1,G1,B1,VS,R0,G0,B0,HS in uo order
-    generate
-        for (i = 0; i < 8; i = i + 1) begin : vga_io
-            assign gn[i] = uo_out[i];
-        end
-    endgenerate
+  tt_um_koti dut (
+      .ui_in   (ui_in),
+      .uo_out  (uo_out),
+      .uio_in  (uio_in),
+      .uio_out (uio_out),
+      .uio_oe  (uio_oe),
+      .ena     (1'b1),
+      .clk     (clk_25mhz),
+      .rst_n   (rst_n)
+  );
 
-    // PS/2 keyboard on gp[8] (clk) / gp[9] (data), inputs w/ pull-ups
-    assign ui_in = {6'd0, gp[9], gp[8]};
+  // ------------------------------------------------------- J1: QSPI Pmod
+  // uio numbering (TT QSPI Pmod standard):
+  //   0=CS0 flash  1=SD0/MOSI  2=SD1/MISO  3=SCK  4=SD2  5=SD3  6=CS1 PSRAM
+  //   7=CS2 — koti holds this high permanently, which is what makes the
+  //   Cartridge Pmod (CS2 replaced by an audio chain) a drop-in fit here.
+  //
+  // Row algebra, identical to console's proven version:
+  //   mapping A: gp[n] = uio[3-n], gn[n] = uio[7-n];  mapping B swaps rows.
+  wire cart_map_b = sw[0];
 
-    // unused pads
-    assign gp[27:10] = 18'bz;
-    assign gn[27:8]  = 20'bz;
+  generate for (genvar n = 0; n < 4; n++) begin : g_cart_out
+    wire [2:0] gpi = cart_map_b ? 3'(7 - n) : 3'(3 - n);
+    wire [2:0] gni = cart_map_b ? 3'(3 - n) : 3'(7 - n);
+    assign pmod_gp[n] = uio_oe[gpi] ? uio_out[gpi] : 1'bz;
+    assign pmod_gn[n] = uio_oe[gni] ? uio_out[gni] : 1'bz;
+  end endgenerate
+
+  generate for (genvar k = 0; k < 8; k++) begin : g_cart_in
+    assign uio_in[k] = ((k < 4) ^ cart_map_b) ? pmod_gp[3 - (k & 3)]
+                                              : pmod_gn[3 - (k & 3)];
+  end endgenerate
+
+  // ------------------------------------------------------- J2: VGA Pmod
+  // Same 2x6 geometry, so the same algebra — outputs only. In VGA mode uo
+  // carries {HSync, B0/UART, G0, R0, VSync, B1, G1, R1}; in headless mode
+  // the same pins carry UART/HALTED/LEDs and the monitor stays blank.
+  wire vga_map_b = sw[1];
+
+  generate for (genvar n = 0; n < 4; n++) begin : g_vga
+    wire [2:0] pi = vga_map_b ? 3'(7 - n) : 3'(3 - n);
+    wire [2:0] ni = vga_map_b ? 3'(3 - n) : 3'(7 - n);
+    assign vga_gp[n] = uo_out[pi];
+    assign vga_gn[n] = uo_out[ni];
+  end endgenerate
+
+  // ------------------------------------------------------- serial console
+  // SW3 follows koti's uo personality: uo[0] while headless (the reset
+  // default, and where every existing pin-level test expects it), uo[6]
+  // once software has set VGA_EN and moved the UART to the blue LSB.
+  assign ftdi_rxd = sw[2] ? uo_out[6] : uo_out[0];
+
+  // ------------------------------------------------------- status LEDs
+  // uo_out[3] is VSync in VGA mode, so counting it gives a free liveness
+  // signal: blinking LEDs mean video timing is running. Useless while the
+  // chip is headless (uo[3] is just LED1 there), hence the strap.
+  wire vsync = uo_out[3];
+  logic vsync_q;
+  logic [7:0] frames;
+
+  always_ff @(posedge clk_25mhz) begin
+    vsync_q <= vsync;
+    if (!rst_n)                 frames <= '0;
+    else if (vsync && !vsync_q) frames <= frames + 8'd1;
+  end
+
+  // SW4 off = the raw chip personality, which is the view you want at first
+  // power: LED0 flickers with UART traffic, LED1 is HALTED (a solid LED1
+  // means the CPU hit EBREAK), LED2-7 are the software-driven LEDs at
+  // MMIO 0x10000. SW4 on = the frame counter.
+  always_comb led = sw[3] ? frames : uo_out;
+
 endmodule
+
+`default_nettype wire

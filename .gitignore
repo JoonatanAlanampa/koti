@@ -8,6 +8,7 @@ tt_submission
 src/user_config.json
 src/config_merged.json
 test/sim_build
+fpga/ulx3s/build
 test/__pycache__/
 test/results.xml
 test/gate_level_netlist.v

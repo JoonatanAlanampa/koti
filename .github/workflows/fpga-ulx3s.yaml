@@ -1,0 +1,141 @@
+name: fpga-ulx3s
+
+# Builds the ULX3S 85F prototype bitstream: yosys -> nextpnr-ecp5 -> ecppack.
+#
+# NOT to be confused with `fpga.yaml`, which is TinyTapeout's stock
+# ICE40UP5K action for TT's ASIC-simulation FPGA board — a different chip, a
+# different board, and disabled (`branches: none`). This workflow is the one
+# that produces something you can flash onto the ULX3S.
+#
+# It lives in CI rather than on the developer's PC on purpose: the 85F
+# place-and-route is the slow step by a wide margin, and local heavy compute is
+# off-limits on this project (policy, 2026-07-24).
+# `fpga/ulx3s/synth.ps1 -SynthOnly` is the local equivalent for a fast RTL
+# check; it stops after yosys.
+#
+# The toolchain is PINNED to the same oss-cad-suite release installed on the
+# development machine, so a CI cell count that disagrees with the local one
+# means the DESIGN changed, not the tools.
+
+on:
+  push:
+    paths:
+      - 'src/**'
+      - 'fpga/ulx3s/**'
+      - '.github/workflows/fpga-ulx3s.yaml'
+  workflow_dispatch:
+
+env:
+  OSS_TAG: '2026-07-17'
+  OSS_TARBALL: 'oss-cad-suite-linux-x64-20260717.tgz'
+
+jobs:
+  bitstream:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cheap, and it fails in seconds on the mistake that would otherwise
+      # surface as a confusing nextpnr error minutes into the run.
+      - name: check the pin plan
+        run: python3 fpga/ulx3s/check_pins.py
+
+      - name: cache oss-cad-suite
+        id: cache-oss
+        uses: actions/cache@v4
+        with:
+          path: ~/oss-cad-suite
+          key: oss-cad-suite-${{ env.OSS_TAG }}
+
+      - name: install oss-cad-suite
+        if: steps.cache-oss.outputs.cache-hit != 'true'
+        run: |
+          url="https://github.com/YosysHQ/oss-cad-suite-build/releases/download/${OSS_TAG}/${OSS_TARBALL}"
+          echo "downloading $url"
+          curl -fL --retry 3 -o /tmp/oss-cad-suite.tgz "$url"
+          tar -xzf /tmp/oss-cad-suite.tgz -C "$HOME"
+          test -x "$HOME/oss-cad-suite/bin/nextpnr-ecp5"
+
+      - name: put oss-cad-suite on PATH
+        run: echo "$HOME/oss-cad-suite/bin" >> "$GITHUB_PATH"
+
+      - name: tool versions
+        run: |
+          yosys -V
+          nextpnr-ecp5 --version
+
+      # Source list comes from fpga/ulx3s/sources.txt — the same file synth.ps1
+      # reads, so the two builders cannot drift apart. `-I src` is what makes
+      # vga_text.sv's `font_rom.svh` include resolve from the repo root.
+      - name: synthesis (yosys)
+        run: |
+          mkdir -p fpga/ulx3s/build
+          src=$(grep -vE '^[[:space:]]*(#|$)' fpga/ulx3s/sources.txt | tr '\n' ' ')
+          echo "sources: $src"
+          yosys -l fpga/ulx3s/build/yosys.log \
+            -p "read_verilog -sv -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
+
+      # nextpnr fails by design when the 25 MHz constraint in ulx3s.lpf is not
+      # met. Capture its exit code instead of letting the step die, so the
+      # achieved Fmax still reaches the summary and the artifact on a red run —
+      # "how far off were we" is the whole point of the number.
+      - name: place and route (nextpnr-ecp5)
+        id: pnr
+        run: |
+          set +e
+          set -o pipefail
+          nextpnr-ecp5 --85k --package CABGA381 \
+            --json fpga/ulx3s/build/koti.json \
+            --lpf fpga/ulx3s/ulx3s.lpf \
+            --textcfg fpga/ulx3s/build/koti.config 2>&1 | tee fpga/ulx3s/build/nextpnr.log
+          echo "rc=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: pack bitstream (ecppack)
+        if: steps.pnr.outputs.rc == '0'
+        run: |
+          ecppack fpga/ulx3s/build/koti.config fpga/ulx3s/build/koti.bit
+          ls -l fpga/ulx3s/build/koti.bit
+
+      - name: report
+        if: always()
+        run: |
+          set +e
+          {
+            echo "## Koti-1 — ULX3S 85F (LFE5U-85F, CABGA381)"
+            echo
+            echo "### Logic"
+            echo '```'
+            # TRELLIS_COMB/TRELLIS_FF sit near the END of nextpnr's utilisation
+            # table — a short window silently cuts off the two numbers a human
+            # actually wants.
+            grep -E "Total LUT4s|TRELLIS_COMB|TRELLIS_FF|TRELLIS_IO|DP16KD|MULT18X18D|CCU2C" fpga/ulx3s/build/nextpnr.log | head -12
+            echo '```'
+            echo "### Timing (constraint: 25 MHz, from fpga/ulx3s/ulx3s.lpf)"
+            echo '```'
+            grep -E "Max frequency for clock|Max delay|Info: Critical path" fpga/ulx3s/build/nextpnr.log | head -20
+            echo '```'
+            echo "Reference: the 2026-07-22 local run with UNCONSTRAINED IO got"
+            echo "8945 COMB / 2791 FF / 34.8 MHz. This run constrains every pin."
+            if [ "${{ steps.pnr.outputs.rc }}" != "0" ]; then
+              echo
+              echo "**nextpnr exited ${{ steps.pnr.outputs.rc }}** — full log in the artifact."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: koti-fpga
+          path: |
+            fpga/ulx3s/build/koti.bit
+            fpga/ulx3s/build/yosys.log
+            fpga/ulx3s/build/nextpnr.log
+          if-no-files-found: warn
+
+      - name: gate on place-and-route result
+        run: |
+          if [ "${{ steps.pnr.outputs.rc }}" != "0" ]; then
+            echo "::error::nextpnr-ecp5 exited ${{ steps.pnr.outputs.rc }}. If this is a timing violation, the achieved Fmax is in the job summary and in fpga/ulx3s/build/nextpnr.log in the koti-fpga artifact."
+            exit 1
+          fi

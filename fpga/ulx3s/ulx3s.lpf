@@ -1,13 +1,56 @@
-# ulx3s.lpf — Koti-1 on ULX3S: pin constraints TEMPLATE.
-# !! VERIFY EVERY SITE against the official file for your board rev:
-# https://github.com/emard/ulx3s/blob/master/doc/constraints/
-# clk/led/ftdi below follow the well-known v2/v3 assignments; the
-# gp/gn GPIO sites are PLACEHOLDERS (marked TODO) and must be filled
-# from the official file before building.
+# ulx3s.lpf — Koti-1 on the ULX3S 85F (LFE5U-85F, CABGA381).
+#
+# PROVENANCE. Every site below is copied from `console/fpga/ulx3s.lpf`, where
+# the whole set was diffed against the upstream
+# emard/ulx3s doc/constraints/ulx3s_v20.lpf on 2026-07-30. Reusing a
+# transcription that has already been checked once is safer than re-typing
+# from the vendor file, which is what the previous version of this file
+# (a TODO-riddled template) invited.
+#
+# `python fpga/ulx3s/check_pins.py` re-proves the match mechanically and also
+# catches the failure this file is most prone to: a harness port that has no
+# LOCATE, or a LOCATE for a port that no longer exists.
+#
+# STILL UNVERIFIED, and only the board can settle it: whether YOUR board is a
+# v2.0. A wrong revision builds perfectly and drives the wrong balls, which is
+# why reading the silkscreen is step 1 of README.md.
+#
+# Header plan:
+#   J1 (gp/gn 0-3)   Cartridge Pmod or TT QSPI Pmod   -> uio[7:0]   <- SW1 flips rows
+#   J2 (gp/gn 4-7)   Tiny VGA Pmod                    -> uo[7:0]    <- SW2 flips rows
+#   gp 8/9           PS/2 keyboard  clock / data      -> ui[1:0]
+#   btn 1-6          GPIO inputs (MMIO 0x10008)       -> ui[7:2]
 
 LOCATE COMP "clk_25mhz" SITE "G2";
-IOBUF PORT "clk_25mhz" IO_TYPE=LVCMOS33;
+IOBUF  PORT "clk_25mhz" PULLMODE=NONE IO_TYPE=LVCMOS33;
 FREQUENCY PORT "clk_25mhz" 25 MHZ;
+
+# btn[0] = PWR (pulled up, press = 0 = reset). btn[1..6] feed ui[7:2].
+LOCATE COMP "btn[0]" SITE "D6";
+LOCATE COMP "btn[1]" SITE "R1";
+LOCATE COMP "btn[2]" SITE "T1";
+LOCATE COMP "btn[3]" SITE "R18";
+LOCATE COMP "btn[4]" SITE "V1";
+LOCATE COMP "btn[5]" SITE "U1";
+LOCATE COMP "btn[6]" SITE "H16";
+IOBUF PORT "btn[0]" PULLMODE=UP   IO_TYPE=LVCMOS33;
+IOBUF PORT "btn[1]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "btn[2]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "btn[3]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "btn[4]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "btn[5]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "btn[6]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+
+# SW1 = J1 row mapping, SW2 = J2 row mapping, SW3 = UART pin (headless uo[0]
+# vs VGA-mode uo[6]), SW4 = LED view. Off = the reset-default personality.
+LOCATE COMP "sw[0]" SITE "E8";
+LOCATE COMP "sw[1]" SITE "D8";
+LOCATE COMP "sw[2]" SITE "D7";
+LOCATE COMP "sw[3]" SITE "E7";
+IOBUF PORT "sw[0]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "sw[1]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "sw[2]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
+IOBUF PORT "sw[3]" PULLMODE=DOWN IO_TYPE=LVCMOS33;
 
 LOCATE COMP "led[0]" SITE "B2";
 LOCATE COMP "led[1]" SITE "C2";
@@ -17,25 +60,80 @@ LOCATE COMP "led[4]" SITE "D1";
 LOCATE COMP "led[5]" SITE "E2";
 LOCATE COMP "led[6]" SITE "E1";
 LOCATE COMP "led[7]" SITE "H3";
-# (was 'IOBUF GROUP "led"' — GROUP is not valid Trellis LPF; per-port instead)
-IOBUF PORT "led[0]" IO_TYPE=LVCMOS33;
-IOBUF PORT "led[1]" IO_TYPE=LVCMOS33;
-IOBUF PORT "led[2]" IO_TYPE=LVCMOS33;
-IOBUF PORT "led[3]" IO_TYPE=LVCMOS33;
-IOBUF PORT "led[4]" IO_TYPE=LVCMOS33;
-IOBUF PORT "led[5]" IO_TYPE=LVCMOS33;
-IOBUF PORT "led[6]" IO_TYPE=LVCMOS33;
-IOBUF PORT "led[7]" IO_TYPE=LVCMOS33;
+IOBUF PORT "led[0]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "led[1]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "led[2]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "led[3]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "led[4]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "led[5]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "led[6]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "led[7]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
 
-LOCATE COMP "btn[0]" SITE "D6";
-LOCATE COMP "btn[1]" SITE "R1";
-# TODO btn[2..6]
-
+# FPGA -> host serial. PULLMODE=UP so the line idles high (UART idle) even
+# while the FPGA is unconfigured, which stops the host seeing a break.
 LOCATE COMP "ftdi_rxd" SITE "L4";
-IOBUF PORT "ftdi_rxd" IO_TYPE=LVCMOS33;
+IOBUF  PORT "ftdi_rxd" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
 
+# keep the ESP32 booted (it can power-cycle the board otherwise)
 LOCATE COMP "wifi_gpio0" SITE "L2";
+IOBUF  PORT "wifi_gpio0" PULLMODE=UP IO_TYPE=LVCMOS33;
 
-# TODO: gp[0..27] / gn[0..27] sites from the official constraint file
-# (QSPI Pmod on gp[0..7] needs IO_TYPE=LVCMOS33 and no pull;
-#  PS/2 on gp[8..9] needs PULLMODE=UP)
+# ---- J1: QSPI memory Pmod (bidirectional) ----
+# Carries uio[7:0] = CS0, SD0, SD1, SCK, SD2, SD3, CS1, CS2 in TT order.
+# The Cartridge Pmod fits here: it is a TT QSPI Pmod with CS2 (uio[7])
+# replaced by an audio chain, and koti holds CS2 permanently high, so the
+# pin koti does not use is exactly the pin the Cartridge Pmod repurposed.
+# PULLMODE=UP keeps the chip selects deasserted while the FPGA configures.
+LOCATE COMP "pmod_gp[0]" SITE "B11";
+LOCATE COMP "pmod_gp[1]" SITE "A10";
+LOCATE COMP "pmod_gp[2]" SITE "A9";
+LOCATE COMP "pmod_gp[3]" SITE "B9";
+LOCATE COMP "pmod_gn[0]" SITE "C11";
+LOCATE COMP "pmod_gn[1]" SITE "A11";
+LOCATE COMP "pmod_gn[2]" SITE "B10";
+LOCATE COMP "pmod_gn[3]" SITE "C10";
+IOBUF PORT "pmod_gp[0]" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "pmod_gp[1]" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "pmod_gp[2]" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "pmod_gp[3]" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "pmod_gn[0]" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "pmod_gn[1]" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "pmod_gn[2]" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "pmod_gn[3]" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+
+# ---- J2: Tiny VGA Pmod (outputs) ----
+# Carries uo[7:0]. In koti's VGA personality that is
+# {HSync, B0/UART, G0, R0, VSync, B1, G1, R1} — the Tiny VGA Pmod order.
+# In the headless personality the same pins carry UART/HALTED/LEDs, which is
+# harmless: a monitor sees no sync and stays blank, which is correct.
+LOCATE COMP "vga_gp[0]" SITE "A7";
+LOCATE COMP "vga_gp[1]" SITE "C8";
+LOCATE COMP "vga_gp[2]" SITE "C6";
+LOCATE COMP "vga_gp[3]" SITE "A6";
+LOCATE COMP "vga_gn[0]" SITE "A8";
+LOCATE COMP "vga_gn[1]" SITE "B8";
+LOCATE COMP "vga_gn[2]" SITE "C7";
+LOCATE COMP "vga_gn[3]" SITE "B6";
+IOBUF PORT "vga_gp[0]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF PORT "vga_gp[1]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF PORT "vga_gp[2]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF PORT "vga_gp[3]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF PORT "vga_gn[0]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF PORT "vga_gn[1]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF PORT "vga_gn[2]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF PORT "vga_gn[3]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
+
+# ---- PS/2 keyboard on gp[8] (clock) and gp[9] (data) ----
+# Both are INPUTS to the FPGA: koti's ps2_rx only ever samples, and ui is
+# input-only on the chip, so nothing here can drive the bus.
+#
+# !! EXTERNAL PULL-UPS REQUIRED. PS/2 is an open-collector bus: the keyboard
+# only ever pulls low and something else must pull high. The FPGA's internal
+# pull-up is ~10-50 kOhm against PS/2's 1-10 kOhm requirement, so PULLMODE=UP
+# below is a floating-line guard, NOT a working bus termination. Fit ~4.7 kOhm
+# to 3.3 V on both lines. (Strictly PS/2 wants 5 V; most keyboards work at
+# 3.3 V, and the alternative is the US2 port with a passive USB->PS/2 adapter.)
+LOCATE COMP "ps2_gp[0]" SITE "A4";
+LOCATE COMP "ps2_gp[1]" SITE "A2";
+IOBUF PORT "ps2_gp[0]" PULLMODE=UP IO_TYPE=LVCMOS33;
+IOBUF PORT "ps2_gp[1]" PULLMODE=UP IO_TYPE=LVCMOS33;

@@ -1,42 +1,95 @@
 # Koti-1 — plan
 
-## TODO (state as of 2026-07-19: hardware-complete, 6 suites green)
+## GOAL — restated 2026-08-02 by user directive: **FPGA, not silicon**
 
-User actions — everything below is blocked on one of these:
-1. [ ] **Generate the RF macro with DFFRAM — NOT a human ask** (CORRECTED
-       2026-07-22, verified). AUCOHL/DFFRAM's docs list a sky130 config
-       "Register File: 32x32 (2R1W)" that emits netlist + LEF + GDS + lib for
-       OpenLane/LibreLane — exactly this regfile. The old "ask tnt" line was for
-       Munaut's ONE unpackaged macro, and the "DFFRAM is 1RW-only" claim below is
-       WRONG. Command shape: `dffram.py -p sky130A -s sky130_fd_sc_hd -b <rf-2r1w>
-       32x32` — an OpenLane/nix flow, i.e. a LINUX env, so run it in **CI** or
-       under **WSL** (TODO #4 unblocks it locally; this machine has no docker/
-       WSL/nix). Pipeline is already sync-read/macro-ready; this unblocks the 8x2
-       harden. => Claude/CI-executable, no person required.
-2. [ ] **Submit TinyRV32 + ServoCtl-8 to TTSKY26c** — hard deadline
-       ~2026-09-07. Both repos are ready; form-filling only.
-3. [ ] **Order the ULX3S 85F** (~$155 Crowd Supply, ~1 month lead).
-4. [ ] **Install WSL** (`wsl --install`, admin + reboot) — unblocks
-       the kernel ladder.
+> **A computer I can actually use.** CPU + OS + memory + peripherals, running
+> on the ULX3S 85F. Not a demo that boots once for a photograph — a machine
+> you sit down at, with a keyboard and a screen, and use.
 
-Then, in order (mostly Claude-executable once unblocked):
-5. [ ] Integrate the RF macro (body swap in src/regfile.sv +
-       LibreLane EXTRA_LEFS/GDS + placement); re-harden 8x2.
-6. [ ] xv6 rv32 port on the SBI firmware (first sv32 workload).
-7. [ ] Buildroot nommu uLinux, console on UART (frontier rung 1 —
-       submittable on its own).
-8. [ ] Mainline sv32 Linux, console on the VGA text mode (rung 2 —
-       the frontier claim). Yocto layer after.
-9. [ ] ULX3S bring-up: verify LPF pins, build, **font glyph visual
-       check** on a real monitor.
-10.[ ] Submit Koti-1 to the shuttle after TTSKY26c.
+**Koti's Linux is an FPGA target. It is not going to a shuttle.** That is a
+deliberate scope decision, and it changes what the constraints are:
 
-**Goal:** the first Tiny Tapeout chip to boot full MMU Linux *visibly* — a
-single-chip home computer (fi. *kotitietokone*): monitor on the VGA Pmod,
-keyboard on PS/2, mainline sv32 Linux with the console on screen. Ladder
-rung 1 (nommu uLinux + VGA console) is already a TT first on its own;
-rung 2 (sv32/S-mode) is the frontier. Precedent that the memory-starved
-half works: KianV RV32IMA uLinux SoC (TT06, 30 MHz, QSPI Pmod).
+| Was (TT silicon) | Is now (ULX3S) |
+| --- | --- |
+| 8x2 tiles, ~2 mm², area is the binding constraint | 10% of an 85F used; **84k LUTs, ~3.7 Mbit BRAM free** |
+| Memory = 8 MB QSPI PSRAM on a Pmod, serial, high latency | **32 MB SDRAM onboard**, 16-bit parallel — 1-2 orders of magnitude faster |
+| `ui` pins input-only ⇒ receive-only PS/2, no caps-lock LED | Every gp/gn pin is bidirectional; `usb_fpga_bd_*` exists ⇒ **USB is on the table** |
+| Video = Tiny VGA Pmod, 8 pins, RGB222 | VGA Pmod *or* onboard **GPDI/HDMI** |
+| No storage; software lives in flash | **Onboard microSD** ⇒ a real root filesystem |
+| Regfile needs a DFFRAM macro to route | Regfile is flops; no macro, no harden |
+
+Consequence: **the ASIC blockers are no longer on the critical path.** The
+32x32 RF macro, the red 8x2 harden and the shuttle submission are parked
+below, not deleted — Koti-1-as-a-chip stays a possible future project, but
+nothing about the computer waits on it.
+
+The self-imposed rule that the FPGA build instantiates `tt_um_koti`
+*unchanged* was there so the FPGA validated the thing being hardened. With
+hardening off the critical path that rule is now a choice, not a
+requirement — see "Open architecture decisions" below.
+
+## TODO — the ladder to a usable machine
+
+Hardware bring-up (needs the board in hand):
+1. [ ] **ULX3S first power-up** — `fpga/ulx3s/README.md`, steps 1-7. Bitstream
+       and harness are done and green (31.69 MHz, 4/4 harness tests). Needs:
+       the board, a **Tiny VGA Pmod** (€15, not yet bought), a **PS/2
+       keyboard**, and the Cartridge Pmod you already have.
+       Closes the long-standing **font glyph visual check**.
+
+Software, in order:
+2. [ ] **Keyboard hookup.** `sw/sbi/sbi.c:59` still returns -1 for console
+       getchar — the PS/2 block works in RTL and in sim, but nothing above it
+       reads. This is the smallest step and the first one that makes the
+       machine interactive.
+3. [ ] **Memory decision, then act on it** (see below). Everything from here
+       up is shaped by whether Linux lives in 8 MB of QSPI PSRAM or 32 MB of
+       SDRAM.
+4. [ ] xv6 rv32 port on the SBI firmware — first sv32 workload, and a much
+       shorter path to "an OS is running" than Linux.
+5. [ ] Buildroot nommu uLinux, console on UART.
+6. [ ] Mainline sv32 Linux, console on the VGA/HDMI text mode.
+7. [ ] **Root filesystem on microSD** — the step that turns a booting kernel
+       into a computer. Needs a block driver; console's `sd_spi.sv` is a
+       proven starting point.
+8. [ ] A keyboard driver + devicetree node for Linux. koti's PS/2 block is
+       **not** an i8042 — it is one MMIO word `{avail[8], scancode[7:0]}`,
+       read-to-clear, raising `meip`. Mainline will not recognise it.
+
+Parked — Koti-1 as a chip (nothing above depends on these):
+- [ ] Generate the 32x32 2R1W regfile macro with AUCOHL/DFFRAM
+      (`dffram.py -p sky130A -s sky130_fd_sc_hd -b <rf-2r1w> 32x32`; a Linux
+      flow, so CI or WSL). Verified open and self-generatable 2026-07-22.
+- [ ] Integrate it and re-harden 8x2 (currently red — PDN-0233).
+- [ ] Submit Koti-1 to a shuttle.
+
+## Open architecture decisions
+
+These are worth deciding before item 4, because they change everything after
+it. None is urgent; all are now *possible* only because silicon is off the
+path.
+
+1. **Where does Linux's RAM live?** Today: 8 MB QSPI PSRAM on the Cartridge
+   Pmod, reached one serial transaction at a time. The ULX3S has **32 MB of
+   16-bit SDRAM soldered on**. For a machine that must be *usable*, this is
+   the single highest-impact change: 8 MB is very tight for mainline sv32
+   Linux, and QSPI latency is the difference between a boot you time with a
+   stopwatch and one you don't. Cost: an SDRAM controller, and the FPGA
+   build stops being pin-identical to `tt_um_koti`.
+2. **Keyboard: keep PS/2, or move to USB?** PS/2 is written, tested and
+   costs ~50 flops; it only exists in this shape because TT's `ui` pins
+   cannot drive a wire. On FPGA, `usb_fpga_bd_dp/dn` are bidirectional and
+   open low-speed USB host cores exist for this board. PS/2 first regardless
+   — it works today — but "modern keyboard" stopped being impossible.
+3. **Video: VGA Pmod or onboard GPDI?** The VGA Pmod path is done and the
+   monitor and cable are bought. GPDI needs no Pmod at all and frees eight
+   pins, at the cost of a TMDS encoder.
+4. **Caches.** koti currently has none and uses **zero BRAM**. There is
+   ~3.7 Mbit sitting unused. Even a small I-cache would change the felt
+   speed of the machine more than any clock-rate work.
+
+Precedent that the memory-starved version works at all: KianV RV32IMA uLinux
+SoC (TT06, 30 MHz, QSPI Pmod).
 
 Base: TinyRV32 (tt-riscv), core vendored in `core/`. The QSPI memory
 subsystem (fetch FSM, 2:1 arbiter, serial-boot + quad opt-in) carries

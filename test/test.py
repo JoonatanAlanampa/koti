@@ -708,7 +708,20 @@ async def test_keyboard_echoes_through_sbi(dut):
         await ps2_send_pins(dut, sc)
         await ClockCycles(dut.clk, 400)
 
-    assert await rx == b"hiA"
+    # Diagnostics, not decoration. This test failed on its first two runs with
+    # NO uart output at all, and "nothing came out" does not say whether the
+    # keystroke never became a character or whether it did and the UART decode
+    # missed it. sbi_putchar mirrors to the VGA charbuf, so the charbuf is an
+    # independent witness: "STK" alone means the getchar path returned -1
+    # forever; "STKhiA" means the characters exist and only the UART read is
+    # wrong. PS2_DATA is read-to-clear, so it cannot be inspected after the
+    # fact — the mirror is the only record.
+    try:
+        got = await rx
+    except AssertionError as e:
+        cb = bytes(ram.mem[0x8000:0x8020])
+        raise AssertionError(f"{e}; VGA charbuf mirror = {cb!r}") from None
+    assert got == b"hiA", f"charbuf mirror = {bytes(ram.mem[0x8000:0x8020])!r}"
 
 
 @cocotb.test()

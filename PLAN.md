@@ -38,10 +38,17 @@ Hardware bring-up (needs the board in hand):
        Closes the long-standing **font glyph visual check**.
 
 Software, in order:
-2. [ ] **Keyboard hookup.** `sw/sbi/sbi.c:59` still returns -1 for console
-       getchar — the PS/2 block works in RTL and in sim, but nothing above it
-       reads. This is the smallest step and the first one that makes the
-       machine interactive.
+2. [x] **Keyboard hookup — DONE 2026-08-02.** `sw/ps2kbd.c` translates scancode
+       set 2 (US layout, shift, no caps-lock — the lock LEDs are host-driven and
+       this design cannot transmit), SBI `console_getchar` returns real
+       characters, and the S-mode payload ends in an echo loop. Two tests type
+       at the machine and read the characters back off the UART; both green.
+       ⚠ Known limitation, documented in `src/project.sv`: the keyboard byte
+       register is single-entry with no overrun flag, so bytes arriving faster
+       than software polls are dropped silently. Harmless against a real
+       keyboard (0.7-1.1 ms per frame vs a ~0.28 ms poll), but **a Linux driver
+       decoding E0/F0 prefix sequences will need an overrun bit** — a dropped
+       byte desynchronises the decoder and nothing currently reports it.
 3. [ ] **Memory decision, then act on it** (see below). Everything from here
        up is shaped by whether Linux lives in 8 MB of QSPI PSRAM or 32 MB of
        SDRAM.

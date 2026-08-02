@@ -73,7 +73,7 @@ jobs:
           src=$(grep -vE '^[[:space:]]*(#|$)' fpga/ulx3s/sources.txt | tr '\n' ' ')
           echo "sources: $src"
           yosys -l fpga/ulx3s/build/yosys.log \
-            -p "read_verilog -sv -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
+            -p "read_verilog -sv -DKOTI_FPGA -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
 
       # nextpnr fails by design when the 25 MHz constraint in ulx3s.lpf is not
       # met. Capture its exit code instead of letting the step die, so the

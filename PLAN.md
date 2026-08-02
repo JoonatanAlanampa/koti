@@ -76,13 +76,16 @@ These are worth deciding before item 4, because they change everything after
 it. None is urgent; all are now *possible* only because silicon is off the
 path.
 
-1. **Where does Linux's RAM live?** Today: 8 MB QSPI PSRAM on the Cartridge
-   Pmod, reached one serial transaction at a time. The ULX3S has **32 MB of
-   16-bit SDRAM soldered on**. For a machine that must be *usable*, this is
-   the single highest-impact change: 8 MB is very tight for mainline sv32
-   Linux, and QSPI latency is the difference between a boot you time with a
-   stopwatch and one you don't. Cost: an SDRAM controller, and the FPGA
-   build stops being pin-identical to `tt_um_koti`.
+1. ~~**Where does Linux's RAM live?**~~ **DECIDED AND DONE 2026-08-02: the
+   onboard SDRAM.** `src/sdram_ctrl.sv` speaks the same request-port contract
+   as `qspi_ctrl` and is selected by `KOTI_FPGA` in `src/project.sv`, so the
+   ULX3S build serves the RAM half of the map from the board's 32 MB part.
+   Measured **10 clocks for a random 32-bit read against QSPI's ~130**.
+   The memory MAP is unchanged on purpose — `addr[22]` still picks flash from
+   RAM, RAM still starts at `0x01000000` — so link scripts, the SBI firmware,
+   the charbuf address and every existing test carried over untouched. The
+   16 MB window reaches half the part; widening it needs a wider address bus
+   through the core and arbiter, for memory sv32 Linux does not need.
 2. **Keyboard: keep PS/2, or move to USB?** PS/2 is written, tested and
    costs ~50 flops; it only exists in this shape because TT's `ui` pins
    cannot drive a wire. On FPGA, `usb_fpga_bd_dp/dn` are bidirectional and

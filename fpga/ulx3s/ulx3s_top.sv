@@ -61,7 +61,22 @@ module ulx3s_top (
     // PS/2 keyboard: gp[8] = clock, gp[9] = data. Inputs only — koti's
     // ps2_rx samples the bus and never drives it, which is also why this
     // works on silicon, where `ui` is input-only.
-    input  wire  [1:0] ps2_gp
+    input  wire  [1:0] ps2_gp,
+
+    // Onboard 32 MB SDRAM. This is the half of the memory map that used to be
+    // the QSPI Pmod's PSRAM: same addresses, roughly ten times the speed and
+    // four times the size. It exists here and not on the chip because it needs
+    // forty pins, which is why the SoC builds it behind `KOTI_FPGA`.
+    output logic        sdram_clk,
+    output wire         sdram_cke,
+    output wire         sdram_csn,
+    output wire         sdram_rasn,
+    output wire         sdram_casn,
+    output wire         sdram_wen,
+    output wire  [12:0] sdram_a,
+    output wire  [1:0]  sdram_ba,
+    output wire  [1:0]  sdram_dqm,
+    inout  wire  [15:0] sdram_d
 );
 
   assign wifi_gpio0 = 1'b1;                  // keep the ESP32 booted
@@ -84,12 +99,36 @@ module ulx3s_top (
   // btn[1..6] are pulled down, so a press reads 1 at MMIO 0x10008.
   wire [7:0] ui_in = {btn[6:1], ps2_gp[1], ps2_gp[0]};
 
+  // SDRAM data bus, resolved here rather than inside the SoC — same split as
+  // the QSPI pins, and the same reason: a tri-state driver is a pad-ring
+  // concern, not a design one.
+  wire [15:0] sdram_dout;
+  wire        sdram_doe;
+  assign sdram_d = sdram_doe ? sdram_dout : 16'bz;
+
+  // The part latches on the RISING edge of its own clock, so feeding it the
+  // inverted system clock puts our outputs half a cycle ahead of it: 20 ns of
+  // setup at 25 MHz, and 20 ns of hold on the way back. At this speed that is
+  // ample and needs no ODDR or PLL phase shift.
+  always_comb sdram_clk = ~clk_25mhz;
+
   tt_um_koti dut (
       .ui_in   (ui_in),
       .uo_out  (uo_out),
       .uio_in  (uio_in),
       .uio_out (uio_out),
       .uio_oe  (uio_oe),
+      .sdram_cke  (sdram_cke),
+      .sdram_csn  (sdram_csn),
+      .sdram_rasn (sdram_rasn),
+      .sdram_casn (sdram_casn),
+      .sdram_wen  (sdram_wen),
+      .sdram_a    (sdram_a),
+      .sdram_ba   (sdram_ba),
+      .sdram_dqm  (sdram_dqm),
+      .sdram_dout (sdram_dout),
+      .sdram_doe  (sdram_doe),
+      .sdram_din  (sdram_d),
       .ena     (1'b1),
       .clk     (clk_25mhz),
       .rst_n   (rst_n)

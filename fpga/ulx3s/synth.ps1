@@ -39,7 +39,7 @@ python fpga\ulx3s\check_pins.py
 if ($LASTEXITCODE -ne 0) { throw "check_pins.py failed - fix the pin plan first" }
 
 yosys -q -l fpga\ulx3s\build\yosys.log `
-      -p "read_verilog -sv -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
+      -p "read_verilog -sv -DKOTI_FPGA -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
 if ($LASTEXITCODE -ne 0) { throw "yosys failed - see fpga\ulx3s\build\yosys.log" }
 Write-Output "OK: fpga\ulx3s\build\koti.json"
 

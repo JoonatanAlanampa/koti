@@ -25,6 +25,7 @@ src/project.sv
 # ---- the SoC (identical to what the ASIC flow hardens) ----
 src/koti_core.sv
 src/qspi_ctrl.sv
+src/sdram_ctrl.sv
 src/clint.sv
 src/vga_text.sv
 src/vga_timing.sv

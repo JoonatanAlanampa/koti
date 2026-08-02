@@ -58,6 +58,30 @@ module tb_fpga ();
   pullup (pmod_gp[0]); pullup (pmod_gp[1]); pullup (pmod_gp[2]); pullup (pmod_gp[3]);
   pullup (pmod_gn[0]); pullup (pmod_gn[1]); pullup (pmod_gn[2]); pullup (pmod_gn[3]);
 
+  // ---- onboard SDRAM ------------------------------------------------------
+  // The RAM half of the memory map now lands here rather than on the QSPI
+  // Pmod, so the harness needs a part to talk to or nothing that touches a
+  // stack, a page table or the charbuf will work.
+  wire        sdram_clk, sdram_cke, sdram_csn, sdram_rasn, sdram_casn, sdram_wen;
+  wire [12:0] sdram_a;
+  wire [1:0]  sdram_ba, sdram_dqm;
+  wire [15:0] sdram_d;
+
+  wire [15:0] part_dout;
+  wire        part_oe;
+  assign sdram_d = part_oe ? part_dout : 16'hzzzz;
+
+  // The part is clocked on sdram_clk, which the harness drives as ~clk. Feeding
+  // the model the same inverted clock is what makes this bench test the real
+  // arrangement rather than a convenient one.
+  sdram_model #(.CL(2)) part (
+      .clk(sdram_clk), .cke(sdram_cke), .csn(sdram_csn),
+      .rasn(sdram_rasn), .casn(sdram_casn), .wen(sdram_wen),
+      .a(sdram_a), .ba(sdram_ba), .dqm(sdram_dqm),
+      .din(sdram_d), .doe(1'b0),
+      .dout(part_dout), .dout_oe(part_oe)
+  );
+
   ulx3s_top uut (
       .clk_25mhz  (clk),
       .btn        (btn),
@@ -69,7 +93,17 @@ module tb_fpga ();
       .pmod_gn    (pmod_gn),
       .vga_gp     (vga_gp),
       .vga_gn     (vga_gn),
-      .ps2_gp     (ps2_gp)
+      .ps2_gp     (ps2_gp),
+      .sdram_clk  (sdram_clk),
+      .sdram_cke  (sdram_cke),
+      .sdram_csn  (sdram_csn),
+      .sdram_rasn (sdram_rasn),
+      .sdram_casn (sdram_casn),
+      .sdram_wen  (sdram_wen),
+      .sdram_a    (sdram_a),
+      .sdram_ba   (sdram_ba),
+      .sdram_dqm  (sdram_dqm),
+      .sdram_d    (sdram_d)
   );
 
   // Convenience for the tests: what the chip itself sees, so a failure can be

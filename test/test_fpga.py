@@ -94,6 +94,33 @@ async def spi_bus_fpga(dut, flash, ram, seat_flip):
         prev_sck = sck
 
 
+def sdram_bytes(dut, byte_addr, n):
+    """Read bytes out of the SDRAM part model, by CPU byte address.
+
+    Since the RAM half of the map moved off the QSPI Pmod, anything the program
+    stores — stack, page tables, the VGA charbuf — lands in the SDRAM model
+    instead of in `ram`. Reading it back means walking the same address map the
+    controller uses, which is deliberate: if the SoC and this helper ever
+    disagree about where a word lives, the test fails rather than quietly
+    reading someone else's data.
+
+    CPU word address -> {1'b0, addr[21:0]} at the SoC boundary -> bank
+    addr[22:21], row addr[20:8], col {addr[7:0], half} in the controller ->
+    {ba, row[6:0], col} in the model's reduced array.
+    """
+    out = bytearray()
+    for i in range(n):
+        b = byte_addr + i
+        waddr = (b >> 2) & 0x3FFFFF
+        half = (b >> 1) & 1
+        bank = (waddr >> 21) & 0x3
+        row = (waddr >> 8) & 0x1FFF
+        col = ((waddr & 0xFF) << 1) | half
+        idx = (bank << 16) | ((row & 0x7F) << 9) | col
+        out.append((int(dut.part.mem[idx].value) >> (8 * (b & 1))) & 0xFF)
+    return bytes(out)
+
+
 async def uart_rx_pin(dut, nbytes, timeout=2_000_000):
     """Decode 8N1 off ftdi_rxd — the actual board pin, after the SW3 mux."""
     got = bytearray()
@@ -150,14 +177,18 @@ async def test_harness_boot_mapping_a(dut):
     # bring-up checklist tells you to read.
     assert int(dut.led.value) == int(dut.chip_uo.value)
 
-    # and the program really ran: its console text reached the PSRAM charbuf
+    # And the program really ran: its console text reached the charbuf — which
+    # now lives in the onboard SDRAM rather than the Pmod's PSRAM. This is the
+    # end-to-end proof that the memory swap worked, because the charbuf is
+    # written by the CPU through the arbiter and read back by the video DMA.
     row1 = b"hello, visible world"
     for _ in range(200):
         await ClockCycles(dut.clk, 10_000)
-        if ram.mem[0x8028:0x8028 + len(row1)] == row1:
+        if sdram_bytes(dut, 0x01008028, len(row1)) == row1:
             break
     else:
-        raise AssertionError(f"charbuf: {bytes(ram.mem[0x8028:0x8050])!r}")
+        raise AssertionError(
+            f"charbuf in SDRAM: {sdram_bytes(dut, 0x01008028, 40)!r}")
 
 
 @cocotb.test()

@@ -23,12 +23,40 @@
 
 `default_nettype none
 
+// KOTI_FPGA: build the ULX3S variant, where the RAM half of the memory map is
+// served by the board's onboard 32 MB SDRAM instead of the QSPI Pmod's PSRAM.
+//
+// Why a define rather than a second top: this file IS the SoC, and copying it
+// would mean two versions of the CPU/video/arbiter wiring drifting apart. Why a
+// define rather than a parameter: the SDRAM needs about forty pins, and a
+// module's port list is not parameterisable.
+//
+// The memory MAP is deliberately unchanged — addr[22] still picks flash from
+// RAM and RAM still starts at 0x01000000 — so the linker scripts, the SBI
+// firmware, the charbuf address and every existing test carry over untouched.
+// Only the thing on the other end of the request port changes. The cost is that
+// the 16 MB window reaches half of the 32 MB part; widening it would mean a
+// wider address bus through the core and the arbiter, for memory that mainline
+// sv32 Linux does not need.
 module tt_um_koti (
     input  wire [7:0] ui_in,    // Dedicated inputs
     output wire [7:0] uo_out,   // Dedicated outputs
     input  wire [7:0] uio_in,   // IOs: Input path
     output wire [7:0] uio_out,  // IOs: Output path
     output wire [7:0] uio_oe,   // IOs: Enable path (active high: 0=input, 1=output)
+`ifdef KOTI_FPGA
+    output wire        sdram_cke,
+    output wire        sdram_csn,
+    output wire        sdram_rasn,
+    output wire        sdram_casn,
+    output wire        sdram_wen,
+    output wire [12:0] sdram_a,
+    output wire [1:0]  sdram_ba,
+    output wire [1:0]  sdram_dqm,
+    output wire [15:0] sdram_dout,
+    output wire        sdram_doe,
+    input  wire [15:0] sdram_din,
+`endif
     input  wire       ena,      // always 1 when the design is powered, so you can ignore it
     input  wire       clk,      // clock
     input  wire       rst_n     // reset_n - low to reset
@@ -192,6 +220,47 @@ module tt_um_koti (
       .m_wdata(m_wdata), .m_be(m_be), .m_ack(m_ack)
   );
 
+`ifdef KOTI_FPGA
+  // ---- ULX3S: flash stays on QSPI, RAM moves to the onboard SDRAM ----
+  // addr[22] is the same select the QSPI controller uses internally, so the
+  // split costs one wire and no change to any address anywhere.
+  wire sel_ram = m_addr[22];
+
+  wire        q_ack, s_ack;
+  wire [31:0] q_rdata, q_rdata2, s_rdata, s_rdata2;
+
+  qspi_ctrl qspi (
+      .clk(clk), .rst(rst), .cfg(qspi_cfg),
+      .req(m_req && !sel_ram), .we(m_we), .burst(m_burst), .addr(m_addr),
+      .wdata(m_wdata), .be(m_be),
+      .ack(q_ack), .rdata(q_rdata), .rdata2(q_rdata2),
+      .sck(sck), .sd_out(sd_out), .sd_oe(sd_oe), .sd_in(sd_in),
+      .cs_flash_n(cs_flash_n), .cs_ram_n(cs_ram_n)
+  );
+
+  // addr[22] is dropped on the way in: it was the device select, and inside the
+  // part it would be a bank bit. Passing it through would fold the 16 MB window
+  // onto banks 2-3 and leave 0-1 dead.
+  sdram_ctrl sdram (
+      .clk(clk), .rst(rst),
+      .req(m_req && sel_ram), .we(m_we), .burst(m_burst),
+      .addr({1'b0, m_addr[21:0]}),
+      .wdata(m_wdata), .be(m_be),
+      .ack(s_ack), .rdata(s_rdata), .rdata2(s_rdata2),
+      .sdram_cke(sdram_cke), .sdram_csn(sdram_csn), .sdram_rasn(sdram_rasn),
+      .sdram_casn(sdram_casn), .sdram_wen(sdram_wen), .sdram_a(sdram_a),
+      .sdram_ba(sdram_ba), .sdram_dqm(sdram_dqm),
+      .sdram_dout(sdram_dout), .sdram_doe(sdram_doe), .sdram_din(sdram_din)
+  );
+
+  // Only one controller can have a request in flight, so OR the acks rather
+  // than muxing on sel_ram — the requester may have moved on by the time a slow
+  // QSPI access finally answers, and selecting on the LIVE address would then
+  // route the ack to the wrong place.
+  assign m_ack    = q_ack | s_ack;
+  assign m_rdata  = s_ack ? s_rdata  : q_rdata;
+  assign m_rdata2 = s_ack ? s_rdata2 : q_rdata2;
+`else
   qspi_ctrl qspi (
       .clk(clk), .rst(rst), .cfg(qspi_cfg),
       .req(m_req), .we(m_we), .burst(m_burst), .addr(m_addr),
@@ -200,6 +269,7 @@ module tt_um_koti (
       .sck(sck), .sd_out(sd_out), .sd_oe(sd_oe), .sd_in(sd_in),
       .cs_flash_n(cs_flash_n), .cs_ram_n(cs_ram_n)
   );
+`endif
 
   // QSPI Pmod: uio[1,2,4,5] = SD0..SD3, direction owned by the controller
   assign sd_in = {uio_in[5], uio_in[4], uio_in[2], uio_in[1]};

@@ -17,6 +17,7 @@ SOURCES = [
     SRC_DIR / "project.sv",
     SRC_DIR / "koti_core.sv",
     SRC_DIR / "qspi_ctrl.sv",
+    SRC_DIR / "sdram_ctrl.sv",
     SRC_DIR / "clint.sv",
     SRC_DIR / "vga_text.sv",
     SRC_DIR / "vga_timing.sv",
@@ -32,6 +33,7 @@ SOURCES = [
     SRC_DIR / "tlb.sv",
     SRC_DIR / "uart_tx.sv",
     FPGA_DIR / "ulx3s_top.sv",
+    TEST_DIR / "sdram_model.sv",
     TEST_DIR / "tb_fpga.v",
 ]
 
@@ -42,7 +44,7 @@ def main():
         sources=SOURCES,
         hdl_toplevel="tb_fpga",
         build_dir=TEST_DIR / "sim_build" / "fpga",
-        build_args=["-g2012", f"-I{SRC_DIR}"],
+        build_args=["-g2012", "-DKOTI_FPGA", f"-I{SRC_DIR}"],
         timescale=("1ns", "1ps"),
     )
     # Distinct results file: run.py writes results.xml, and CI uploads that

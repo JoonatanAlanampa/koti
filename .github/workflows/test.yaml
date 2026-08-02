@@ -31,10 +31,20 @@ jobs:
           # make will return success even if the test fails, so check for failure in the results.xml
           ! grep failure results.xml
 
+      # The suite above drives tt_um_koti directly. This one drives the ULX3S
+      # harness (fpga/ulx3s/ulx3s_top.sv) through the J1 header wires, which is
+      # the only thing that exercises the Pmod row permutation, the orientation
+      # straps and the UART source mux. See test/test_fpga.py.
+      - name: ULX3S harness simulation
+        run: |
+          cd test
+          python run_fpga.py
+          ! grep failure results_fpga.xml
+
       - name: Test Summary
         uses: test-summary/action@v2.4
         with:
-          paths: "test/results.xml"
+          paths: "test/results*.xml"
         if: always()
 
       - name: upload waveform and test results
@@ -44,5 +54,7 @@ jobs:
           name: test-results
           path: |
             test/tb.fst
+            test/tb_fpga.fst
             test/results.xml
+            test/results_fpga.xml
             test/output/*

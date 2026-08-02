@@ -342,15 +342,20 @@ whether it survives contact with the board.
 
 ## Open decisions I need from you
 
-1. **PS/2 electrical.** PS/2 is an open-collector 5 V bus. The FPGA's
-   internal pull-ups are far too weak (~10-50 kΩ against PS/2's 1-10 kΩ),
-   so a keyboard on gp[8]/gp[9] needs **external ~4.7 kΩ pull-ups**, and
-   strictly it wants 5 V. Options: (a) external pull-ups to 3.3 V — works
-   with most keyboards, out of spec; (b) the ULX3S US2 port with a passive
-   USB→PS/2 adapter, which is the usual ULX3S route and needs a keyboard
-   that supports PS/2 fallback; (c) defer — nothing before phase 7 needs
-   it. I am building (a) into the pin plan since it matches the existing
-   docs, and it is a two-resistor change to move.
+1. **PS/2 keyboard — you need one, and it is not on the shopping list.**
+   Everything else koti needs is either owned or is the Tiny VGA Pmod.
+   Modern USB keyboards almost never do PS/2 fallback any more, so a
+   passive USB→PS/2 adapter is a gamble; a genuine PS/2 keyboard
+   second-hand is the reliable route. Not urgent — it is the last step of
+   the checklist and nothing before it depends on the keyboard.
+
+   *(Electrical settled, corrected 2026-08-02: power the keyboard from
+   **3.3 V**, with ~4.7 kΩ pull-ups to that same rail. ECP5 IO is not 5 V
+   tolerant. An earlier version of this file was vaguer about that and
+   floated a resistor divider as the 5 V fallback — that is wrong: the
+   keyboard's pull-up to 5 V and a divider to ground fight each other and
+   land the high level near 1.6 V, under the input threshold. If a
+   keyboard will not run at 3.3 V, use a BSS138 level-shifter module.)*
 2. **Which memory Pmod.** The Cartridge Pmod works (see above) and you
    have boards. If you would rather keep the cartridge with the console
    and use a stock TT QSPI Pmod for koti, that is also fine — the J1 pin

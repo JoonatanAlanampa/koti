@@ -166,15 +166,31 @@ timing is alive** even if the monitor shows nothing.
 
 Clock on **gp[8]**, data on **gp[9]**, into `ui[1:0]`.
 
-**Fit external ~4.7 kΩ pull-ups to 3.3 V on both lines.** PS/2 is an
-open-collector bus: the keyboard only ever pulls low, and the FPGA's internal
-pull-up (~10-50 kΩ) is far too weak to be the other half. `PULLMODE=UP` in the
-LPF stops the lines floating; it does not terminate the bus.
+> ⚠ **Power the keyboard from 3.3 V, not 5 V.** PS/2 is nominally a 5 V bus and
+> **ECP5 IO is not 5 V tolerant** — a 5 V-powered keyboard wired straight to
+> gp[8]/gp[9] can damage the FPGA. Running it from the board's 3.3 V rail puts
+> its pull-ups on 3.3 V and every level in spec. Most PS/2 keyboards work fine
+> undervolted, and one that does not simply stays quiet: an undervolt fails
+> safe, an overvolt does not.
 
-Strictly PS/2 wants 5 V. Most keyboards work at 3.3 V; if yours does not, the
-usual ULX3S route is the **US2 port with a passive USB→PS/2 adapter** and a
-keyboard that supports PS/2 fallback. That is a two-resistor change plus a pin
-move in `ulx3s.lpf`.
+Wiring, four wires from the mini-DIN: **pin 4 → 3.3 V, pin 3 → GND, pin 5
+(clock) → gp[8], pin 1 (data) → gp[9]**, plus **~4.7 kΩ from each of clock and
+data up to that same 3.3 V**. PS/2 is open-collector — the keyboard only pulls
+low, so something has to pull high, and the FPGA's internal pull-up (~10-50 kΩ)
+is far too weak to be it. `PULLMODE=UP` in the LPF stops the lines floating; it
+does not terminate the bus.
+
+Nothing here needs the keyboard to be driven, which is why this works at all:
+`ui` is input-only on the chip, so `ps2_rx` is receive-only by design. A
+keyboard completes its power-on self-test and starts sending scancodes on its
+own, without any host command.
+
+If a keyboard refuses to run at 3.3 V, use a **BSS138-type level-shifter
+module** (sold as an "I2C level converter", ~€2) and power it at 5 V. Do *not*
+substitute a plain resistor divider: the keyboard's own pull-up to 5 V and a
+divider to ground fight each other and the high level lands around 1.6 V, below
+the LVCMOS33 input threshold. That combination looks reasonable and does not
+work.
 
 ## Things that will look like bugs and are not
 

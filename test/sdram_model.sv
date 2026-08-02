@@ -63,6 +63,13 @@ module sdram_model #(
                    C_MRS = 4'b0000;
 
   initial begin
+    // Power up with DEFINED contents. Real SDRAM comes up holding arbitrary
+    // bits, not x, and the difference is not cosmetic: an unwritten location
+    // read as x propagates straight through the CPU into `d_req`, the arbiter's
+    // grant register latches x, and the whole SoC wedges — with both acks clean
+    // and nothing pointing at memory. The QSPI model this replaced returned
+    // zeros from a bytearray and so never showed the problem.
+    for (i = 0; i < 262144; i = i + 1) mem[i] = 16'h0000;
     initialised = 1'b0;
     dout_oe = 1'b0;
     dout = 16'd0;

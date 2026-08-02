@@ -18,6 +18,7 @@
 
 void sbi_init(void) {
     con_init();
+    ps2_init();                  // .bss is NOLOAD here — see ps2kbd.h
     VGA_CTRL = 3;                // VGA on + UART mirrored on blue LSB
 }
 

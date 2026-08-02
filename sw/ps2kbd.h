@@ -2,6 +2,15 @@
 #ifndef PS2KBD_H
 #define PS2KBD_H
 
+// Clear the decoder state. MUST be called before the first ps2_getchar().
+//
+// Not optional and not defensive: this firmware's .bss is NOLOAD in PSRAM and
+// nothing zeroes it (see sw/sbi/link.ld — "firmware state is .bss in PSRAM,
+// written before read"). An uninitialised `releasing` flag reads as garbage,
+// and garbage-nonzero means every scancode is swallowed as a key release and
+// the keyboard appears completely dead.
+void ps2_init(void);
+
 // Poll the keyboard. Returns the next character, or -1 if none is ready.
 //
 // Non-blocking on purpose: this is what SBI legacy console_getchar (EID 0x02)

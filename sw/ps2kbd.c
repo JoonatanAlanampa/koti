@@ -62,9 +62,20 @@ static const char shifted[0x84] = {
 #define SC_LSHIFT 0x12
 #define SC_RSHIFT 0x59
 
+// .bss lives in PSRAM and is NOLOAD — nothing zeroes it (sw/sbi/link.ld). Every
+// one of these must be written before it is read, which is what ps2_init is
+// for. Skipping it does not degrade gracefully: a garbage-nonzero `releasing`
+// eats every scancode as a key release and the keyboard looks dead.
 static uint8_t releasing;      // the last byte was 0xF0
 static uint8_t extended;       // the last byte was 0xE0
 static uint8_t lshift, rshift;
+
+void ps2_init(void) {
+    releasing = 0;
+    extended  = 0;
+    lshift    = 0;
+    rshift    = 0;
+}
 
 int ps2_getchar(void) {
     uint32_t r = PS2_DATA;     // {avail[8], scancode[7:0]}, read-to-clear

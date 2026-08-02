@@ -244,7 +244,15 @@ module tt_um_koti (
       end else if (!inflight && m_req) begin
           inflight <= 1'b1;
           sel_q    <= m_addr[22];      // capture once, at the start
-      end else if (m_ack) begin
+      end else if (m_ack || !m_req) begin
+          // Release on a DROPPED request as well as on an ack. A requester may
+          // walk away before it is served — the fetch port does exactly that on
+          // a pipeline flush — and without this clause `inflight` latches
+          // forever, `sel_ram` stays frozen on whichever device that abandoned
+          // request wanted, and every later access to the OTHER device is
+          // routed to a controller that never sees a request. The CPU then
+          // stalls on a fetch that can never complete, which looks like the
+          // machine simply stopping.
           inflight <= 1'b0;
       end
 

@@ -282,8 +282,20 @@ module tt_um_koti (
   // QSPI access finally answers, and selecting on the LIVE address would then
   // route the ack to the wrong place.
   assign m_ack    = q_ack | s_ack;
-  assign m_rdata  = s_ack ? s_rdata  : q_rdata;
-  assign m_rdata2 = s_ack ? s_rdata2 : q_rdata2;
+
+  // Select on the ACK, and fall back to zero rather than to whichever
+  // controller happens not to be acking.
+  //
+  // `s_ack ? s_rdata : q_rdata` looks equivalent — read data is only meaningful
+  // during an ack, so who cares what it says otherwise — but it is not. An idle
+  // qspi_ctrl has an undefined shift register, so that expression puts x on
+  // m_rdata for most of the run. Anything that samples the bus off-ack, or any
+  // x that leaks one gate further than expected, then latches x into the CPU,
+  // and x in a register address turns into x on d_req, which the arbiter's
+  // grant selector latches, and the SoC wedges with nothing pointing at memory.
+  // Defaulting to zero cannot change any correct behaviour and denies x a path.
+  assign m_rdata  = s_ack ? s_rdata  : q_ack ? q_rdata  : 32'd0;
+  assign m_rdata2 = s_ack ? s_rdata2 : q_ack ? q_rdata2 : 32'd0;
 `else
   qspi_ctrl qspi (
       .clk(clk), .rst(rst), .cfg(qspi_cfg),

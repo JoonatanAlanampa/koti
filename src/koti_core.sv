@@ -47,6 +47,28 @@ module koti_core #(
     input  logic        d_ack,
     input  logic [31:0] d_rdata
 );
+
+    // ---- forward declarations ----------------------------------------
+    // Every signal below is used above the point it was originally
+    // declared. Icarus 12 tolerated that; Icarus 14 does not ("Unable to
+    // bind ... Check for declaration after use"), which meant koti's
+    // simulations could not run on the oss-cad-suite toolchain installed
+    // here AT ALL - every debug cycle had to go through a 14-minute CI
+    // round trip. Declaring them here and leaving each expression exactly
+    // where it was changes no logic.
+    logic [19:0] dw_vpn;
+    logic [19:0] iw_vpn;
+    logic [4:0]  rs1_e, rs2_e, rd_e;
+    wire        dw_fill;
+    wire        dw_pte_fault;
+    wire        iw_fill;
+    wire        iw_pte_fault;
+    wire [21:0] dw_fppn;
+    wire [21:0] iw_fppn;
+    wire [31:0] dpte;
+    wire [31:0] ipte;
+    wire [31:0] mem_word;
+
     // ================= F: fetch FSM + ITLB / i-walker =================
     logic [31:0] instr_d, pc_d;          // IF/ID
     logic        valid_d, ipf_d;         // ipf: poisoned fetch, traps at EX
@@ -97,23 +119,22 @@ module koti_core #(
     // Fills are path-independent, so a redirect mid-walk needs no abort:
     // the walk completes against its latched vpn and simply fills.
     logic [1:0]  iw_state;               // 0 idle, 1 level-1, 2 level-0
-    logic [19:0] iw_vpn;
     logic [22:0] iw_addr;
 
     assign if_req  = fbusy || (iw_state != 2'd0);
     assign if_addr = (iw_state != 2'd0) ? iw_addr : fpc_pa[24:2];
 
-    wire [31:0] ipte     = if_rdata;
+    assign ipte = if_rdata;
     wire        ipte_bad = !ipte[0] || (!ipte[1] && ipte[2]);   // !V, W&!R
     wire        ipte_leaf = ipte[1] || ipte[3];                 // R or X
     wire        iw_l1 = if_ack && iw_state == 2'd1;
     wire        iw_l0 = if_ack && iw_state == 2'd2;
-    wire        iw_pte_fault = ipte_bad
+    assign iw_pte_fault = ipte_bad
                     || (iw_l1 && ipte_leaf && ipte[19:10] != 10'd0)
                     || (iw_l0 && !ipte_leaf)
                     || (ipte_leaf && !ipte[6]);                 // A = 0
-    wire        iw_fill = (iw_l1 && (ipte_bad || ipte_leaf)) || iw_l0;
-    wire [21:0] iw_fppn = iw_l1 ? {ipte[31:20], iw_vpn[9:0]}    // megapage
+    assign iw_fill = (iw_l1 && (ipte_bad || ipte_leaf)) || iw_l0;
+    assign iw_fppn = iw_l1 ? {ipte[31:20], iw_vpn[9:0]}    // megapage
                                 : ipte[31:10];
 
     wire advance = !halted && !pstall;
@@ -307,7 +328,6 @@ module koti_core #(
     logic [1:0]  alu_a_src_e, wb_src_e;
     logic [3:0]  alu_op_e;
     logic [2:0]  funct3_e;
-    logic [4:0]  rs1_e, rs2_e, rd_e;
     logic        byp1_e, byp2_e;
     logic [31:0] pc_e, imm_e, bypv_e;
 
@@ -453,21 +473,20 @@ module koti_core #(
     // Never aborted: irqs are gated on !pstall, and nothing older than
     // EX can flush it.
     logic [1:0]  dw_state;
-    logic [19:0] dw_vpn;
     logic [22:0] dw_addr;
     wire dw_req  = (dw_state != 2'd0) && !m_port_busy;
     wire dw_ack  = d_ack && dw_req;
-    wire [31:0] dpte     = d_rdata;
+    assign dpte = d_rdata;
     wire        dpte_bad = !dpte[0] || (!dpte[1] && dpte[2]);
     wire        dpte_leaf = dpte[1] || dpte[3];
     wire        dw_l1 = dw_ack && dw_state == 2'd1;
     wire        dw_l0 = dw_ack && dw_state == 2'd2;
-    wire        dw_pte_fault = dpte_bad
+    assign dw_pte_fault = dpte_bad
                     || (dw_l1 && dpte_leaf && dpte[19:10] != 10'd0)
                     || (dw_l0 && !dpte_leaf)
                     || (dpte_leaf && !dpte[6]);           // A = 0
-    wire        dw_fill = (dw_l1 && (dpte_bad || dpte_leaf)) || dw_l0;
-    wire [21:0] dw_fppn = dw_l1 ? {dpte[31:20], dw_vpn[9:0]}
+    assign dw_fill = (dw_l1 && (dpte_bad || dpte_leaf)) || dw_l0;
+    assign dw_fppn = dw_l1 ? {dpte[31:20], dw_vpn[9:0]}
                                 : dpte[31:10];
 
     always_ff @(posedge clk)
@@ -711,7 +730,7 @@ module koti_core #(
          .data(st_data[7:0]), .tx(uart_txd), .busy(uart_busy));
 
     // loads: external word through the byte-extension path
-    wire [31:0] mem_word = d_seen ? d_data_r : d_rdata;
+    assign mem_word = d_seen ? d_data_r : d_rdata;
     wire [31:0] ld_shift = mem_word >> (8 * off_m);
     logic [31:0] ld_ext;
     always_comb

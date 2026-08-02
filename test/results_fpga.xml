@@ -1,0 +1,13 @@
+<testsuites name="results">
+  <testsuite name="all" package="all">
+    <property name="random_seed" value="1785681969" />
+    <testcase name="test_harness_boot_mapping_a" classname="test_fpga" file="C:\Users\Joonatan Alanampa\Documents\ASIC\tt-koti\test\test_fpga.py" lineno="166" time="328.2203462123871" sim_time_ns="86254280.0" ratio_time="262793.8243176003">
+      <failure error_type="AssertionError" error_msg="charbuf in SDRAM: b'                                        '" />
+    </testcase>
+    <testcase name="test_harness_boot_mapping_b" classname="test_fpga" file="C:\Users\Joonatan Alanampa\Documents\ASIC\tt-koti\test\test_fpga.py" lineno="194" time="14.570504426956177" sim_time_ns="3633120.0" ratio_time="249347.57874810035" />
+    <testcase name="test_harness_wrong_strap_stays_silent" classname="test_fpga" file="C:\Users\Joonatan Alanampa\Documents\ASIC\tt-koti\test\test_fpga.py" lineno="205" time="49.01597356796265" sim_time_ns="12000200.0" ratio_time="244822.23092766348" />
+    <testcase name="test_harness_uart_strap_follows_vga_mode" classname="test_fpga" file="C:\Users\Joonatan Alanampa\Documents\ASIC\tt-koti\test\test_fpga.py" lineno="228" time="247.76072764396667" sim_time_ns="85188479.99999999" ratio_time="343833.6689195401">
+      <failure error_type="AssertionError" error_msg="UART stalled after b'!'&#10;assert 2000000 &lt; 2000000" />
+    </testcase>
+  </testsuite>
+</testsuites>

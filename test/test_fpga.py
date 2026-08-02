@@ -55,6 +55,18 @@ def uio_from_pins(gp, gn, seat_flip):
 
 async def spi_bus_fpga(dut, flash, ram, seat_flip):
     """Pin-level bus glue, through the J1 header instead of uio directly."""
+    try:
+        await _spi_bus_fpga(dut, flash, ram, seat_flip)
+    except Exception as e:
+        # A background coroutine that dies takes the flash model with it, and
+        # the only symptom is qspi_ctrl sitting in its read state forever while
+        # the CPU waits for a fetch that will never be answered. That reads as
+        # a hardware hang and is not one, so say so loudly.
+        dut._log.error(f"SPI BUS MODEL DIED: {type(e).__name__}: {e}")
+        raise
+
+
+async def _spi_bus_fpga(dut, flash, ram, seat_flip):
     prev_sck = 0
     dut.mem_dq1_oe.value = 0
     dut.mem_dq1.value = 1

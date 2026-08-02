@@ -224,7 +224,31 @@ module tt_um_koti (
   // ---- ULX3S: flash stays on QSPI, RAM moves to the onboard SDRAM ----
   // addr[22] is the same select the QSPI controller uses internally, so the
   // split costs one wire and no change to any address anywhere.
-  wire sel_ram = m_addr[22];
+  // Which device serves the transaction IN FLIGHT — latched, not combinational.
+  //
+  // The obvious version, `wire sel_ram = m_addr[22]`, is a trap. It makes each
+  // controller's `req` depend on the live address, so anything that disturbs
+  // m_addr mid-transaction yanks the request out from under whichever
+  // controller is halfway through one. qspi_ctrl then sits in its read state
+  // forever, the arbiter waits for an ack that will never come, and the CPU
+  // stalls on a fetch — which is exactly the hang this replaced.
+  //
+  // m_addr is driven by a combinational case on the arbiter's grant, and grant
+  // is a 2-bit register with no reset value in some paths, so it is not
+  // something to route a live request line through.
+  reg  inflight, sel_q;
+  always @(posedge clk)
+      if (rst) begin
+          inflight <= 1'b0;
+          sel_q    <= 1'b0;
+      end else if (!inflight && m_req) begin
+          inflight <= 1'b1;
+          sel_q    <= m_addr[22];      // capture once, at the start
+      end else if (m_ack) begin
+          inflight <= 1'b0;
+      end
+
+  wire sel_ram = inflight ? sel_q : m_addr[22];
 
   wire        q_ack, s_ack;
   wire [31:0] q_rdata, q_rdata2, s_rdata, s_rdata2;

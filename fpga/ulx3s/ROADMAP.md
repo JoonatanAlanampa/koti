@@ -11,6 +11,35 @@ does not pass, that phase is not done, whatever the prose says.
 
 ---
 
+## Status — updated 2026-08-02
+
+| Phase | State | Evidence |
+| --- | --- | --- |
+| 1 Pin constraints | **done** | `check_pins.py`: 40 ports, 40 locates, 40/40 sites cross-checked vs console's diffed file |
+| 2 Harness rewrite | **done** | elaborates; the header-geometry bug is fixed |
+| 3 Build infrastructure | **done** | `sources.txt`, `synth.ps1`, `.github/workflows/fpga-ulx3s.yaml` |
+| 4 First green bitstream | **done** | run 30746378495: **9102 COMB (10%), 2835 FF (3%), 40 IO, 31.69 MHz PASS at 25 MHz**, `koti.bit` 1.93 MB |
+| 5 Harness simulation | **done** | run 30746646060: 4/4 harness tests, plus the 6 existing ones still green |
+| 6 Flash path | **done** | the cartridge writer's mapping is byte-identical to koti's; procedure in README step 4 |
+| 7 Bring-up checklist | **done** | `README.md` |
+
+**Tier A and tier B are complete; "flash a bitstream" is now a true
+sentence for koti.** What remains is hardware: the board, the resistors,
+and the steps in `README.md`.
+
+Two results worth pulling out of the table:
+
+- **31.69 MHz, not 34.8.** Constraining every pin to a real ball cost
+  about 3 MHz against the 2026-07-22 unconstrained run. 26.8% margin over
+  the 25 MHz the design actually runs at, so this is comfortable — but it
+  is the honest number, and the older one should not be quoted again.
+- **The two harnesses agree.** koti's J1 row algebra and the cartridge
+  Pmod bring-up bitstream's, written independently months apart, assign
+  the same `uio` bit to the same header wire. That is the strongest
+  cross-check available without hardware.
+
+---
+
 ## Where this actually stands (audited 2026-08-02)
 
 The scaffold was written 2026-07-19 before the board existed, and the
@@ -240,6 +269,17 @@ the other must fail cleanly. Then the same for `sw/sbi/sbi_test.bin`.
 ```
 python test/run_fpga.py
 ```
+
+Also wired into the `test` workflow, so it gates every push.
+
+⚠ **Locally this will not run**, and neither will the existing `run.py`:
+oss-cad-suite's iverilog (14.0-devel) rejects koti's RTL over
+declare-after-use — `Unable to bind ... Check for declaration after use`.
+CI installs iverilog 12 from apt and is unaffected. This is pre-existing
+and hits both suites identically; it is a toolchain version gap, not a
+regression. Fixing it means either installing iverilog 12 locally or
+reordering the declarations in `koti_core.sv`, which is `src/` work and
+outside this workstream's claim.
 
 **Does not prove.** Signal integrity, connector wiring, or that a real
 W25Q128 behaves like the model. Those need the board.

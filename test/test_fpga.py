@@ -33,7 +33,7 @@ def _bits(sig):
     raising — a mid-reset x on a chip select would otherwise abort the test
     before the design has had a chance to come out of reset.
     """
-    s = sig.value.binstr
+    s = str(sig.value)
     return [1 if s[len(s) - 1 - i] in "1hHzZxX" else 0 for i in range(4)]
 
 

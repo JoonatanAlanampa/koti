@@ -1,0 +1,44 @@
+# sources.txt — the ULX3S prototype source list, in elaboration order.
+#
+# ONE list, read by BOTH builders:
+#   fpga/ulx3s/synth.ps1                  (Windows, local, synth-only)
+#   .github/workflows/fpga-ulx3s.yaml     (Linux, CI, full bitstream)
+# Keeping it in one file is the point: a source added to only one of the two
+# builders is a drift bug that shows up as "works locally, fails in CI" - or
+# worse, the reverse, CI green on a design that is not the one you flash.
+#
+# The chip sources below are exactly info.yaml's `source_files`, in the same
+# order, so the FPGA build elaborates the same module set the ASIC flow
+# hardens. If info.yaml gains a file and this list does not, the two designs
+# have quietly diverged.
+#
+# `font_rom.svh` is NOT listed: it is an include, pulled in by vga_text.sv.
+# Both builders pass `-I src` so the relative include resolves regardless of
+# the working directory - the old README's hand-typed yosys line did not, and
+# that was a real trap.
+#
+# Blank lines and #-comments are ignored by both readers.
+
+# ---- the unchanged TinyTapeout top ----
+src/project.sv
+
+# ---- the SoC (identical to what the ASIC flow hardens) ----
+src/koti_core.sv
+src/qspi_ctrl.sv
+src/clint.sv
+src/vga_text.sv
+src/vga_timing.sv
+src/ps2_rx.sv
+src/arbiter3.sv
+src/control.sv
+src/alu.sv
+src/branch.sv
+src/immgen.sv
+src/regfile.sv
+src/muldiv.sv
+src/csr.sv
+src/tlb.sv
+src/uart_tx.sv
+
+# ---- harness only: no silicon pin exists for any of this ----
+fpga/ulx3s/ulx3s_top.sv

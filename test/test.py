@@ -659,6 +659,34 @@ async def test_sbi_firmware(dut):
         f"VGA console mirror: {bytes(ram.mem[0x8000:0x8010])!r}"
 
 
+# Gap between PS/2 frames, in system clocks.
+#
+# NOT arbitrary, and getting it wrong is what made the first three runs of these
+# tests fail. `ps2_send_pins` clocks a frame in ~2200 clocks — roughly 10x
+# faster than any real keyboard, which runs its clock at 10-16.7 kHz and so
+# takes 0.7-1.1 ms (17,500-27,500 clocks at 25 MHz) per 11-bit frame.
+#
+# That matters because the keyboard register is a SINGLE ENTRY with no FIFO and
+# no overrun flag (src/project.sv:125-134): `ps2_valid` overwrites kb_code
+# whether or not the previous byte was read, and a read in the same cycle
+# clears kb_avail even as it is being set — the clear is later in the block, so
+# it wins. Meanwhile the CPU polls only about every 7000 clocks, because every
+# instruction of the poll loop is fetched one bit at a time out of QSPI flash.
+#
+# Feed it frames every 2200 clocks and most of them are simply overwritten
+# before anyone looks. That is what "STKi" in the charbuf meant: one byte of
+# twelve survived. 60k clocks (2.4 ms) is slower than a real keyboard and gives
+# the poll loop a wide margin.
+PS2_FRAME_GAP = 60_000
+
+
+async def ps2_type(dut, *codes):
+    """Send scancode frames at a realistic keyboard rate."""
+    for sc in codes:
+        await ps2_send_pins(dut, sc)
+        await ClockCycles(dut.clk, PS2_FRAME_GAP)
+
+
 @cocotb.test()
 async def test_keyboard_echoes_through_sbi(dut):
     """Type on the PS/2 pins, read the characters back off the UART.
@@ -699,14 +727,13 @@ async def test_keyboard_echoes_through_sbi(dut):
     # 'h', 'i', then shift+'a'. Each press is a make code and each release is
     # 0xF0 + the make code; the shift pair brackets the 'a' so the translator
     # has to be holding state across four frames to get 'A' rather than 'a'.
-    rx = cocotb.start_soon(uart_rx(dut, 3, bit=6, timeout=4_000_000))
-    for sc in (0x33, 0xF0, 0x33,          # h
-               0x43, 0xF0, 0x43,          # i
-               0x12,                      # LSHIFT down
-               0x1C, 0xF0, 0x1C,          # a  -> 'A'
-               0xF0, 0x12):               # LSHIFT up
-        await ps2_send_pins(dut, sc)
-        await ClockCycles(dut.clk, 400)
+    rx = cocotb.start_soon(uart_rx(dut, 3, bit=6, timeout=6_000_000))
+    await ps2_type(dut,
+                   0x33, 0xF0, 0x33,      # h
+                   0x43, 0xF0, 0x43,      # i
+                   0x12,                  # LSHIFT down
+                   0x1C, 0xF0, 0x1C,      # a  -> 'A'
+                   0xF0, 0x12)            # LSHIFT up
 
     # Diagnostics, not decoration. This test failed on its first two runs with
     # NO uart output at all, and "nothing came out" does not say whether the
@@ -757,10 +784,14 @@ async def test_keyboard_releases_produce_nothing(dut):
     assert await uart_rx(dut, 3, bit=6) == b"STK"
 
     # shift down, 'z' -> 'Z', shift UP, 'z' -> 'z'. Two characters, not four.
-    rx = cocotb.start_soon(uart_rx(dut, 2, bit=6, timeout=4_000_000))
-    for sc in (0x12, 0x1A, 0xF0, 0x1A, 0xF0, 0x12,   # shift+z
-               0x1A, 0xF0, 0x1A):                    # z
-        await ps2_send_pins(dut, sc)
-        await ClockCycles(dut.clk, 400)
+    rx = cocotb.start_soon(uart_rx(dut, 2, bit=6, timeout=6_000_000))
+    await ps2_type(dut,
+                   0x12, 0x1A, 0xF0, 0x1A, 0xF0, 0x12,   # shift+z
+                   0x1A, 0xF0, 0x1A)                     # z
 
-    assert await rx == b"Zz"
+    try:
+        got = await rx
+    except AssertionError as e:
+        cb = bytes(ram.mem[0x8000:0x8020])
+        raise AssertionError(f"{e}; VGA charbuf mirror = {cb!r}") from None
+    assert got == b"Zz", f"charbuf mirror = {bytes(ram.mem[0x8000:0x8020])!r}"

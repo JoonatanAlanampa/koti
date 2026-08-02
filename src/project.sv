@@ -122,6 +122,25 @@ module tt_um_koti (
       .ps2_clk(ui_in[0]), .ps2_dat(ui_in[1]),
       .data(ps2_code), .valid(ps2_valid)
   );
+  // Keyboard byte: ONE entry, no FIFO, and no overrun flag. Two consequences
+  // worth knowing before trusting it, both measured 2026-08-02:
+  //   * a second `ps2_valid` overwrites kb_code whether or not the first byte
+  //     was ever read, and
+  //   * a read landing in the same cycle as `ps2_valid` clears kb_avail as it
+  //     is being set — the clear is later in the block, so the clear wins.
+  // Either way the byte is dropped silently; software cannot tell.
+  //
+  // This is fine against a real keyboard and only a fool would call it safe by
+  // accident: a PS/2 device clocks at 10-16.7 kHz, so a frame takes 0.7-1.1 ms,
+  // while software polling this register through QSPI-XIP code gets round
+  // roughly every 7000 clocks (~0.28 ms). Three to four polls per frame is
+  // ample. Feed it frames any faster — as test.py's first attempt did, at
+  // ~2200 clocks apart — and bytes vanish without a trace.
+  //
+  // If a keyboard driver ever needs to KNOW it lost a byte (a real one will,
+  // for E0/F0 prefix sequences, where a dropped byte desynchronises the
+  // decoder), this needs an overrun bit: set it when ps2_valid arrives with
+  // kb_avail already high, and expose it in the read word.
   always @(posedge clk)
       if (rst) begin
           kb_avail <= 1'b0; kb_code <= 8'd0;

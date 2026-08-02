@@ -152,8 +152,13 @@ module sdram_model #(
             $display("SDRAM MODEL: WRITE on bank %0d with no open row", ba);
             $fatal(1);
           end
-          if (!doe)
-            $display("SDRAM MODEL: WARNING write with the data bus not driven");
+          // Check the BUS, not the controller's enable. `doe` is only
+          // meaningful when the model sits directly on the controller; in the
+          // full harness the tri-state is resolved a level up and doe is tied
+          // off, so keying the warning on it cried wolf on every write. What
+          // actually matters is whether real data arrived.
+          if (^din === 1'bx)
+            $display("SDRAM MODEL: WARNING write with x/z on the data bus");
           // DQM is active high and masks the byte out
           if (!dqm[0]) mem[idx(ba, open_row[ba], a[8:0])][7:0]  <= din[7:0];
           if (!dqm[1]) mem[idx(ba, open_row[ba], a[8:0])][15:8] <= din[15:8];

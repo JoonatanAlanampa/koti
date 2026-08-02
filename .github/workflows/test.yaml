@@ -31,6 +31,16 @@ jobs:
           # make will return success even if the test fails, so check for failure in the results.xml
           ! grep failure results.xml
 
+      # sdram_ctrl against a strict behavioural part. Standalone because the
+      # controller is verified before it goes anywhere near the SoC — a memory
+      # controller that is wrong in a corner is far cheaper to find here than
+      # under a running kernel.
+      - name: SDRAM controller
+        run: |
+          cd test
+          python run_sdram.py
+          ! grep failure results_sdram.xml
+
       # The suite above drives tt_um_koti directly. This one drives the ULX3S
       # harness (fpga/ulx3s/ulx3s_top.sv) through the J1 header wires, which is
       # the only thing that exercises the Pmod row permutation, the orientation
@@ -57,4 +67,5 @@ jobs:
             test/tb_fpga.fst
             test/results.xml
             test/results_fpga.xml
+            test/results_sdram.xml
             test/output/*

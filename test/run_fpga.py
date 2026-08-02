@@ -44,8 +44,15 @@ def main():
         sources=SOURCES,
         hdl_toplevel="tb_fpga",
         build_dir=TEST_DIR / "sim_build" / "fpga",
-        build_args=["-g2012", "-DKOTI_FPGA", f"-I{SRC_DIR}"],
+        build_args=["-g2012", f"-I{SRC_DIR}"],
         timescale=("1ns", "1ps"),
+        # ALWAYS rebuild. cocotb's runner decides staleness from source
+        # timestamps and ignores build_args, so toggling -DKOTI_FPGA here
+        # silently reuses the previous binary and the run reports on a
+        # configuration you are not testing. That cost a wrong conclusion
+        # once — "still failing with SDRAM off" — when SDRAM was in fact
+        # still compiled in. A 30 s rebuild is cheaper than that.
+        always=True,
     )
     # Distinct results file: run.py writes results.xml, and CI uploads that
     # one. Sharing the name would mean whichever suite ran last silently

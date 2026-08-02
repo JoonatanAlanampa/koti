@@ -193,14 +193,23 @@ async def test_harness_boot_mapping_a(dut):
     # now lives in the onboard SDRAM rather than the Pmod's PSRAM. This is the
     # end-to-end proof that the memory swap worked, because the charbuf is
     # written by the CPU through the arbiter and read back by the video DMA.
+    # Look in BOTH memories rather than assuming which one is fitted. The RAM
+    # half of the map is the QSPI Pmod's PSRAM by default and the onboard SDRAM
+    # when the build defines KOTI_FPGA, and this test should pass either way
+    # instead of having to be edited whenever the flag moves.
     row1 = b"hello, visible world"
+
+    def charbuf(n=40):
+        return (bytes(ram.mem[0x8028:0x8028 + n]),
+                sdram_bytes(dut, 0x01008028, n))
+
     for _ in range(200):
         await ClockCycles(dut.clk, 10_000)
-        if sdram_bytes(dut, 0x01008028, len(row1)) == row1:
+        if row1 in charbuf(len(row1)):
             break
     else:
-        raise AssertionError(
-            f"charbuf in SDRAM: {sdram_bytes(dut, 0x01008028, 40)!r}")
+        psram, sdram = charbuf()
+        raise AssertionError(f"charbuf: psram={psram!r} sdram={sdram!r}")
 
 
 @cocotb.test()

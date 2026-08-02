@@ -1,7 +1,14 @@
 name: gds
 
+# MANUAL ONLY, on purpose. Koti's Linux is an FPGA target and is not going to a
+# shuttle (user directive 2026-08-02, see PLAN.md), so the 8x2 harden is parked:
+# it is red on PDN-0233, it needs the DFFRAM regfile macro that nobody is going
+# to generate, and it takes tens of minutes. Running it on every push spent CI
+# on a question nothing is waiting for and painted a red X on unrelated work.
+#
+# Deliberately NOT deleted. Koti-1-as-a-chip is parked, not cancelled — if that
+# reopens, `gh workflow run gds.yaml` still does exactly what it always did.
 on:
-  push:
   workflow_dispatch:
 
 jobs:

@@ -657,3 +657,97 @@ async def test_sbi_firmware(dut):
     await ClockCycles(dut.clk, 20_000)   # let the last charbuf write land
     assert ram.mem[0x8000:0x8003] == b"STK", \
         f"VGA console mirror: {bytes(ram.mem[0x8000:0x8010])!r}"
+
+
+@cocotb.test()
+async def test_keyboard_echoes_through_sbi(dut):
+    """Type on the PS/2 pins, read the characters back off the UART.
+
+    The whole interactive path in one test: ps2_rx decodes the frame, the
+    MMIO word latches it, ps2kbd.c turns set-2 scancodes into ASCII, the
+    payload asks for them with SBI console_getchar (EID 0x02) and echoes them
+    with console_putchar. Until 2026-08-02 that SBI call returned -1 with the
+    comment "keyboard hookup pending", so nothing above the hardware had ever
+    read a key.
+    """
+    clock = Clock(dut.clk, 40, unit="ns")  # 25 MHz
+    cocotb.start_soon(clock.start())
+
+    img = (Path(__file__).parent.parent / "sw" / "sbi"
+           / "sbi_test.bin").read_bytes()
+    flash = SpiMem(1 << 16, writable=False)
+    ram = SpiMem(1 << 16, writable=True)
+    flash.mem[:len(img)] = img
+    cocotb.start_soon(spi_bus(dut, flash, ram))
+
+    dut.ena.value = 1
+    dut.ui_in.value = 0b11               # PS/2 idle: both lines high
+    dut.uio_in.value = 0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 10)
+    dut.rst_n.value = 1
+
+    for _ in range(400_000):
+        await RisingEdge(dut.clk)
+        if (int(dut.uo_out.value) >> 6) & 1:
+            break
+    else:
+        raise AssertionError("UART idle never appeared on uo[6]")
+
+    assert await uart_rx(dut, 3, bit=6) == b"STK"   # payload reaches its loop
+
+    # 'h', 'i', then shift+'a'. Each press is a make code and each release is
+    # 0xF0 + the make code; the shift pair brackets the 'a' so the translator
+    # has to be holding state across four frames to get 'A' rather than 'a'.
+    rx = cocotb.start_soon(uart_rx(dut, 3, bit=6, timeout=4_000_000))
+    for sc in (0x33, 0xF0, 0x33,          # h
+               0x43, 0xF0, 0x43,          # i
+               0x12,                      # LSHIFT down
+               0x1C, 0xF0, 0x1C,          # a  -> 'A'
+               0xF0, 0x12):               # LSHIFT up
+        await ps2_send_pins(dut, sc)
+        await ClockCycles(dut.clk, 400)
+
+    assert await rx == b"hiA"
+
+
+@cocotb.test()
+async def test_keyboard_releases_produce_nothing(dut):
+    """A release must not echo, and a stuck shift must not survive it.
+
+    This is the failure that would look like working hardware: if releases
+    were treated as presses every keystroke would double, and if a shift
+    release were missed everything after the first capital would stay
+    upper-case. Both are silent in a test that only ever types one letter.
+    """
+    clock = Clock(dut.clk, 40, unit="ns")
+    cocotb.start_soon(clock.start())
+
+    img = (Path(__file__).parent.parent / "sw" / "sbi"
+           / "sbi_test.bin").read_bytes()
+    flash = SpiMem(1 << 16, writable=False)
+    ram = SpiMem(1 << 16, writable=True)
+    flash.mem[:len(img)] = img
+    cocotb.start_soon(spi_bus(dut, flash, ram))
+
+    dut.ena.value = 1
+    dut.ui_in.value = 0b11
+    dut.uio_in.value = 0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 10)
+    dut.rst_n.value = 1
+
+    for _ in range(400_000):
+        await RisingEdge(dut.clk)
+        if (int(dut.uo_out.value) >> 6) & 1:
+            break
+    assert await uart_rx(dut, 3, bit=6) == b"STK"
+
+    # shift down, 'z' -> 'Z', shift UP, 'z' -> 'z'. Two characters, not four.
+    rx = cocotb.start_soon(uart_rx(dut, 2, bit=6, timeout=4_000_000))
+    for sc in (0x12, 0x1A, 0xF0, 0x1A, 0xF0, 0x12,   # shift+z
+               0x1A, 0xF0, 0x1A):                    # z
+        await ps2_send_pins(dut, sc)
+        await ClockCycles(dut.clk, 400)
+
+    assert await rx == b"Zz"

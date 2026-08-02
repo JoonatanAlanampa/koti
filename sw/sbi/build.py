@@ -21,7 +21,7 @@ def main():
     run([GCC, "-march=rv32ima_zicsr", "-mabi=ilp32", "-O2",
          "-ffreestanding", "-nostdlib", "-nostartfiles", "-static",
          "-I", "..", "-T", "link.ld", "-o", "sbi_test.elf",
-         "sbi.S", "sbi.c", "payload.c", "../console.c"])
+         "sbi.S", "sbi.c", "payload.c", "../console.c", "../ps2kbd.c"])
     run([OBJCOPY, "-O", "binary", "sbi_test.elf", "sbi_test.bin"])
     size = (SBI / "sbi_test.bin").stat().st_size
     print(f"sbi_test.bin: {size} bytes")

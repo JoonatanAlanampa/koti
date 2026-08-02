@@ -3,6 +3,7 @@
 // instruction trap (mtval carries the instruction).
 #include "../koti.h"
 #include "../console.h"
+#include "../ps2kbd.h"
 
 #define csr_read(c) ({ uint32_t v_; \
     asm volatile("csrr %0, " #c : "=r"(v_)); v_; })
@@ -56,7 +57,11 @@ void sbi_trap(uint32_t cause, uint32_t *r) {
             r[A0] = 0;
             break;
         case 2:                          // legacy console_getchar
-            r[A0] = (uint32_t)-1;        // keyboard hookup pending
+            // Non-blocking, per the legacy SBI spec: -1 when nothing is
+            // ready. ps2_getchar consumes at most one scancode per call, so
+            // prefixes, releases and shift presses also return -1 — the
+            // caller polls.
+            r[A0] = (uint32_t)ps2_getchar();
             break;
         default:
             r[A0] = (uint32_t)-2;        // SBI_ERR_NOT_SUPPORTED

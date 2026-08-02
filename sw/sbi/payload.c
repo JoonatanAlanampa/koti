@@ -25,6 +25,13 @@ static inline uint32_t rdtime(void) {
     return a0;
 }
 
+static inline int sbi_getchar(void) {
+    register uint32_t a0 asm("a0");
+    register uint32_t a7 asm("a7") = 2;
+    asm volatile("ecall" : "=r"(a0) : "r"(a7));
+    return (int)a0;
+}
+
 __attribute__((interrupt("supervisor")))
 static void s_timer(void) {
     sbi_putchar('T');
@@ -42,4 +49,15 @@ void smain(void) {
     while (!tick)
         ;
     sbi_putchar('K');
+
+    // From here on the payload is a terminal: poll the keyboard through SBI
+    // and echo. This is what makes the machine interactive rather than a
+    // program that prints three letters and stops, and it is the only way the
+    // scancode path gets exercised end to end - RTL, MMIO, translator, SBI
+    // call and console, in one loop.
+    for (;;) {
+        int c = sbi_getchar();
+        if (c >= 0)
+            sbi_putchar((char)c);
+    }
 }

@@ -14,7 +14,8 @@ What is already proven, and what is not:
 
 | Proven | How |
 | --- | --- |
-| The design fits and closes timing | CI `fpga-ulx3s` workflow: **31.69 MHz post-route, PASS at 25 MHz**, 10 % of the 85F (9102 COMB, 2835 FF, 40 IO) |
+| The design fits and closes timing | CI `fpga-ulx3s` workflow, run 30840164421: **27.48 MHz post-route, PASS at 25 MHz**, 11 % of the 85F (9462 COMB, 3030 FF, 79 IO) |
+| RAM is the onboard 32 MB SDRAM, not the Pmod's PSRAM | `-DKOTI_FPGA` is on in all three build files; `python test/run_fpga.py` boots through it, 4/4 |
 | Every pin lands on a real v2.0 site | `python fpga/ulx3s/check_pins.py`, which also runs in CI |
 | The header permutation and the straps | `python test/run_fpga.py` — boots `hello.bin` through the J1 wires in both orientations, and stays silent when the strap is wrong |
 | The UART follows koti's two personalities | same suite: the SBI image's output arrives via the SW3 mux |

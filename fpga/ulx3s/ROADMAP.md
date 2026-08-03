@@ -18,7 +18,8 @@ does not pass, that phase is not done, whatever the prose says.
 | 1 Pin constraints | **done** | `check_pins.py`: 40 ports, 40 locates, 40/40 sites cross-checked vs console's diffed file |
 | 2 Harness rewrite | **done** | elaborates; the header-geometry bug is fixed |
 | 3 Build infrastructure | **done** | `sources.txt`, `synth.ps1`, `.github/workflows/fpga-ulx3s.yaml` |
-| 4 First green bitstream | **done** | run 30746378495: **9102 COMB (10%), 2835 FF (3%), 40 IO, 31.69 MHz PASS at 25 MHz**, `koti.bit` 1.93 MB |
+| 4 First green bitstream | **done** | run 30746378495 (pre-SDRAM): 9102 COMB (10%), 2835 FF (3%), 40 IO, 31.69 MHz PASS at 25 MHz, `koti.bit` 1.93 MB |
+| 4b SDRAM in the bitstream | **done** | run 30840164421, `-DKOTI_FPGA` on: **9462 COMB (11%), 3030 FF (3%), 79 IO (21%), 27.48 MHz PASS at 25 MHz** |
 | 5 Harness simulation | **done** | run 30746646060: 4/4 harness tests, plus the 6 existing ones still green |
 | 6 Flash path | **done** | the cartridge writer's mapping is byte-identical to koti's; procedure in README step 4 |
 | 7 Bring-up checklist | **done** | `README.md` |
@@ -29,10 +30,21 @@ and the steps in `README.md`.
 
 Two results worth pulling out of the table:
 
-- **31.69 MHz, not 34.8.** Constraining every pin to a real ball cost
-  about 3 MHz against the 2026-07-22 unconstrained run. 26.8% margin over
-  the 25 MHz the design actually runs at, so this is comfortable — but it
-  is the honest number, and the older one should not be quoted again.
+- **27.48 MHz — quote this one.** The number has moved twice and both
+  earlier figures are still in circulation. 34.8 MHz was unconstrained
+  (2026-07-22); constraining every pin to a real ball cost about 3 MHz and
+  gave 31.69; adding the SDRAM controller and its 39 further pins costs
+  another ~4 and gives **27.48 MHz post-route, PASS at 25 MHz**. That is
+  **9.9% margin**, down from 26.8%, and it is the first figure here that is
+  not comfortable. Nothing is wrong at 25 MHz, but there is no longer much
+  room, so treat any future clock-rate ambition as needing work rather than
+  headroom — an I-cache (PLAN.md decision 4) would help the felt speed far
+  more than chasing MHz anyway.
+- ⚠️ **nextpnr prints Max frequency TWICE and the first one is not the
+  answer.** This run logs `22.04 MHz (FAIL)` and then `27.48 MHz (PASS)`;
+  the first is the post-PLACEMENT estimate and the second is post-route.
+  Reading the wrong one turns a passing build into a panic. Same trap as
+  the console repo hit.
 - **The two harnesses agree.** koti's J1 row algebra and the cartridge
   Pmod bring-up bitstream's, written independently months apart, assign
   the same `uio` bit to the same header wire. That is the strongest

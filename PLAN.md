@@ -76,11 +76,22 @@ These are worth deciding before item 4, because they change everything after
 it. None is urgent; all are now *possible* only because silicon is off the
 path.
 
-1. ~~**Where does Linux's RAM live?**~~ **DECIDED AND DONE 2026-08-02: the
+1. ~~**Where does Linux's RAM live?**~~ **DECIDED AND WORKING 2026-08-03: the
    onboard SDRAM.** `src/sdram_ctrl.sv` speaks the same request-port contract
    as `qspi_ctrl` and is selected by `KOTI_FPGA` in `src/project.sv`, so the
    ULX3S build serves the RAM half of the map from the board's 32 MB part.
    Measured **10 clocks for a random 32-bit read against QSPI's ~130**.
+   The flag is ON in all three build files and the harness suite is **4/4**
+   with it on; the 2026-08-02 claim of "done" was made while it was 2/4 and the
+   flag was off, so treat 2026-08-03 as the date this became true.
+   ⚠️ **One bring-up number to confirm on the board**: `RD_ADV` in
+   `sdram_ctrl.sv`. The part is clocked on `~clk`, which puts its read-data
+   window one whole system clock ahead of a same-clock part's, and `RD_ADV=1`
+   is what pulls the capture edge in to match. If the fitted part turns out to
+   return data a clock later than `test/sdram_model.sv` predicts, that one
+   parameter is the fix — nothing else moves. Getting it wrong is silent on
+   writes and corrupts every read, which is exactly how it hid for four
+   debugging rounds in simulation.
    The memory MAP is unchanged on purpose — `addr[22]` still picks flash from
    RAM, RAM still starts at `0x01000000` — so link scripts, the SBI firmware,
    the charbuf address and every existing test carried over untouched. The

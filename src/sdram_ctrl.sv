@@ -45,7 +45,32 @@ module sdram_ctrl #(
     parameter int T_RFC_NS = 70,      // AUTO REFRESH cycle
     parameter int T_MRD_NS = 20,      // LOAD MODE -> next command
     parameter int T_INIT_US = 200,    // power-up wait before any command
-    parameter int T_REFI_NS = 7800    // 64 ms / 8192 rows
+    parameter int T_REFI_NS = 7800,   // 64 ms / 8192 rows
+
+    // Clocks by which read capture runs AHEAD of a part sharing our clock.
+    //
+    // The ULX3S drives the part from the INVERTED system clock
+    // (`ulx3s_top.sv`: sdram_clk = ~clk_25mhz), which is what buys 20 ns of
+    // command setup at 25 MHz and 20 ns of hold on the way back. The same half
+    // cycle applies in both directions, and in the read direction it
+    // compounds: the part latches our READ half a clock early AND launches its
+    // data half a clock early, so its data window lands one WHOLE system clock
+    // before a same-clock part's would. Capture where a same-clock part would
+    // put the data and you latch the SECOND half-word into the low half and
+    // the already-released bus (z, i.e. x) into the high half.
+    //
+    // That is not a theory. With RD_ADV wired to 0 against a part on ~clk, the
+    // suite in test/test_sdram.py fails 8 of its 9 cases — every one that
+    // checks data — while the ninth, which only measures latency, passes. In
+    // the SoC it looked far less obvious: writes are unaffected (the part
+    // samples them inside our stable window), so 308 writes landed perfectly
+    // and the machine died on the first read, with the x surfacing several
+    // instructions later in an address the CPU computed from it.
+    //
+    // Set to 0 for a part sharing the system clock. It is also the one knob
+    // bring-up may need: if the fitted part returns data a clock later than
+    // this model predicts, this is the single number to change.
+    parameter int RD_ADV = 1
 ) (
     input  logic        clk,
     input  logic        rst,
@@ -87,6 +112,10 @@ module sdram_ctrl #(
   localparam int C_INIT = (T_INIT_US * 1000) / NS_PER_CLK + 1;
   localparam int C_REFI = T_REFI_NS / NS_PER_CLK;
   localparam int CL     = 2;                 // CAS latency, set in the MR below
+
+  // Clocks to wait in S_RD before the first capture edge. A part on our own
+  // clock needs CL-1; every clock of RD_ADV pulls that in by one.
+  localparam int RD_WAIT = CL - 1 - RD_ADV;
 
   // Mode register: burst length 2 (A2:A0=001), sequential (A3=0),
   // CAS latency 2 (A6:A4=010), standard operation (A8:A7=00),
@@ -292,9 +321,10 @@ module sdram_ctrl #(
             sdram_a  <= {4'b0010, cur_col};
             cmd      <= CMD_READ;
             rd_phase <= 1'b0;
-            // CL is counted from the clock at which the PART samples the READ,
-            // which is one after the clock this controller registers it on.
-            tmr      <= CL[15:0] - 16'd1;
+            // CL is counted from the clock at which the PART samples the READ.
+            // Which clock that is depends on how the part is clocked relative
+            // to us — see RD_ADV, and do not "simplify" this back to CL-1.
+            tmr      <= RD_WAIT[15:0];
             st       <= S_RD;
           end
         end

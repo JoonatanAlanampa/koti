@@ -8,6 +8,21 @@
 // 5000 idle clocks before every test is 5000 clocks of nothing. What the tests
 // care about is that the SEQUENCE is right — precharge-all, two refreshes,
 // load mode — and the model fails the run if any of it is skipped or reordered.
+//
+// THE PART IS CLOCKED THE WAY THE BOARD CLOCKS IT, and that is not a detail.
+// `ulx3s_top.sv` drives sdram_clk = ~clk_25mhz, so the part runs half a system
+// clock ahead of the controller. This bench used to feed the model plain `clk`
+// instead, which is a different machine: the read-data window moves by a whole
+// system clock between the two, and the suite went 9/9 green against an
+// arrangement that exists nowhere. The SoC then failed with all nine of these
+// tests passing, because writes are insensitive to the phase and only reads
+// are — 308 writes landed correctly and the machine died on its first read.
+//
+// So: default to the board's clocking, and let SDRAM_SAMECLK select the other
+// arrangement so RD_ADV is provably the knob it claims to be rather than a
+// number that happened to work once.
+//   python run_sdram.py                 -> part on ~clk, RD_ADV=1 (the board)
+//   iverilog -DSDRAM_SAMECLK ...        -> part on  clk, RD_ADV=0
 
 module tb_sdram ();
 
@@ -39,9 +54,18 @@ module tb_sdram ();
   // exactly the failure a shared bus should produce rather than hide.
   wire [15:0] sd_bus = doe ? dout : (model_oe ? model_dout : 16'hzzzz);
 
+`ifdef SDRAM_SAMECLK
+  localparam integer RD_ADV = 0;
+  wire part_clk = clk;
+`else
+  localparam integer RD_ADV = 1;
+  wire part_clk = ~clk;
+`endif
+
   sdram_ctrl #(
       .CLK_HZ(25_000_000),
-      .T_INIT_US(2)
+      .T_INIT_US(2),
+      .RD_ADV(RD_ADV)
   ) dut (
       .clk(clk), .rst(rst),
       .req(req), .we(we), .burst(burst), .addr(addr),
@@ -52,7 +76,7 @@ module tb_sdram ();
   );
 
   sdram_model #(.CL(2)) part (
-      .clk(clk), .cke(cke), .csn(csn), .rasn(rasn), .casn(casn), .wen(wen),
+      .clk(part_clk), .cke(cke), .csn(csn), .rasn(rasn), .casn(casn), .wen(wen),
       .a(a), .ba(ba), .dqm(dqm),
       .din(sd_bus), .doe(doe),
       .dout(model_dout), .dout_oe(model_oe)

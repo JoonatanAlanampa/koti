@@ -38,8 +38,13 @@ if (-not $src) { throw "fpga\ulx3s\sources.txt listed no sources" }
 python fpga\ulx3s\check_pins.py
 if ($LASTEXITCODE -ne 0) { throw "check_pins.py failed - fix the pin plan first" }
 
+# -DKOTI_FPGA builds the ULX3S variant: the RAM half of the memory map is
+# served by the board's onboard 32 MB SDRAM instead of the QSPI Pmod's PSRAM.
+# Without it the same sources build the QSPI machine, which is the fallback and
+# the bisection base. Keep this in step with the CI workflow and run_fpga.py —
+# all three must define it or the thing you test is not the thing you flash.
 yosys -q -l fpga\ulx3s\build\yosys.log `
-      -p "read_verilog -sv -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
+      -p "read_verilog -sv -DKOTI_FPGA -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
 if ($LASTEXITCODE -ne 0) { throw "yosys failed - see fpga\ulx3s\build\yosys.log" }
 Write-Output "OK: fpga\ulx3s\build\koti.json"
 

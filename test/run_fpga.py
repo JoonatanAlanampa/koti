@@ -45,6 +45,11 @@ def main():
         hdl_toplevel="tb_fpga",
         build_dir=TEST_DIR / "sim_build" / "fpga",
         build_args=["-g2012", f"-I{SRC_DIR}"],
+        # The ULX3S configuration: RAM comes from the board's onboard 32 MB
+        # SDRAM, not the QSPI Pmod's PSRAM. This must match the define in
+        # fpga/ulx3s/synth.ps1 and .github/workflows/fpga-ulx3s.yaml, because
+        # this suite is the only thing that simulates what those two build.
+        defines={"KOTI_FPGA": 1},
         timescale=("1ns", "1ps"),
         # ALWAYS rebuild. cocotb's runner decides staleness from source
         # timestamps and ignores build_args, so toggling -DKOTI_FPGA here

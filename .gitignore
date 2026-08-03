@@ -11,6 +11,8 @@ test/sim_build
 fpga/ulx3s/build
 test/__pycache__/
 test/results.xml
+test/results_fpga.xml
+test/results_sdram.xml
 test/gate_level_netlist.v
 
 __pycache__/

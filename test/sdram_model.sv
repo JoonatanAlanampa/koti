@@ -51,6 +51,8 @@ module sdram_model #(
   reg [1:0]  burst_left;
   reg        burst_ap;
 
+  integer    nxwarn;               // x/z-store reports emitted so far
+
   integer i;
 
   function automatic [17:0] idx(input [1:0] b, input [12:0] r, input [8:0] c);
@@ -74,6 +76,7 @@ module sdram_model #(
     dout_oe = 1'b0;
     dout = 16'd0;
     burst_left = 2'd0;
+    nxwarn = 0;
     for (i = 0; i < 4; i = i + 1) begin
       row_open[i] = 1'b0;
       open_row[i] = 13'd0;
@@ -164,8 +167,25 @@ module sdram_model #(
           // full harness the tri-state is resolved a level up and doe is tied
           // off, so keying the warning on it cried wolf on every write. What
           // actually matters is whether real data arrived.
-          if (^din === 1'bx)
-            $display("SDRAM MODEL: WARNING write with x/z on the data bus");
+          //
+          // And check it PER LANE, only where DQM lets the byte through. The
+          // whole-bus version cried wolf a second time, for a subtler reason:
+          // on a byte store the CPU drives one lane and masks the other, and
+          // what it leaves on the masked half is nobody's business. Every `sb`
+          // therefore printed a warning about data that is deliberately
+          // discarded — which is worse than no check, because a warning that
+          // fires on correct behaviour is one you learn to scroll past.
+          if ((!dqm[0] && (^din[7:0] === 1'bx))
+              || (!dqm[1] && (^din[15:8] === 1'bx))) begin
+            if (nxwarn == 0)
+              $display("SDRAM MODEL: NOTE x/z reaching an UNMASKED byte. Some of this is expected: a C prologue spills callee-saved registers before anything has initialised them, which is real garbage on silicon and x here. Every occurrence in the koti harness so far has been a stack address. Worry when the address is not one.");
+            if (nxwarn < 8)
+              $display("SDRAM MODEL: x/z stored: ba=%0d row=%0d col=%0d din=%h dqm=%b",
+                       ba, open_row[ba], a[8:0], din, dqm);
+            if (nxwarn == 8)
+              $display("SDRAM MODEL: (further x/z-store reports suppressed)");
+            nxwarn <= nxwarn + 1;
+          end
           // DQM is active high and masks the byte out
           if (!dqm[0]) mem[idx(ba, open_row[ba], a[8:0])][7:0]  <= din[7:0];
           if (!dqm[1]) mem[idx(ba, open_row[ba], a[8:0])][15:8] <= din[15:8];

@@ -78,7 +78,25 @@ void ps2_init(void) {
 }
 
 int ps2_getchar(void) {
-    uint32_t r = PS2_DATA;     // {avail[8], scancode[7:0]}, read-to-clear
+    uint32_t r = PS2_DATA;     // {ovf[9], avail[8], scancode[7:0]}, read-to-clear
+
+    if (r & 0x200u) {
+        // A byte was dropped before this one. `releasing` and `extended`
+        // describe a sequence that no longer exists, and carrying them
+        // forward is how one lost byte becomes a stream of wrong characters:
+        // a lost 0xF0 makes the next real press register as a release, and a
+        // byte lost after 0xE0 leaves us treating an ordinary key as extended.
+        //
+        // There is no way to recover the missing byte and no way to know where
+        // in a sequence we are, so discard the state AND the byte that came
+        // with the overrun — it may itself be the tail of a sequence whose
+        // head is gone. One character is lost instead of the decode staying
+        // wrong indefinitely.
+        releasing = 0;
+        extended  = 0;
+        return -1;
+    }
+
     if (!(r & 0x100u))
         return -1;
 

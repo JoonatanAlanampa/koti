@@ -687,6 +687,80 @@ async def ps2_type(dut, *codes):
         await ClockCycles(dut.clk, PS2_FRAME_GAP)
 
 
+def kb_overrun_program():
+    """Wait, then read PS2_DATA ONCE and show {ovf, avail} on the LEDs.
+
+    The delay loop is the point. Poll immediately and the CPU may well read
+    between the two frames the test sends, which is the case with no overrun —
+    the test would then be measuring its own timing rather than the hardware.
+    ~200 iterations of two instructions fetched over 1-bit SPI is tens of
+    thousands of clocks, comfortably longer than the ~8000 the two frames take,
+    so both have certainly landed before the first read happens.
+    """
+    x0, x5, x6, x9, x10, x12 = 0, 5, 6, 9, 10, 12
+    return [
+        lui(x5, MMIO_HI),          # LED MMIO
+        lui(x6, 0x40),             # VGA/PS2 block 0x0004_0000
+        addi(x12, x0, 200),        # delay: let both frames arrive unread
+        addi(x12, x12, -1),        # loop:
+        beq(x12, x0, 8),           #   done -> skip the back-branch
+        beq(x0, x0, -8),           #   else back to the decrement
+        lw(x9, 12, x6),            # ONE read; it clears avail and ovf
+        srli(x10, x9, 8),          # {ovf, avail}
+        beq(x10, x0, -8),          # nothing at all yet: read again
+        sw(x10, 0, x5),            # LED = {ovf, avail}
+        beq(x0, x0, 0),            # spin
+    ]
+
+
+@cocotb.test()
+async def test_keyboard_reports_a_dropped_byte(dut):
+    """Two frames with no read between them must set the overrun bit.
+
+    The register holds one byte and has no FIFO, so the second frame overwrites
+    the first. That is acceptable; doing it SILENTLY is not, because a set-2
+    decoder holding E0/F0 prefix state cannot tell a lost byte from a real one
+    and turns a single drop into a stream of wrong characters. Before
+    2026-08-03 software had no way to know, and the only reason the existing
+    keyboard tests pass is PS2_FRAME_GAP being set slower than a real keyboard.
+
+    Sends the two frames back to back — deliberately far faster than any PS/2
+    device — and checks the LEDs show avail AND ovf.
+    """
+    clock = Clock(dut.clk, 40, unit="ns")  # 25 MHz
+    cocotb.start_soon(clock.start())
+
+    flash = SpiMem(1 << 16, writable=False)
+    ram = SpiMem(1 << 16, writable=True)
+    for i, insn in enumerate(kb_overrun_program()):
+        flash.mem[4 * i:4 * i + 4] = insn.to_bytes(4, "little")
+    cocotb.start_soon(spi_bus(dut, flash, ram))
+
+    dut.ena.value = 1
+    dut.ui_in.value = 0b11         # PS/2 idle high
+    dut.uio_in.value = 0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 10)
+    dut.rst_n.value = 1
+
+    await ClockCycles(dut.clk, 200)
+    await ps2_send_pins(dut, 0x2A)   # 'v'
+    await ps2_send_pins(dut, 0x1C)   # 'a', straight after: nothing read yet
+
+    for _ in range(400_000):
+        await RisingEdge(dut.clk)
+        led = int(dut.uo_out.value) >> 2
+        if led:
+            break
+    else:
+        raise AssertionError("the keyboard status never reached the LEDs")
+
+    assert led == 0b11, (
+        f"expected avail+ovf (0b11), got {led:#04b} — "
+        "0b01 means the dropped byte was not reported"
+    )
+
+
 @cocotb.test()
 async def test_keyboard_echoes_through_sbi(dut):
     """Type on the PS/2 pins, read the characters back off the UART.

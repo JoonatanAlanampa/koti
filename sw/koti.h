@@ -22,7 +22,12 @@
 #define VGA_CTRL  REG32(0x00040000)   // bit0 VGA_EN, bit1 UART on B0
 #define VGA_BASE  REG32(0x00040004)   // charbuf byte address
 #define VGA_COLOR REG32(0x00040008)   // {bg[13:8], fg[5:0]}
-#define PS2_DATA  REG32(0x0004000C)   // {avail[8], scancode[7:0]}, r2c
+// {ovf[9], avail[8], scancode[7:0]}, read clears avail AND ovf.
+// ovf = a byte arrived on top of an unread one, i.e. one was lost; any
+// decoder holding E0/F0 prefix state must throw it away when it sees this.
+#define PS2_DATA  REG32(0x0004000C)
+#define PS2_AVAIL 0x100u
+#define PS2_OVF   0x200u
 
 static inline void uart_putc(char c) {
     while (UART & 1)

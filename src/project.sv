@@ -128,6 +128,7 @@ module tt_um_koti (
   reg [5:0]  col_fg, col_bg;
   reg [7:0]  kb_code;
   reg        kb_avail;
+  reg        kb_ovf;
 
   wire vga_wr = vga_sel && !vga_ack && d_we;
   wire vga_rd = vga_sel && !vga_ack && !d_we;
@@ -150,34 +151,46 @@ module tt_um_koti (
       .ps2_clk(ui_in[0]), .ps2_dat(ui_in[1]),
       .data(ps2_code), .valid(ps2_valid)
   );
-  // Keyboard byte: ONE entry, no FIFO, and no overrun flag. Two consequences
-  // worth knowing before trusting it, both measured 2026-08-02:
-  //   * a second `ps2_valid` overwrites kb_code whether or not the first byte
-  //     was ever read, and
-  //   * a read landing in the same cycle as `ps2_valid` clears kb_avail as it
-  //     is being set — the clear is later in the block, so the clear wins.
-  // Either way the byte is dropped silently; software cannot tell.
+  // Keyboard byte: ONE entry, no FIFO — but it now REPORTS the byte it drops.
   //
-  // This is fine against a real keyboard and only a fool would call it safe by
-  // accident: a PS/2 device clocks at 10-16.7 kHz, so a frame takes 0.7-1.1 ms,
-  // while software polling this register through QSPI-XIP code gets round
-  // roughly every 7000 clocks (~0.28 ms). Three to four polls per frame is
-  // ample. Feed it frames any faster — as test.py's first attempt did, at
-  // ~2200 clocks apart — and bytes vanish without a trace.
+  // Against a real keyboard the single entry is ample: a PS/2 device clocks at
+  // 10-16.7 kHz, so a frame takes 0.7-1.1 ms, while software polling this
+  // register through QSPI-XIP code gets round roughly every 7000 clocks
+  // (~0.28 ms). Three to four polls per frame. Feed it frames any faster — as
+  // test.py's first attempt did, at ~2200 clocks apart — and a byte is lost.
   //
-  // If a keyboard driver ever needs to KNOW it lost a byte (a real one will,
-  // for E0/F0 prefix sequences, where a dropped byte desynchronises the
-  // decoder), this needs an overrun bit: set it when ps2_valid arrives with
-  // kb_avail already high, and expose it in the read word.
+  // Losing one is survivable. Losing one SILENTLY is not, once anything
+  // decodes set-2 sequences: a dropped 0xF0 turns the next release into a
+  // phantom press, a byte dropped after 0xE0 leaves the decoder waiting for a
+  // second byte that already went by. One lost byte becomes a stream of wrong
+  // characters, and software has no way to suspect it. Hence `kb_ovf` at
+  // bit 9 of the read word: set when a byte arrives on top of an unread one,
+  // cleared by the same read that clears `kb_avail`. A driver that sees it
+  // knows to throw its prefix state away and resynchronise.
+  //
+  // ORDER MATTERS HERE. The read-clear is written FIRST so that `ps2_valid`
+  // in the same cycle wins: the arriving byte is kept and stays available,
+  // instead of being cleared as it is set. That is not just one fewer dropped
+  // byte — without it the flag would be a liar. A read coinciding with an
+  // arrival would clear `kb_ovf` at the very moment it should have been
+  // raised, so the one case software could not otherwise detect would be the
+  // one case the overrun bit failed to report.
   always @(posedge clk)
       if (rst) begin
-          kb_avail <= 1'b0; kb_code <= 8'd0;
+          kb_avail <= 1'b0; kb_code <= 8'd0; kb_ovf <= 1'b0;
       end else begin
+          if (vga_rd && d_addr[1:0] == 2'd3) begin
+              kb_avail <= 1'b0;
+              kb_ovf   <= 1'b0;
+          end
           if (ps2_valid) begin
               kb_code  <= ps2_code;
               kb_avail <= 1'b1;
+              // Overwriting a byte nobody has read is a LOST byte. A byte read
+              // this same cycle was not lost, so that is not an overrun.
+              if (kb_avail && !(vga_rd && d_addr[1:0] == 2'd3))
+                  kb_ovf <= 1'b1;
           end
-          if (vga_rd && d_addr[1:0] == 2'd3) kb_avail <= 1'b0;
       end
 
   // read data is captured on the select cycle (before the read-clear
@@ -188,7 +201,7 @@ module tt_um_koti (
           2'd0: vga_rmux = {30'd0, uart_b0, vga_en};
           2'd1: vga_rmux = {7'd0, vga_base, 2'b00};
           2'd2: vga_rmux = {18'd0, col_bg, 2'd0, col_fg};
-          default: vga_rmux = {23'd0, kb_avail, kb_code};
+          default: vga_rmux = {22'd0, kb_ovf, kb_avail, kb_code};
       endcase
   reg [31:0] vga_rdata_q;
   always @(posedge clk)

@@ -46,9 +46,11 @@ flushes both TLBs and serializes; satp writes flush as well.
 
 VGA/PS2 registers: CTRL bit0 = VGA_EN (switches the uo pins from the
 headless personality to the Tiny VGA Pmod), bit1 = UART on the blue
-LSB (uo[6]). Colors: {bg[13:8], fg[5:0]}. Keyboard: {avail[8],
-scancode[7:0]}, read clears avail; a pending byte drives the
-external interrupt (meip).
+LSB (uo[6]). Colors: {bg[13:8], fg[5:0]}. Keyboard: {ovf[9],
+avail[8], scancode[7:0]}, read clears avail and ovf; a pending byte
+drives the external interrupt (meip). There is no FIFO: ovf means a
+byte arrived on top of an unread one and was lost, so a driver
+holding E0/F0 prefix state must discard it and resynchronise.
 
 ### Video
 

@@ -72,6 +72,13 @@ module tt_um_koti (
 
   wire        if_req, if_ack;
   wire [22:0] if_addr;
+  // What the CORE sees on its fetch port. Without a cache these are just the
+  // memory bus; with one they are the cache's answer.
+  wire [31:0] if_rdata, if_rdata2;
+  wire        if_ptw, icache_flush;
+  // What the ARBITER sees on its fetch port. Same signals one level out.
+  wire        fc_req, fc_ack;
+  wire [22:0] fc_addr;
   wire        d_req, d_we, d_ack;
   wire [22:0] d_addr;
   wire [31:0] d_wdata, d_rdata;
@@ -92,7 +99,8 @@ module tt_um_koti (
       .halted(halted), .led(led), .uart_txd(uart_txd), .gpio_in(ui_in),
       .qspi_cfg(qspi_cfg),
       .if_req(if_req), .if_addr(if_addr), .if_ack(if_ack),
-      .if_rdata(m_rdata), .if_rdata2(m_rdata2),
+      .if_rdata(if_rdata), .if_rdata2(if_rdata2),
+      .if_ptw(if_ptw), .icache_flush(icache_flush),
       .d_req(d_req), .d_we(d_we), .d_addr(d_addr), .d_wdata(d_wdata),
       .d_be(d_be), .d_ack(d_ack), .d_rdata(d_rdata)
   );
@@ -223,10 +231,35 @@ module tt_um_koti (
       .hsync(vt_hs), .vsync(vt_vs), .active(vt_act), .pix(vt_pix)
   );
 
+  // ---- fetch path: core -> [I-cache] -> arbiter ----
+  //
+  // Only the FPGA build gets the cache. It is built out of block RAM, and a
+  // TinyTapeout tile has none — the same reason sdram_ctrl.sv is an FPGA-only
+  // source. Since koti stopped being a tapeout target (2026-08-02) the FPGA
+  // build is the real design and this is where speed is worth buying.
+`ifdef KOTI_FPGA
+  icache #(.ENTRIES(512)) ic (
+      .clk(clk), .rst(rst), .flush(icache_flush),
+      .req(if_req), .ptw(if_ptw), .addr(if_addr),
+      .ack(if_ack), .rdata(if_rdata), .rdata2(if_rdata2),
+      .m_req(fc_req), .m_addr(fc_addr), .m_ack(fc_ack),
+      .m_rdata(m_rdata), .m_rdata2(m_rdata2)
+  );
+`else
+  // Straight through: the fetch port is wired to the arbiter exactly as it was
+  // before the cache existed, and read data comes off the memory bus.
+  assign fc_req    = if_req;
+  assign fc_addr   = if_addr;
+  assign if_ack    = fc_ack;
+  assign if_rdata  = m_rdata;
+  assign if_rdata2 = m_rdata2;
+  wire _unused_ic  = &{if_ptw, icache_flush, 1'b0};
+`endif
+
   mem_arbiter3 arb (
       .clk(clk), .rst(rst),
       .v_req(v_req), .v_addr(v_addr), .v_ack(v_ack),
-      .f_req(if_req), .f_addr(if_addr), .f_ack(if_ack),
+      .f_req(fc_req), .f_addr(fc_addr), .f_ack(fc_ack),
       .d_req(d_req && !clint_range && !vga_range), .d_we(d_we),
       .d_addr(d_addr), .d_wdata(d_wdata), .d_be(d_be), .d_ack(ad_ack),
       .m_req(m_req), .m_we(m_we), .m_burst(m_burst), .m_addr(m_addr),

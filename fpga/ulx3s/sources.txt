@@ -7,10 +7,16 @@
 # builders is a drift bug that shows up as "works locally, fails in CI" - or
 # worse, the reverse, CI green on a design that is not the one you flash.
 #
-# The chip sources below are exactly info.yaml's `source_files`, in the same
-# order, so the FPGA build elaborates the same module set the ASIC flow
-# hardens. If info.yaml gains a file and this list does not, the two designs
-# have quietly diverged.
+# The chip sources below are info.yaml's `source_files`, in the same order,
+# PLUS the FPGA-only blocks listed under their own heading. If info.yaml gains
+# a file and this list does not, the two designs have quietly diverged.
+#
+# The FPGA-only exceptions are deliberate and are both about resources a
+# TinyTapeout tile does not have: `sdram_ctrl.sv` needs the board's soldered
+# SDRAM, and `icache.sv` needs block RAM. Both are behind `-DKOTI_FPGA` in
+# project.sv, so the ASIC source set still elaborates on its own. (This comment
+# used to claim the two lists were identical; sdram_ctrl.sv had already made
+# that false, and icache.sv is the second exception.)
 #
 # `font_rom.svh` is NOT listed: it is an include, pulled in by vga_text.sv.
 # Both builders pass `-I src` so the relative include resolves regardless of
@@ -25,7 +31,6 @@ src/project.sv
 # ---- the SoC (identical to what the ASIC flow hardens) ----
 src/koti_core.sv
 src/qspi_ctrl.sv
-src/sdram_ctrl.sv
 src/clint.sv
 src/vga_text.sv
 src/vga_timing.sv
@@ -40,6 +45,12 @@ src/muldiv.sv
 src/csr.sv
 src/tlb.sv
 src/uart_tx.sv
+
+# ---- FPGA-only: resources a TinyTapeout tile does not have ----
+# Both are behind `-DKOTI_FPGA`. sdram_ctrl needs the board's soldered 32 MB
+# part; icache needs block RAM (3 of the 85F's 208, and koti used none before).
+src/sdram_ctrl.sv
+src/icache.sv
 
 # ---- harness only: no silicon pin exists for any of this ----
 fpga/ulx3s/ulx3s_top.sv

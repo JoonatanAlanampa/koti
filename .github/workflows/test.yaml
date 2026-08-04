@@ -41,6 +41,21 @@ jobs:
           python run_sdram.py
           ! grep failure results_sdram.xml
 
+      # icache standalone. Pure Verilog on purpose — no cocotb — so it also runs
+      # on the Windows host, where cocotb is not installed and every other suite
+      # therefore costs a CI round trip.
+      #
+      # It asserts on the MEMORY TRANSACTION COUNT, not just on returned data. A
+      # cache whose `valid` never sets returns correct data for every request
+      # and delivers none of the speedup, so counting is the only check that
+      # tells a working cache from an expensive wire.
+      - name: I-cache
+        run: |
+          cd test
+          iverilog -g2012 -o tb_icache.vvp ../src/icache.sv tb_icache.v
+          vvp tb_icache.vvp | tee icache.log
+          grep -q "tb_icache: PASS" icache.log
+
       # The suite above drives tt_um_koti directly. This one drives the ULX3S
       # harness (fpga/ulx3s/ulx3s_top.sv) through the J1 header wires, which is
       # the only thing that exercises the Pmod row permutation, the orientation

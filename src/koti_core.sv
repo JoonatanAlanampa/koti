@@ -38,6 +38,18 @@ module koti_core #(
     input  logic [31:0] if_rdata,
     input  logic [31:0] if_rdata2,
 
+    // Fetch-port side-channels for an optional instruction cache (see
+    // src/icache.sv). Both are pure observations of state this core already
+    // keeps, so leaving them unconnected costs nothing.
+    //   if_ptw       1 while the transaction on the fetch port is a PAGE TABLE
+    //                read rather than an instruction fetch. A cache must not
+    //                retain those: page tables are edited through the data port
+    //                and retired by sfence.vma, which a physically-tagged
+    //                instruction cache correctly does not flush on.
+    //   icache_flush one cycle when a `fence.i` retires.
+    output logic        if_ptw,
+    output logic        icache_flush,
+
     // data port (same protocol)
     output logic        d_req,
     output logic        d_we,
@@ -123,6 +135,10 @@ module koti_core #(
 
     assign if_req  = fbusy || (iw_state != 2'd0);
     assign if_addr = (iw_state != 2'd0) ? iw_addr : fpc_pa[24:2];
+
+    // Stable for the whole of any one transaction: a walk can only be started
+    // from `iw_state == 0 && !fbusy`, and iw_state only advances on `if_ack`.
+    assign if_ptw  = (iw_state != 2'd0);
 
     assign ipte = if_rdata;
     wire        ipte_bad = !ipte[0] || (!ipte[1] && ipte[2]);   // !V, W&!R
@@ -252,6 +268,18 @@ module koti_core #(
     wire is_sfence_d = c_is_sys && instr_d[14:12] == 3'b000
                      && instr_d[31:25] == 7'b0001001;   // sfence.vma
 
+    // FENCE.I (MISC-MEM opcode, funct3=001). This was a NOP for as long as
+    // nothing sat between the fetch port and memory, and harmlessly so. With
+    // src/icache.sv in the path it becomes the instruction that makes code
+    // written through the DATA port executable — a bootloader staging a kernel,
+    // a module loader, a JIT — because a fetch-side cache cannot see those
+    // stores. RISC-V puts that burden on software precisely so the hardware can
+    // stay this simple, but only if the hardware honours the instruction.
+    //
+    // NOT privileged: legal in U-mode, unlike sfence.vma. So it gets its own
+    // path rather than joining sfence_e, whose privilege check would trap it.
+    wire is_fencei_d = instr_d[6:0] == 7'b0001111 && instr_d[14:12] == 3'b001;
+
     // instruction legality (coarse but covers what kernels probe:
     // unknown major opcodes, bad funct3/funct7 combos, bad SYSTEM
     // encodings; CSR existence/privilege is checked at EX)
@@ -322,7 +350,7 @@ module koti_core #(
     logic        valid_e, reg_write_e, alu_b_src_e, mem_write_e;
     logic        is_branch_e, is_jump_e, is_md_e, is_amo_e;
     logic        ebreak_e, ecall_e, mret_e, sret_e, csr_e;
-    logic        ipf_e, sfence_e, illegal_e;
+    logic        ipf_e, sfence_e, fencei_e, illegal_e;
     logic [31:0] instr_e;                // for mtval on illegal
     logic [4:0]  amo5_e;
     logic [1:0]  alu_a_src_e, wb_src_e;
@@ -349,6 +377,7 @@ module koti_core #(
                 ebreak_e    <= is_ebreak_d; ecall_e     <= is_ecall_d;
                 mret_e      <= is_mret_d;   csr_e       <= is_csr_d;
                 sret_e      <= is_sret_d;   sfence_e    <= is_sfence_d;
+                fencei_e    <= is_fencei_d;
                 ipf_e       <= ipf_d;
                 illegal_e   <= !legal_d && !ipf_d;   // poison NOP is legal
                 instr_e     <= instr_d;
@@ -533,6 +562,15 @@ module koti_core #(
     wire sret_take = valid_e && sret_e && commit && !trap_take;
     wire sfence_take = valid_e && sfence_e && commit && !trap_take;
 
+    // fence.i: invalidate the instruction cache AND serialize fetch. Both
+    // halves are needed. Without the invalidate the cache keeps stale code;
+    // without the redirect the pair already sitting in the skid buffer — and
+    // the pair in flight — are pre-fence copies that would retire after it.
+    // sfence.vma has needed exactly this treatment since F2, so this reuses
+    // the same proven mechanism rather than inventing a second one.
+    wire fencei_take = valid_e && fencei_e && commit && !trap_take;
+    assign icache_flush = fencei_take;
+
     wire [3:0]  trap_kind = ipf_take  ? 4'd1
                           : ill_take  ? 4'd4
                           : imis_take ? 4'd5
@@ -571,12 +609,13 @@ module koti_core #(
 
     assign flush_ex  = (take_ex && !imis_take) || trap_take || mret_take
                      || sret_take || satp_take
-                     || sfence_take || (valid_e && ebreak_e);
+                     || sfence_take || fencei_take || (valid_e && ebreak_e);
     assign target_ex = trap_take             ? csr_trap_vec
                      : mret_take             ? csr_mepc
                      : sret_take             ? csr_sepc
                      : satp_take             ? pc_e + 32'd4  // serialize
                      : sfence_take           ? pc_e + 32'd4  // serialize
+                     : fencei_take           ? pc_e + 32'd4  // serialize
                      : (valid_e && ebreak_e) ? pc_e          // spin + drain
                      : {alu_y[31:1], 1'b0};
 

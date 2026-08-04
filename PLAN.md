@@ -33,8 +33,9 @@ requirement — see "Open architecture decisions" below.
 Hardware bring-up (needs the board in hand):
 1. [ ] **ULX3S first power-up** — `fpga/ulx3s/README.md`, steps 1-7. Bitstream
        and harness are done and green (31.69 MHz, 4/4 harness tests). Needs:
-       the board, a **Tiny VGA Pmod** (€15, not yet bought), a **PS/2
-       keyboard**, and the Cartridge Pmod you already have.
+       the board, a **Tiny VGA Pmod** (bought 2026-08-02, arrival
+       unconfirmed), a **PS/2 keyboard** (still to buy), and the Cartridge
+       Pmod you already have.
        Closes the long-standing **font glyph visual check**.
 
 Software, in order:

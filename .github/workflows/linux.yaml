@@ -41,7 +41,22 @@ on:
       - 'test/sim_mem.sv'              # and its memory model
       - 'test/mkhex.py'                # how the images are loaded
       - '.github/workflows/linux.yaml'
+  # Boot experiments are dispatchable, because this runner is about five times
+  # faster at the boot bench than the development host (~29k simulated clocks
+  # per second against ~5-6k), and a boot that has to be chased past where the
+  # default limits stop is exactly the case where that matters. The defaults
+  # below are the values a push uses, so a push is unchanged.
   workflow_dispatch:
+    inputs:
+      maxclk:
+        description: 'boot: give up after this many clocks'
+        default: '15000000'
+      quiet:
+        description: 'boot: give up after this many clocks with no output'
+        default: '4000000'
+      trace:
+        description: 'boot: print the fetch PC every N clocks (0 = off)'
+        default: '0'
 
 env:
   # Pinned, not "latest": the kernel config in sw/linux/koti_defconfig was
@@ -258,8 +273,12 @@ jobs:
           # the firmware will not find it, and the firmware then quietly runs
           # the flash payload instead — which prints, so the failure looks like
           # a working boot until you read what it said.
+          # `inputs` is null on a push, so each of these falls back to the same
+          # value the step used before it was made dispatchable.
           vvp tb_boot.vvp +flash=fw.hex +ram=kernel.hex +ramoff=1048576 \
-            +maxclk=15000000 +quiet=4000000 2>&1 | tee boot.log
+            +maxclk=${{ inputs.maxclk || '15000000' }} \
+            +quiet=${{ inputs.quiet || '4000000' }} \
+            +trace=${{ inputs.trace || '0' }} 2>&1 | tee boot.log
 
       # Grep for what only a real boot can produce. The banner alone would not
       # do: "Machine model" comes from koti.dts, so it also proves the firmware

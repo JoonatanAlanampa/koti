@@ -162,13 +162,21 @@ module tb_boot ();
                  uut.core.mstall, uut.core.pstall, uut.core.trap_take,
                  uut.core.valid_m);
 
-      if (trace != 0 && clkcnt % trace == 0)
+      if (trace != 0 && clkcnt % trace == 0) begin
         $display({"[%0d] fetch %h if(rq%b ak%b) d %h (rq%b we%b ak%b) ",
                   "m %h (rq%b ak%b) satp %h"},
                  clkcnt, {uut.if_addr, 2'b00}, uut.if_req, uut.if_ack,
                  {uut.d_addr, 2'b00}, uut.d_req, uut.d_we, uut.d_ack,
                  {uut.m_addr, 2'b00}, uut.m_req, uut.m_ack,
                  uut.core.csr0.satp_q);
+        // Flushed, because the only reason to ask for a coarse trace is to
+        // watch a run that is not printing anything else — and stdout to a
+        // file or a pipe is block-buffered, so without this the trace of a
+        // silent kernel appears in 4 KB lumps, minutes behind the simulation.
+        // The UART receiver above flushes on every character and therefore
+        // never had the problem.
+        $fflush;
+      end
     end
   end
 

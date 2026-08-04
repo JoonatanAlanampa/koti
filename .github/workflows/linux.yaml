@@ -1,0 +1,183 @@
+# linux — build the kernel koti is supposed to boot, and the machine
+# description it is handed.
+#
+# This runs in CI and not on the development host for two reasons: it is a
+# multi-gigabyte source tree and a ten-minute build, and the host's RISC-V
+# compiler (xpack riscv-none-elf, used by sw/build.py) is a bare-metal newlib
+# toolchain that cannot build a kernel at all.
+#
+# It deliberately does NOT use Buildroot, which is the usual answer to
+# "I need a riscv32-linux toolchain". Buildroot's value is that it builds a
+# libc and a userspace; the kernel is freestanding and links no libc, so
+# Ubuntu's stock `gcc-riscv64-linux-gnu` builds it directly once told
+# `-march=rv32ima -mabi=ilp32` — which the kernel's own Makefile does from
+# CONFIG_ARCH_RV32I. That turns a 40-minute cold build with a large surface of
+# things that can go wrong into a ~10-minute one, which matters when every
+# debug round trip has to happen in CI. Buildroot comes back at the point
+# koti wants a real userspace (busybox, a shell) rather than the one-program
+# initramfs below.
+name: linux
+on:
+  push:
+    paths:
+      - 'sw/linux/**'
+      - '.github/workflows/linux.yaml'
+  workflow_dispatch:
+
+env:
+  # Pinned, not "latest": the kernel config in sw/linux/koti_defconfig was
+  # written against this version's Kconfig (RISCV_SBI_V01, NONPORTABLE,
+  # ARCH_RV32I), and sw/linux/check_config.py asserts the symbols still
+  # resolve. Bumping this is a deliberate act with a checklist, not a default.
+  KVER: '6.12'
+
+jobs:
+  # Fast job, kept separate on purpose: the devicetree blob is what
+  # sw/sbi/dtb.S embeds in flash, and waiting ten minutes behind a kernel
+  # build to regenerate a 2 KB file is not a loop anyone will use.
+  dtb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dtc
+        run: sudo apt-get update && sudo apt-get install -y device-tree-compiler
+
+      # Warnings are failures here for the same reason as in test.yaml: dtc
+      # exits 0 on a warning, and a devicetree is read once, early, by exactly
+      # one consumer, with no console up yet.
+      - name: Compile koti.dts
+        run: |
+          dtc -I dts -O dtb -o koti.dtb sw/linux/koti.dts 2>dtc.log
+          cat dtc.log
+          ! grep -q Warning dtc.log
+          ls -l koti.dtb
+
+      # Uploaded BEFORE it is compared, so that the run which tells you the
+      # committed blob is stale is also the run you get the fresh one from.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: koti-dtb
+          path: koti.dtb
+
+      # The committed blob is what actually ships inside sbi_test.bin, so it
+      # has to still mean the same thing as the .dts next to it. Compared
+      # through `dtc -I dtb -O dts` rather than byte for byte, so a dtc
+      # version bump that changes padding does not read as a stale blob.
+      - name: The committed blob still matches the source
+        run: |
+          stale() {
+            echo
+            echo "sw/linux/koti.dtb does not match sw/linux/koti.dts."
+            echo "Download the koti-dtb artifact from this run, commit it as"
+            echo "sw/linux/koti.dtb, and rebuild the firmware"
+            echo "(python sw/sbi/build.py) so sbi_test.bin carries the new"
+            echo "blob at flash 0x6000."
+            exit 1
+          }
+          test -f sw/linux/koti.dtb || { echo "no committed blob"; stale; }
+          dtc -I dtb -O dts -o fresh.dts koti.dtb 2>/dev/null
+          dtc -I dtb -O dts -o committed.dts sw/linux/koti.dtb 2>/dev/null
+          diff -u committed.dts fresh.dts || stale
+
+  kernel:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install the toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev cpio kmod rsync xz-utils
+          riscv64-linux-gnu-gcc --version | head -1
+
+      # The compiler is a riscv64 one. Prove it can emit the 32-bit soft-float
+      # code this kernel needs BEFORE spending ten minutes finding out in the
+      # middle of a build, and prove it as ELF32 rather than by trusting that
+      # -march was accepted.
+      - name: The riscv64 compiler really emits rv32
+        run: |
+          echo 'int f(int x){return x*3;}' > /tmp/t.c
+          riscv64-linux-gnu-gcc -march=rv32ima_zicsr_zifencei -mabi=ilp32 \
+            -ffreestanding -nostdlib -c /tmp/t.c -o /tmp/t.o
+          riscv64-linux-gnu-readelf -h /tmp/t.o | grep -E 'Class|Machine'
+          riscv64-linux-gnu-readelf -h /tmp/t.o | grep -q ELF32
+
+      - name: Cache the kernel tarball
+        id: tarball
+        uses: actions/cache@v4
+        with:
+          path: linux-${{ env.KVER }}.tar.xz
+          key: linux-tarball-${{ env.KVER }}
+
+      - name: Fetch the kernel
+        if: steps.tarball.outputs.cache-hit != 'true'
+        run: |
+          curl -fL -o linux-${KVER}.tar.xz \
+            https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KVER}.tar.xz
+
+      - name: Unpack
+        run: tar xf linux-${KVER}.tar.xz
+
+      # /init, and the /dev/console node without which it would run with no
+      # file descriptors and print nothing. gen_init_cpio makes the device
+      # node from this description without needing root.
+      - name: Build the one-program initramfs
+        run: |
+          riscv64-linux-gnu-gcc -march=rv32ima -mabi=ilp32 \
+            -nostdlib -static -no-pie -Wl,--build-id=none \
+            -o init sw/linux/init.S
+          riscv64-linux-gnu-readelf -h init | grep -E 'Class|Type|Machine'
+          cat > initramfs.desc <<EOF
+          dir /dev 0755 0 0
+          nod /dev/console 0600 0 0 c 5 1
+          dir /proc 0755 0 0
+          dir /sys 0755 0 0
+          file /init $PWD/init 0755 0 0
+          EOF
+          cat initramfs.desc
+
+      - name: Configure
+        working-directory: linux-${{ env.KVER }}
+        run: |
+          cp ../sw/linux/koti_defconfig arch/riscv/configs/
+          make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- koti_defconfig
+          ./scripts/config --file .config \
+            --set-str INITRAMFS_SOURCE "$GITHUB_WORKSPACE/initramfs.desc"
+          make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+
+      # A defconfig is a request. kconfig silently drops any line whose
+      # dependencies are unmet, and three of the symbols koti depends on fail
+      # by producing a kernel that boots and says nothing. Check the RESULT.
+      - name: The resolved config is the kernel koti can run
+        run: python3 sw/linux/check_config.py linux-${KVER}/.config
+
+      - name: Build Image
+        working-directory: linux-${{ env.KVER }}
+        run: |
+          make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- \
+            -j$(nproc) Image 2>&1 | tee build.log | tail -60
+          ls -l arch/riscv/boot/Image
+
+      # The header magic sw/sbi/sbi.c tests for, and whether the thing fits in
+      # koti's 16 MB window at all.
+      - name: The Image satisfies koti's boot contract
+        run: python3 sw/linux/check_image.py linux-${KVER}/arch/riscv/boot/Image
+
+      - name: Sizes
+        working-directory: linux-${{ env.KVER }}
+        run: |
+          riscv64-linux-gnu-size vmlinux || true
+          echo "Image: $(stat -c %s arch/riscv/boot/Image) bytes"
+          cp .config config-koti.txt
+
+      - uses: actions/upload-artifact@v7
+        if: success() || failure()
+        with:
+          name: koti-linux-Image
+          path: |
+            linux-${{ env.KVER }}/arch/riscv/boot/Image
+            linux-${{ env.KVER }}/System.map
+            linux-${{ env.KVER }}/config-koti.txt
+            linux-${{ env.KVER }}/build.log

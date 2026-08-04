@@ -130,19 +130,108 @@ by hand. It is correct, and Linux reads `time` constantly — every
 `get_cycles()`. Each one is a full trap, save, decode and return. Fine for
 booting; worth measuring before blaming the SDRAM for a sluggish machine.
 
+## Which OS — decided 2026-08-04: mainline sv32 Linux, and rung 1 is deleted
+
+`PLAN.md` had a three-rung ladder — xv6, then nommu uClinux, then sv32 Linux —
+written before the MMU was finished. Re-examined when task 4 came up, **the
+first two rungs are not smaller steps toward the third; they are steps
+sideways onto different machines.** The evidence, checked against Linux v6.12
+rather than recalled:
+
+**nommu is not "sv32 Linux without the MMU". It is a different privilege
+model with no console.**
+
+```
+config RISCV_M_MODE            config RISCV_SBI
+	bool "Build a kernel that runs in machine mode"      bool
+	depends on !MMU                depends on !RISCV_M_MODE
+	default y                      default y
+```
+
+`CONFIG_MMU=n` turns `RISCV_M_MODE` **on by default**, and `RISCV_SBI` is
+switched off by exactly that. So a nommu kernel does not call the firmware —
+it *replaces* it. Every piece of machine-side work of the last few days is
+outside that kernel's world: the SBI console it would not call, the boot
+handoff it would not use, the DTB the firmware copies for it, the S-mode drop.
+And koti's UART is transmit-only at a core-internal MMIO address and is not a
+16550, so a kernel that cannot use the SBI console **has no console at all** —
+the failure mode of "rung 1" is a machine that boots perfectly and says
+nothing. Turning `RISCV_M_MODE=n` back off to get S-mode nommu is legal
+Kconfig and a configuration essentially nobody upstream runs.
+
+That is before the userspace problem: musl requires an MMU, so a nommu rootfs
+means uClibc-ng plus binfmt_flat on RV32, which is thin ground.
+
+**xv6-rv32 is a port, not a configuration.** It would prove the sv32 walker,
+and it is genuinely small — but it brings its own M-mode boot code (so the SBI
+firmware is bypassed, not tested), it reads no devicetree, its console driver
+is a 16550 that koti does not have, and its root filesystem arrives over
+virtio-blk that koti does not have either. That is four replacements to reach
+a shell, and none of them is reusable afterwards. It also cannot make the
+claim the whole project is aimed at.
+
+**Mainline RV32 sv32 Linux is the shape koti already is.** S-mode + sv32 + an
+SBI v0.2 firmware + a `sifive,plic-1.0.0`-compatible interrupt controller +
+`riscv,timer` is not a lucky match; it is what mainline RV32 expects, and each
+piece was built to that spec on purpose. The MMU is not the risk it was when
+the ladder was written: `test_sv32_translation_and_faults` and the F2
+satp-serialisation regression have been green since 2026-07-18.
+
+**So the ladder loses two rungs and the target is `CONFIG_ARCH_RV32I` +
+`CONFIG_MMU=y`.** The risk that ordering removed — "the MMU is the graveyard,
+de-risk everything else first" — is instead handled by making the boot
+*observable*: `earlycon=sbi` prints before the console driver probes, so a
+kernel that dies in `setup_vm` says where.
+
+### What that decision bought, and what it costs
+
+The prerequisite everyone names for this work is a `riscv32-linux` toolchain,
+and the usual answer is Buildroot, which builds its own. It is not needed for
+the kernel: **the kernel is freestanding and links no libc**, so Ubuntu's
+stock `gcc-riscv64-linux-gnu` builds it as soon as it is told `-march=rv32ima
+-mabi=ilp32`, which the kernel's own Makefile does from `CONFIG_ARCH_RV32I`.
+Verified: that compiler emits ELF32 RISC-V objects. `.github/workflows/
+linux.yaml` therefore builds the kernel in ~10 minutes instead of Buildroot's
+~40 cold, which is what makes CI a usable debug loop when nothing here can be
+run on the development host.
+
+The cost is that there is no userspace: the initramfs is `sw/linux/init.S`,
+one static program that prints a line and powers the machine off. Buildroot
+returns at the point koti wants busybox and a shell — that is a rootfs
+problem, not a kernel-toolchain problem, and it is worth paying for then.
+
 ## Kernel configuration this firmware implies
 
-- **`CONFIG_RISCV_SBI_V01` is not required.** `sbi.c` answers the Base
-  extension, so a kernel will detect spec v0.2 and use `TIME` for the timer
-  rather than the deprecated legacy path. The legacy calls are still
-  implemented, so a kernel that does use them also works.
-- **`CONFIG_HVC_RISCV_SBI`** for the console, plus `earlycon=sbi`.
+The whole list is now `sw/linux/koti_defconfig`, and `sw/linux/check_config.py`
+asserts it against the **resolved** `.config` in CI — because kconfig silently
+drops a defconfig line whose dependencies are unmet, so the file you write is
+not evidence of the kernel you get. The reasoning behind the load-bearing ones:
+
+- 🔴 **`CONFIG_RISCV_SBI_V01=y` IS required, for the console.** An earlier
+  version of this file said it was not, on the grounds that `sbi.c` answers
+  the Base extension so a kernel detects spec v0.2 and uses `TIME` rather than
+  the deprecated legacy timer call. That part is true and it is about the
+  *timer*. The console is a different question, and in v6.12 both
+  `hvc_riscv_sbi.c` and `earlycon-riscv-sbi.c` prefer the SBI **DBCN** (debug
+  console) extension and fall back to the v0.1 calls only
+  `if (IS_ENABLED(CONFIG_RISCV_SBI_V01))`. koti's firmware implements the
+  legacy console (EID 1 and 2) and **not** DBCN — `probe_extension` returns 0
+  for it — so without this symbol the kernel boots and has no way to say so.
+  (Implementing DBCN in `sbi.c` is the other fix and is a better one long
+  term: it is ~15 lines, it takes *physical* addresses so M-mode needs no
+  translation, and it would drop the dependency on a deprecated symbol. Not
+  done yet.)
+- **`CONFIG_HVC_RISCV_SBI=y`** for the console, plus `earlycon=sbi` in
+  bootargs. Note it `depends on RISCV_SBI && NONPORTABLE` — the second is on
+  anyway, because `ARCH_RV32I` depends on it too.
+- **`CONFIG_RISCV_ISA_C=n`.** Default `y`. koti is RV32IMA with no compressed
+  instructions, and a kernel built with them dies on an illegal instruction
+  before printing anything.
 - **`CONFIG_SMP=n`.** koti is uniprocessor, and the firmware deliberately
   does not claim the IPI or RFENCE extensions rather than answering them
   with lies — `probe_extension` returns 0 for both.
-- **`CONFIG_MMU=y`** for rung 2. Rung 1 (nommu uClinux) needs a
-  `riscv32-linux-musl` toolchain; the `xpack` compiler in `sw/build.py` is
-  a bare-metal newlib one and cannot build a kernel.
+- **`CONFIG_MMU=y`**, and see the decision above for why there is no longer a
+  nommu rung below it.
 
 ## Order of work
 
@@ -158,12 +247,17 @@ booting; worth measuring before blaming the SDRAM for a sluggish machine.
 3. ~~Forward MEIP to SEIP, or build `plic.sv`~~ **DONE 2026-08-04** (gap 2):
    a SiFive-register-compatible PLIC at `0x00C0_0000`, driving the core's new
    S-external input. `koti.dts` has the node; `test/tb_plic.v` covers it.
-4. Build a kernel. Rung 1 is Buildroot nommu with the console on UART; it
-   proves the boot handoff, the DTB and the SBI without the MMU in the way.
-   Needs a `riscv32-linux-musl` toolchain — the `xpack` compiler in
-   `sw/build.py` is bare-metal newlib and cannot build a kernel.
-5. Rung 2 is mainline sv32 with the console on the VGA text mode, which is
-   the frontier and the thing the `koti-handbook` product cannot yet claim.
+4. Build a kernel — **mainline sv32, not nommu; see the decision above.**
+   `.github/workflows/linux.yaml` builds RV32 Linux 6.12 with
+   `sw/linux/koti_defconfig` and a one-program initramfs, and checks both the
+   resolved config and the Image header against what this machine can run.
+   No Buildroot: the kernel links no libc, so Ubuntu's `gcc-riscv64-linux-gnu`
+   builds it directly.
+5. Boot it. The console is `earlycon=sbi` then `hvc0`; a successful boot ENDS,
+   because `init` asks for power-off and the firmware's SRST is an `ebreak`.
+6. Then a real userspace (Buildroot busybox + musl), and after that the
+   console on the VGA text mode — which is the frontier and the thing the
+   `koti-handbook` product cannot yet claim.
 
 ## A simulation limit to remember before trusting a sim boot
 

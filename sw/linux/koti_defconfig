@@ -1,0 +1,86 @@
+# koti_defconfig — Linux for Koti-1 on the ULX3S 85F.
+#
+# Copied into arch/riscv/configs/ by .github/workflows/linux.yaml and built
+# with `make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- koti_defconfig`.
+# Everything not named here takes its Kconfig default, so this file is only
+# the places where koti differs from a stock kernel — which is the useful
+# reading of it. sw/linux/check_config.py re-reads the RESOLVED .config
+# afterwards and fails the build if any of it came out wrong; a defconfig line
+# for a symbol whose dependencies are unmet is silently dropped by kconfig, so
+# the file you write is not evidence of the kernel you get.
+#
+# The hardware this describes: RV32IMA + Zicsr + Zifencei, sv32, M/S/U,
+# uniprocessor, no FPU, no compressed instructions, 16 MB of RAM at
+# 0x0100_0000, an SBI v0.2 firmware whose console is the legacy v0.1 call, and
+# a SiFive-register-compatible PLIC.
+
+# ---- the architecture ------------------------------------------------------
+# ARCH_RV32I depends on NONPORTABLE, so this pair is not optional: mainline
+# treats RV32 as a configuration you have to promise you know you are asking
+# for. HVC_RISCV_SBI depends on it too.
+CONFIG_NONPORTABLE=y
+CONFIG_ARCH_RV32I=y
+
+# koti has neither. Leaving RISCV_ISA_C at its default y is not merely wasteful
+# — the kernel would be built with compressed instructions the core cannot
+# decode, and would die on an illegal instruction before it printed anything.
+# CONFIG_RISCV_ISA_C is not set
+# CONFIG_FPU is not set
+# CONFIG_RISCV_ISA_V is not set
+
+# One hart. The firmware refuses the IPI and RFENCE extensions rather than
+# faking them (probe_extension returns 0), which is the honest answer only
+# while this stays off.
+# CONFIG_SMP is not set
+
+# ---- the console -----------------------------------------------------------
+# This is the single most consequential line in the file. In 6.12 both the
+# hvc console and earlycon prefer the SBI DBCN extension and fall back to the
+# v0.1 calls only `if (IS_ENABLED(CONFIG_RISCV_SBI_V01))`. koti's firmware
+# implements the legacy console (EID 1/2) and NOT DBCN, so without this the
+# kernel boots with no way to say so — the failure mode is a silent machine,
+# not an error.
+CONFIG_RISCV_SBI_V01=y
+CONFIG_HVC_RISCV_SBI=y
+CONFIG_SERIAL_EARLYCON_RISCV_SBI=y
+# CONFIG_SERIAL_8250 is not set
+# CONFIG_VT is not set
+
+# ---- the machine description -----------------------------------------------
+# The command line comes from koti.dts /chosen/bootargs. An empty built-in
+# CMDLINE with CMDLINE_FROM_BOOTLOADER (the default) means the DTB wins.
+CONFIG_CMDLINE=""
+
+# ---- size -------------------------------------------------------------------
+# Image is uncompressed and there is no bootloader to decompress anything, so
+# the kernel occupies its own size in a 16 MB machine, twice over while the
+# initramfs is still unpacked. Optimising for size is not a preference here.
+CONFIG_CC_OPTIMIZE_FOR_SIZE=y
+CONFIG_EXPERT=y
+# CONFIG_NET is not set
+# CONFIG_MODULES is not set
+# CONFIG_SUSPEND is not set
+# CONFIG_PCI is not set
+
+# ---- what init needs --------------------------------------------------------
+# The rootfs is a built-in initramfs: nothing on this machine can hold a real
+# one yet (ladder item 7, microSD). INITRAMFS_SOURCE is set by the workflow,
+# not here, because it is an absolute path in the build environment.
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_BINFMT_ELF=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_TMPFS=y
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+
+# ---- what a first boot needs to be debuggable -------------------------------
+# PRINTK_TIME because the first question about a boot that stops is always
+# "where", and timestamps turn a truncated log into a bisection. KALLSYMS
+# because a panic without symbols is a hex address on a machine with no
+# debugger attached.
+CONFIG_PRINTK=y
+CONFIG_PRINTK_TIME=y
+CONFIG_KALLSYMS=y
+CONFIG_LOG_BUF_SHIFT=16
+CONFIG_HZ_100=y

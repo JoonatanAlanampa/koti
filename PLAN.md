@@ -32,10 +32,11 @@ requirement — see "Open architecture decisions" below.
 
 Hardware bring-up (needs the board in hand):
 1. [ ] **ULX3S first power-up** — `fpga/ulx3s/README.md`, steps 1-7. Bitstream
-       and harness are done and green (31.69 MHz, 4/4 harness tests). Needs:
-       the board, a **Tiny VGA Pmod** (bought 2026-08-02, arrival
-       unconfirmed), a **PS/2 keyboard** (still to buy), and the Cartridge
-       Pmod you already have.
+       and harness are done and green (**27.48 MHz** post-route, PASS at
+       25 MHz; 4/4 harness tests). Needs: the board, a **Tiny VGA Pmod**
+       (bought 2026-08-02, arrival unconfirmed), and the Cartridge Pmod you
+       already have. **Nothing left to buy** — the PS/2 keyboard came off the
+       list with decision 2 below.
        Closes the long-standing **font glyph visual check**.
 
 Software, in order:
@@ -50,9 +51,12 @@ Software, in order:
        keyboard (0.7-1.1 ms per frame vs a ~0.28 ms poll), but **a Linux driver
        decoding E0/F0 prefix sequences will need an overrun bit** — a dropped
        byte desynchronises the decoder and nothing currently reports it.
-3. [ ] **Memory decision, then act on it** (see below). Everything from here
-       up is shaped by whether Linux lives in 8 MB of QSPI PSRAM or 32 MB of
-       SDRAM.
+3. [x] **Memory decision — DONE 2026-08-03: the onboard 32 MB SDRAM**
+       (decision 1 below). Closed by measurement, not argument: 10 clocks for
+       a random 32-bit read against QSPI's ~130.
+3b.[x] **I-cache — DONE 2026-08-04** (decision 4 below), `src/icache.sv`.
+       Fetch was costing ~8 clocks per instruction even with fast RAM; a hit
+       now costs one. 3 of 208 block RAMs.
 4. [ ] xv6 rv32 port on the SBI firmware — first sv32 workload, and a much
        shorter path to "an OS is running" than Linux.
 5. [ ] Buildroot nommu uLinux, console on UART.
@@ -60,9 +64,13 @@ Software, in order:
 7. [ ] **Root filesystem on microSD** — the step that turns a booting kernel
        into a computer. Needs a block driver; console's `sd_spi.sv` is a
        proven starting point.
-8. [ ] A keyboard driver + devicetree node for Linux. koti's PS/2 block is
-       **not** an i8042 — it is one MMIO word `{avail[8], scancode[7:0]}`,
-       read-to-clear, raising `meip`. Mainline will not recognise it.
+8. [ ] **USB HID host + its Linux driver and devicetree node** (decision 2
+       below). Mainline will not recognise a soft host core any more than it
+       recognises koti's PS/2 word, so a small custom driver is required
+       either way — plan for one, not for `usbhid` to just work.
+       The PS/2 block it replaces stays until USB has typed a character on
+       real hardware: one MMIO word `{ovf[9], avail[8], scancode[7:0]}`,
+       read-to-clear, raising `meip`.
 
 Parked — Koti-1 as a chip (nothing above depends on these):
 - [ ] Generate the 32x32 2R1W regfile macro with AUCOHL/DFFRAM
@@ -71,11 +79,10 @@ Parked — Koti-1 as a chip (nothing above depends on these):
 - [ ] Integrate it and re-harden 8x2 (currently red — PDN-0233).
 - [ ] Submit Koti-1 to a shuttle.
 
-## Open architecture decisions
+## Architecture decisions — ALL FOUR CLOSED (2026-08-03 / 2026-08-04)
 
-These are worth deciding before item 4, because they change everything after
-it. None is urgent; all are now *possible* only because silicon is off the
-path.
+These gated the kernel ladder. Nothing here is open any more; the entries are
+kept with their evidence because each one constrains work downstream of it.
 
 1. ~~**Where does Linux's RAM live?**~~ **DECIDED AND WORKING 2026-08-03: the
    onboard SDRAM.** `src/sdram_ctrl.sv` speaks the same request-port contract
@@ -98,17 +105,78 @@ path.
    the charbuf address and every existing test carried over untouched. The
    16 MB window reaches half the part; widening it needs a wider address bus
    through the core and arbiter, for memory sv32 Linux does not need.
-2. **Keyboard: keep PS/2, or move to USB?** PS/2 is written, tested and
-   costs ~50 flops; it only exists in this shape because TT's `ui` pins
-   cannot drive a wire. On FPGA, `usb_fpga_bd_dp/dn` are bidirectional and
-   open low-speed USB host cores exist for this board. PS/2 first regardless
-   — it works today — but "modern keyboard" stopped being impossible.
-3. **Video: VGA Pmod or onboard GPDI?** The VGA Pmod path is done and the
-   monitor and cable are bought. GPDI needs no Pmod at all and frees eight
-   pins, at the cost of a TMDS encoder.
-4. **Caches.** koti currently has none and uses **zero BRAM**. There is
-   ~3.7 Mbit sitting unused. Even a small I-cache would change the felt
-   speed of the machine more than any clock-rate work.
+2. ~~**Keyboard: keep PS/2, or move to USB?**~~ **DECIDED 2026-08-04 (user):
+   USB HID host.** koti's keyboard is a USB one on `usb_fpga_bd_dp/dn`;
+   PS/2 is no longer the target shape.
+   - **Consequence, act on it: the PS/2 keyboard comes OFF the shopping
+     list.** It was the last unbought item on the FPGA critical path, so
+     there is now nothing left to buy for koti bring-up.
+   - ⚠️ **PS/2 stays in the RTL until USB is proven on hardware.** It is
+     ~50 flops, it is tested end to end, it is already wired to `gp[8]/gp[9]`
+     in the LPF, and it is the only keyboard path that works today. Deleting
+     a working input before its replacement has ever seen a real device would
+     leave bring-up with no keyboard at all. Retire it once USB types a
+     character on the board, not before.
+   - What was weighed: the usual argument for USB is "mainline Linux already
+     has drivers", and that argument does **not** hold here — a soft host
+     core on the ECP5 is not an EHCI or OHCI controller, so mainline would no
+     more recognise it than it recognises koti's one-word PS/2 register
+     (ladder item 8). Both paths need a small custom driver. USB's real win
+     is that it works with keyboards you already own.
+   - Scope, so this is not mistaken for a small job: a low-speed (1.5 Mbps)
+     host needs its own oversampling clock domain, device enumeration
+     (`SET_ADDRESS`, `GET_DESCRIPTOR`, `SET_CONFIGURATION`, boot protocol),
+     and periodic IN transactions on the interrupt endpoint, before any
+     8-byte HID boot report reaches software. Vendor a proven core rather
+     than writing the protocol from scratch — the same route the console repo
+     took for the Gamepad Pmod, where upstream's reference receiver is
+     protocol truth and koti-side code is a thin adapter.
+   - **It does not gate the kernel ladder.** Rung 1 runs its console on the
+     UART, so this lands at ladder item 8 as before — the decision changes
+     *what gets built there*, not *when*.
+3. ~~**Video: VGA Pmod or onboard GPDI?**~~ **DECIDED 2026-08-04 (user): the
+   Tiny VGA Pmod. Closed; GPDI is off the roadmap.**
+   The VGA path is already complete — `vga_text.sv` + `vga_timing.sv`, the
+   `uo` VGA personality in `project.sv`, and J2 constrained in `ulx3s.lpf` —
+   so this decision costs zero new work, which is the point when the goal is
+   a visible Linux console. Hardware is not the constraint either way: the
+   monitor bought 2026-07-30 takes **both** VGA and HDMI. GPDI would have
+   needed a TMDS encoder and a ~125 MHz DDR clock domain to free eight pins
+   that an 85F does not need freed. If it is ever wanted, both paths hang off
+   the same RGB + sync signals, so it is a pure output-side addition that
+   need not touch the text pipeline.
+4. ~~**Caches.**~~ **DECIDED 2026-08-04 (user): an I-cache now, a D-cache
+   later. IMPLEMENTED — `src/icache.sv`.**
+   - **The number that settled it.** Walk `sdram_ctrl`'s FSM at 25 MHz, where
+     `C_RCD` and `C_RP` are one clock each and `RD_WAIT` is zero:
+     `IDLE→ACT→RCD→RD→RD_WAIT×2→DONE×2` is **8 clocks for one 32-bit word**,
+     and a burst is a second full pass because the first auto-precharged the
+     row. So a 64-bit fetch is **~16 clocks for two instructions — ~8 clocks
+     per instruction of pure fetch**, which dominates CPI (~11-12) and pins
+     the machine near **2 MIPS**. A hit answers in one clock.
+   - **Shape:** 512 entries × 64 bits, physically indexed and tagged. A line
+     is exactly the *pair* the fetch port already asks for, which is what
+     makes one memory transaction fill one line and deletes the
+     straddling-pair case entirely. Costs **3 of the 85F's 208 block RAMs**;
+     koti used zero before. Full reasoning in the header of `src/icache.sv`.
+   - **`fence.i` is no longer a NOP.** It was one (`control.sv` had no case
+     for it) and that was harmless with nothing in front of memory; with a
+     fetch-side cache it is what makes code written through the data port —
+     a bootloader staging a kernel, a module loader — executable. Decoded in
+     `koti_core.sv`, it invalidates the cache and serializes fetch the same
+     way `sfence.vma` has since F2.
+   - **`sfence.vma` deliberately does NOT flush it.** The cache is tagged on
+     physical addresses (`if_addr` is `fpc_pa`, post-translation), so
+     remapping a page cannot leave a stale line behind. Page-table walks,
+     which share the fetch port, **bypass** the cache — otherwise a cached
+     PTE would outlive the `sfence.vma` meant to retire it.
+   - **A D-cache is deliberately not part of this.** The video DMA reads the
+     charbuf out of the same SDRAM the CPU writes, so the data side has a
+     coherence question the fetch side does not, and answering it is worth
+     more once there is a kernel to measure. The natural companion is
+     cheaper: an open-row policy and a real 4-word SDRAM burst would make
+     line fills roughly twice as fast, and `sdram_ctrl`'s own header already
+     names both as the performance left on the table.
 
 Precedent that the memory-starved version works at all: KianV RV32IMA uLinux
 SoC (TT06, 30 MHz, QSPI Pmod).

@@ -146,6 +146,9 @@ jobs:
           ./scripts/config --file .config \
             --set-str INITRAMFS_SOURCE "$GITHUB_WORKSPACE/initramfs.desc"
           make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          # Copied here and not after the build: the config is most wanted on
+          # the runs that FAIL, and every step after this one can fail.
+          cp .config config-koti.txt
 
       # A defconfig is a request. kconfig silently drops any line whose
       # dependencies are unmet, and three of the symbols koti depends on fail
@@ -165,12 +168,31 @@ jobs:
       - name: The Image satisfies koti's boot contract
         run: python3 sw/linux/check_image.py linux-${KVER}/arch/riscv/boot/Image
 
+      # Where the bytes went. The first build of this kernel was 20.44 MiB
+      # against 12 MiB of headroom, and `size vmlinux` explained none of it:
+      # _etext was 1.8 MB and the rest was four 4 MiB SECTION_ALIGN gaps.
+      # Gaps between consecutive symbols are what makes that visible, so the
+      # next time this grows the answer is in the log rather than in a
+      # download.
       - name: Sizes
         working-directory: linux-${{ env.KVER }}
         run: |
           riscv64-linux-gnu-size vmlinux || true
           echo "Image: $(stat -c %s arch/riscv/boot/Image) bytes"
-          cp .config config-koti.txt
+          python3 - <<'PY'
+          rows = []
+          for line in open('System.map'):
+              p = line.split(None, 2)
+              if len(p) == 3:
+                  rows.append((int(p[0], 16), p[2].strip()))
+          rows.sort()
+          gaps = sorted(((rows[i+1][0] - rows[i][0], rows[i][1])
+                         for i in range(len(rows) - 1)), reverse=True)
+          print(f"vmlinux spans {(rows[-1][0]-rows[0][0])/2**20:.2f} MiB")
+          print("largest gaps after:")
+          for size, name in gaps[:10]:
+              print(f"  {size:>9}  {name}")
+          PY
 
       - uses: actions/upload-artifact@v7
         if: success() || failure()

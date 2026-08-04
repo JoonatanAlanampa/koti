@@ -72,6 +72,20 @@ def main():
         print("  FAIL: big-endian kernel; koti is little-endian.")
         ok = False
 
+    # text_offset is the kernel's own statement of where it wants to be, as an
+    # offset from the start of RAM (Documentation/riscv/boot-image-header.rst).
+    # RV32 defines it as 4 MiB because sv32 maps the kernel with megapages —
+    # which is the same reasoning that put KERNEL_ADDR at 0x0140_0000, arrived
+    # at independently. Checking they agree turns "we picked a plausible
+    # address" into "the kernel and the firmware name the same one".
+    print(f"  wants to load at RAM_BASE + text_offset ="
+          f" {RAM_BASE + text_offset:#x}; sbi.c loads it at {KERNEL_ADDR:#x}")
+    if RAM_BASE + text_offset != KERNEL_ADDR:
+        print("  FAIL: the firmware would place this kernel somewhere it does")
+        print("        not expect to be. Change KERNEL_ADDR in sw/sbi/sbi.c,")
+        print("        test/test.py and koti.dts, together.")
+        ok = False
+
     print(f"  load address : {KERNEL_ADDR:#x}, headroom to the top of RAM"
           f" = {HEADROOM / 2**20:.2f} MiB")
     if image_size > HEADROOM:

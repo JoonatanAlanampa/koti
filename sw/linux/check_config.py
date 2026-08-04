@@ -44,6 +44,10 @@ REQUIRED = [
     ("CONFIG_EFI", "n"),
     ("CONFIG_FPU", "n"),
     ("CONFIG_SMP", "n"),
+    # Not a hardening opinion — an arithmetic one. It makes vmlinux.lds.S align
+    # every section to PMD_SIZE, which on sv32 is 4 MiB, and there are four
+    # such boundaries. It cost 16 MiB of padding on a machine with 12.
+    ("CONFIG_STRICT_KERNEL_RWX", "n"),
 
     # the firmware contract (see sw/sbi/sbi.c)
     ("CONFIG_RISCV_SBI", "y"),

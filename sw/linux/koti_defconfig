@@ -75,6 +75,19 @@ CONFIG_CMDLINE=""
 # the kernel occupies its own size in a 16 MB machine, twice over while the
 # initramfs is still unpacked. Optimising for size is not a preference here.
 CONFIG_CC_OPTIMIZE_FOR_SIZE=y
+
+# ⚠️ The single biggest line in this file. STRICT_KERNEL_RWX is `default y` and
+# makes vmlinux.lds.S use `#define SECTION_ALIGN PMD_SIZE` so that text, rodata
+# and data can carry different permissions on whole megapages. On sv32 PMD_SIZE
+# is 4 MiB, and there are four such boundaries — so the first build of this
+# kernel came out at **20.44 MiB of which 16 was alignment padding**, against
+# koti's 12 MiB of headroom. _etext was 1.8 MB. Without it SECTION_ALIGN is
+# L1_CACHE_BYTES and the same kernel is about 4.5 MiB.
+#
+# What it costs: the kernel's own text stops being mapped read-only-execute.
+# That is a hardening feature, not a correctness one, and it is the right thing
+# to spend on a machine whose entire address space is 16 MB.
+# CONFIG_STRICT_KERNEL_RWX is not set
 CONFIG_EXPERT=y
 # CONFIG_NET is not set
 # CONFIG_MODULES is not set

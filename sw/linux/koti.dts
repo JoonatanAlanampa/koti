@@ -8,12 +8,20 @@
  *                     timer through the SBI TIME extension, so the kernel wants
  *                     `timebase-frequency` and the CPU-local interrupt
  *                     controller, not an MMIO range it cannot legally touch.
- *   no PLIC node    — koti has no PLIC. See README.md; this is the reason no
- *                     device node below claims an interrupt.
  *   no serial node  — koti's UART is transmit-only at a core-internal MMIO
- *                     address and is not a 16550. The console is the SBI one.
+ *                     address and is not a 16550. The console is the SBI one,
+ *                     and it needs CONFIG_RISCV_SBI_V01 because koti's
+ *                     firmware answers the legacy calls and not DBCN.
+ *   no keyboard node— the PS/2 block is one MMIO word, not an i8042, so
+ *                     nothing in mainline would bind to a node for it. It
+ *                     raises PLIC source 1; the driver is still to write.
  *
- * Build:  dtc -I dts -O dtb -o koti.dtb koti.dts
+ * (A PLIC node WAS absent for the same reason until 2026-08-04, when
+ * src/plic.sv was built. It is here now, under /soc.)
+ *
+ * Build:  dtc -I dts -O dtb -o koti.dtb koti.dts   (the `dtb` job in
+ *         .github/workflows/linux.yaml; the resulting blob is committed as
+ *         koti.dtb because the firmware is built on a host with no dtc)
  *
  * Copyright (c) 2026 Joonatan Alanampa
  * SPDX-License-Identifier: Apache-2.0

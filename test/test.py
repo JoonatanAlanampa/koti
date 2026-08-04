@@ -955,13 +955,17 @@ async def test_boots_a_kernel_image_with_the_linux_handoff(dut):
     ram = SpiMem(1 << 23, writable=True)
     flash.mem[:len(img)] = img
 
-    # A minimal flattened-devicetree header at the flash address the firmware
-    # reads. Only the first two big-endian words matter to it: the magic it
-    # validates and the total size it copies. The tail is filler with a
-    # recognisable shape so the copy can be checked byte for byte.
-    dtb = bytearray(b"\xd0\x0d\xfe\xed" + (64).to_bytes(4, "big"))
-    dtb += bytes(range(8, 64))
-    flash.mem[DTB_SRC_FLASH:DTB_SRC_FLASH + len(dtb)] = dtb
+    # The devicetree is NOT injected here: sw/sbi/dtb.S embeds the real
+    # koti.dtb in the firmware image at flash 0x6000, so loading sbi_test.bin
+    # above already placed it. Reading the expected bytes from the same file
+    # the firmware was built from makes this an end-to-end check of the blob
+    # that actually ships — a fake header would pass just as happily against a
+    # .dtb section that was never filled.
+    dtb = (Path(__file__).parent.parent / "sw" / "linux"
+           / "koti.dtb").read_bytes()
+    assert flash.mem[DTB_SRC_FLASH:DTB_SRC_FLASH + 4] == b"\xd0\x0d\xfe\xed", (
+        "sbi_test.bin carries no FDT magic at flash 0x6000 — rebuild it with "
+        "python sw/sbi/build.py")
 
     kimg = b"".join(w.to_bytes(4, "little") for w in fake_kernel())
     # NB: one slice, not `ram.mem[off:][:n] = ...` — slicing a bytearray builds
@@ -994,7 +998,13 @@ async def test_boots_a_kernel_image_with_the_linux_handoff(dut):
         "'?' in the third position means a1 was not the DTB address"
     )
 
-    # and the blob really was copied, not just pointed at
+    # and the whole blob really was copied, not just pointed at. All of it,
+    # not a prefix: the firmware reads `totalsize` out of the header to decide
+    # how much to move, so a copy that stops early is exactly the bug this
+    # catches — and it would leave a kernel parsing a truncated devicetree,
+    # which fails much later and somewhere else.
     off = DTB_DST - 0x0100_0000
-    assert bytes(ram.mem[off:off + 64]) == bytes(dtb), \
-        f"DTB copy mismatch: {bytes(ram.mem[off:off + 16])!r}"
+    got = bytes(ram.mem[off:off + len(dtb)])
+    assert got == dtb, (
+        f"DTB copy mismatch at +{next(i for i in range(len(dtb)) if got[i] != dtb[i]):#x}"
+        f" of {len(dtb)} bytes; head = {got[:16]!r}")

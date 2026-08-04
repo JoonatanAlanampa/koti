@@ -1,22 +1,30 @@
-# init.S — the smallest /init that proves userspace ran, in ~20 instructions.
-#
-# Rung 1's whole question is whether the kernel gets from the firmware's mret
-# all the way to executing a user program, and this answers it without a libc,
-# a shell or a toolchain koti does not have: a static RV32 ELF that writes one
-# line and then asks the machine to switch off.
-#
-# The power-off is not decoration. reboot(LINUX_REBOOT_CMD_POWER_OFF) goes
-# kernel -> pm_power_off -> SBI SRST -> sw/sbi/sbi.c -> `ebreak`, which halts
-# koti's core. So a successful boot ENDS, and a simulation of it terminates on
-# its own instead of running until a timeout that cannot tell "finished" from
-# "hung". The fall-through loop is there for the case where SRST does not take.
-#
-# Built by .github/workflows/linux.yaml as:
-#   riscv64-linux-gnu-gcc -march=rv32ima -mabi=ilp32 -nostdlib -static \
-#       -no-pie -Wl,--build-id=none -o init init.S
-#
-# Copyright (c) 2026 Joonatan Alanampa
-# SPDX-License-Identifier: Apache-2.0
+/*
+ * init.S — the smallest /init that proves userspace ran, in ~20 instructions.
+ *
+ * The question rung 1 asks is whether the kernel gets from the firmware's
+ * `mret` all the way to executing a user program, and this answers it without
+ * a libc, a shell or a toolchain koti does not have: a static RV32 ELF that
+ * writes one line and then asks the machine to switch off.
+ *
+ * The power-off is not decoration. reboot(LINUX_REBOOT_CMD_POWER_OFF) goes
+ * kernel -> pm_power_off -> SBI SRST -> sw/sbi/sbi.c -> `ebreak`, which halts
+ * koti's core. So a successful boot ENDS, and a simulation of it terminates on
+ * its own instead of running to a timeout that cannot tell "finished" from
+ * "hung". The fall-through loop covers the case where SRST does not take.
+ *
+ * C comments, not `#`, throughout: a capital-.S file is run through the C
+ * preprocessor, and the first draft of this header had a line beginning
+ * "# line and then...", which cpp read as a #line directive and rejected.
+ * Any comment starting with define/include/if/else/endif/error/line is a
+ * trap in an assembler file.
+ *
+ * Built by .github/workflows/linux.yaml as:
+ *   riscv64-linux-gnu-gcc -march=rv32ima -mabi=ilp32 -nostdlib -static \
+ *       -no-pie -Wl,--build-id=none -o init init.S
+ *
+ * Copyright (c) 2026 Joonatan Alanampa
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
     .section .rodata
 msg:
@@ -31,7 +39,11 @@ _start:
     # unable to open an initial console" and init runs with no file
     # descriptors at all, which looks exactly like init never running.
     li      a0, 1
-    la      a1, msg
+    lla     a1, msg                 # `lla`, not `la`: on RISC-V `la` expands
+                                    # to a load THROUGH the GOT, so the string
+                                    # address would come from a relocation in
+                                    # a data section this program does not
+                                    # otherwise need. lla is auipc+addi.
     li      a2, msglen
     li      a7, 64                  # __NR_write
     ecall

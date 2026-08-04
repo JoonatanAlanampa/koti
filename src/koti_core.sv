@@ -786,8 +786,17 @@ module koti_core #(
     // The fix is to let the RMW latch "done" the way every other memory access
     // already does. d_seen then deasserts d_active, which frees the port, which
     // lets the walker run, which clears tlb_stall, which retires the AMO.
-    wire amo_fin = d_seen || (amo_wr && wr_ok);
-    assign astall = rmw_m && !halted && !amo_fin;
+    //
+    // Note it releases on `d_seen` and NOT on `d_seen || (amo_wr && wr_ok)`,
+    // so an AMO always takes one more cycle than it strictly must. That is
+    // deliberate and it is cheaper than it sounds: retiring on the ack cycle
+    // means the writeback reads mem_word while d_seen is still 0, so mem_word
+    // has to mux old_q in on the load datapath — a 32-bit mux in front of the
+    // load shifter, which measured 691 LUTs and 3.4 MHz of Fmax on the ECP5.
+    // Going through d_seen for one cycle costs one clock per atomic instead,
+    // and removes the only path on which an AMO's result came off d_rdata
+    // during a WRITE acknowledgement — a value no memory controller promises.
+    assign astall = rmw_m && !halted && !d_seen;
 
     always_ff @(posedge clk)
         if (rst) amo_wr <= 1'b0;
@@ -834,12 +843,11 @@ module koti_core #(
          .data(st_data[7:0]), .tx(uart_txd), .busy(uart_busy));
 
     // loads: external word through the byte-extension path
-    // During an RMW's write phase this is old_q — the value memory held BEFORE
-    // the write, which is what an AMO returns in rd. It used to be d_rdata
-    // here too, which made the result depend on whatever a memory controller
-    // happens to drive on the read bus while it is acknowledging a WRITE.
-    // Nothing specifies that, and the two candidates only agree by luck.
-    assign mem_word = d_seen ? d_data_r : (amo_wr ? old_q : d_rdata);
+    // An RMW always retires with d_seen set (see astall), and d_data_r then
+    // holds old_q — so an AMO's rd comes from the left arm here, and never
+    // from whatever a controller drives on the read bus while acknowledging a
+    // write.
+    assign mem_word = d_seen ? d_data_r : d_rdata;
     wire [31:0] ld_shift = mem_word >> (8 * off_m);
     logic [31:0] ld_ext;
     always_comb

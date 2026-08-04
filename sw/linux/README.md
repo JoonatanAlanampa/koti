@@ -6,15 +6,41 @@ koti; the point of *this file* is to make the gaps between "the hardware is
 complete" and "Linux boots" explicit, because they are not the same claim
 and the difference is all software.
 
-> **Status:** the machine-side contract is complete and tested. `sbi.c`
-> answers the SBI Base, TIME and SRST extensions — what Linux asks for before
-> it trusts anything else — and `sbi.S` performs the Linux boot handoff:
-> a kernel found at `0x01400000` is entered in S-mode with `a0` = hartid and
-> `a1` = the DTB, otherwise the built-in flash payload runs as before.
-> `koti.dts` describes the machine.
+> **Status 2026-08-04: it boots.**
 >
-> **What is missing is a kernel.** Nothing has been built or booted; that
-> needs a `riscv32-linux-musl` toolchain, which is task 4 below.
+> ```
+> [    0.000000] Linux version 6.12.0 (riscv64-linux-gnu-gcc 13.3.0) #1
+> [    0.000000] Machine model: Koti-1 (ULX3S 85F)
+> [    0.000000] SBI specification v0.2 detected
+> [    0.000000] SBI implementation ID=0x4b4f5449 Version=0x1
+> [    0.000000] SBI TIME extension detected
+> [    0.000000] earlycon: sbi0 at I/O port 0x0 (options '')
+> [    0.000000] OF: reserved mem: 0x01000000..0x0100ffff (64 KiB) nomap firmware@1000000
+> [    0.000000] Zone ranges:  Normal [mem 0x0000000001400000-0x0000000001ffffff]
+> [    0.000000] riscv: base ISA extensions aim
+> [    0.000000] Kernel command line: console=hvc0 earlycon=sbi
+> [    0.000000] Built 1 zonelists ... Total pages: 3072
+> [    0.000000] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
+> ```
+>
+> Every line there is a piece of this directory being confirmed: the machine
+> model comes from `koti.dts`, so the firmware found the blob at flash
+> `0x6000`, copied it to RAM and passed it in `a1`; the SBI lines are `sbi.c`
+> answering; `base ISA extensions aim` is the core being read correctly out of
+> the devicetree; and the console is arriving through the legacy SBI call this
+> firmware implements. In simulation, on `test/tb_boot.v`.
+>
+> **It stalls after SLUB init**, which is the next thing to chase. It is not
+> yet a computer — there is no userspace output, and `init` has not run.
+>
+> Getting this far cost two real CPU defects, both of which would have hung the
+> ULX3S in exactly the same way and neither of which any existing suite could
+> reach: an **AMO/page-walk livelock** in `koti_core.sv` and a **dropped-request
+> deadlock** in `arbiter3.sv`. Both are described in the source at the point of
+> the fix. The lesson worth carrying: 58 official tests, 1252 muldiv vectors
+> and six green suites did not touch either, because the official atomics tests
+> run with `satp = 0` and the directed sv32 tests contain no atomics. Booting a
+> real OS is a different kind of test, and this is what it was for.
 
 ## What is already true
 
@@ -253,9 +279,18 @@ not evidence of the kernel you get. The reasoning behind the load-bearing ones:
    resolved config and the Image header against what this machine can run.
    No Buildroot: the kernel links no libc, so Ubuntu's `gcc-riscv64-linux-gnu`
    builds it directly.
-5. Boot it. The console is `earlycon=sbi` then `hvc0`; a successful boot ENDS,
-   because `init` asks for power-off and the firmware's SRST is an `ebreak`.
-6. Then a real userspace (Buildroot busybox + musl), and after that the
+5. ~~Boot it~~ **PARTLY DONE 2026-08-04**: `test/tb_boot.v` boots the Image
+   through the real firmware, DTB and SBI console, as far as SLUB init. The
+   `boot` job in `linux.yaml` runs it on every kernel build and greps for the
+   lines only a real boot produces.
+6. **Get past SLUB init.** The run stalls there with no further output. On the
+   evidence so far the prior is a third hardware defect rather than a kernel
+   config problem — the two found already were both invisible to every
+   existing test — so `+tfrom`/`+tlen` in `tb_boot.v` and the symbol lookup in
+   `System.map` are the tools, in that order. A successful boot ENDS: `init`
+   asks for power-off, the firmware's SRST is an `ebreak`, and the bench
+   reports PASS on `halted`.
+7. Then a real userspace (Buildroot busybox + musl), and after that the
    console on the VGA text mode — which is the frontier and the thing the
    `koti-handbook` product cannot yet claim.
 

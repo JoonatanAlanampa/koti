@@ -30,18 +30,22 @@ and the steps in `README.md`.
 
 Two results worth pulling out of the table:
 
-- **27.48 MHz — quote this one.** The number has moved twice and both
-  earlier figures are still in circulation. 34.8 MHz was unconstrained
-  (2026-07-22); constraining every pin to a real ball cost about 3 MHz and
-  gave 31.69; adding the SDRAM controller and its 39 further pins costs
-  another ~4 and gives **27.48 MHz post-route, PASS at 25 MHz**. That is
-  **9.9% margin**, down from 26.8%, and it is the first figure here that is
-  not comfortable. Nothing is wrong at 25 MHz, but there is no longer much
-  room, so treat any future clock-rate ambition as needing work rather than
-  headroom — an I-cache (PLAN.md decision 4) would help the felt speed far
-  more than chasing MHz anyway.
+- **31.14 MHz — quote this one** (run 30940888908, 2026-08-04). The number
+  has moved five times and every earlier figure is still in circulation
+  somewhere: 34.8 was an unconstrained local run whose artifacts were
+  deleted; 31.69 was pre-SDRAM; 27.48 was the first SDRAM build; 30.90 and
+  31.83 were intermediate. The current build is **11467 COMB (13%), 3637 FF,
+  79 IO, 3/208 BRAM, 31.14 MHz post-route, PASS at 25 MHz** = **24.6%
+  margin**.
+  The 9.9%-margin worry recorded here when the number was 27.48 did not
+  survive: the I-cache and the two 2026-08-04 core fixes together bought the
+  margin back, and the core fixes were very nearly free (-74 LUTs, -0.69 MHz
+  against the build immediately before them). Treat clock-rate ambition as
+  work rather than headroom anyway — 25 MHz is what `ulx3s.lpf` constrains
+  and what `koti.dts` tells Linux the timebase is.
 - ⚠️ **nextpnr prints Max frequency TWICE and the first one is not the
-  answer.** This run logs `22.04 MHz (FAIL)` and then `27.48 MHz (PASS)`;
+  answer.** The 2026-08-04 run logs `23.51 MHz (FAIL)` and then
+  `31.14 MHz (PASS)`;
   the first is the post-PLACEMENT estimate and the second is post-route.
   Reading the wrong one turns a passing build into a panic. Same trap as
   the console repo hit.

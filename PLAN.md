@@ -32,7 +32,7 @@ requirement — see "Open architecture decisions" below.
 
 Hardware bring-up (needs the board in hand):
 1. [ ] **ULX3S first power-up** — `fpga/ulx3s/README.md`, steps 1-7. Bitstream
-       and harness are done and green (**27.48 MHz** post-route, PASS at
+       and harness are done and green (**31.14 MHz** post-route, PASS at
        25 MHz; 4/4 harness tests). Needs: the board, a **Tiny VGA Pmod**
        (bought 2026-08-02, arrival unconfirmed), and the Cartridge Pmod you
        already have. **Nothing left to buy** — the PS/2 keyboard came off the
@@ -57,10 +57,27 @@ Software, in order:
 3b.[x] **I-cache — DONE 2026-08-04** (decision 4 below), `src/icache.sv`.
        Fetch was costing ~8 clocks per instruction even with fast RAM; a hit
        now costs one. 3 of 208 block RAMs.
-4. [ ] xv6 rv32 port on the SBI firmware — first sv32 workload, and a much
-       shorter path to "an OS is running" than Linux.
-5. [ ] Buildroot nommu uLinux, console on UART.
-6. [ ] Mainline sv32 Linux, console on the VGA/HDMI text mode.
+4. ~~xv6 rv32 port~~ and ~~Buildroot nommu uLinux~~ — **BOTH CUT 2026-08-04.**
+       The three-rung ladder (xv6, then nommu, then sv32 Linux) was written
+       before the MMU was finished, and the first two rungs are not smaller
+       steps toward the third — they are steps sideways onto different
+       machines. `CONFIG_MMU=n` turns `RISCV_M_MODE` on by default and
+       `RISCV_SBI` off with it, so a nommu kernel replaces this firmware
+       rather than calling it, and with koti's transmit-only non-16550 UART
+       that leaves it with no console at all. xv6 brings its own M-mode boot,
+       reads no devicetree, wants a 16550 and a virtio-blk rootfs. Full
+       argument and the Kconfig quotes: `sw/linux/README.md`.
+5. [x] **Mainline sv32 Linux — IT BOOTS, 2026-08-04.** Linux 6.12 RV32,
+       built in CI by `.github/workflows/linux.yaml` (no Buildroot: the kernel
+       links no libc, so Ubuntu's `gcc-riscv64-linux-gnu` builds it directly).
+       Reaches SLUB init through the real firmware, DTB and SBI console on
+       `test/tb_boot.v`; the `boot` job runs it on every kernel build. Cost
+       two real CPU defects on the way — an AMO/page-walk livelock in
+       `koti_core.sv` and a dropped-request deadlock in `arbiter3.sv`, both of
+       which would have hung the board identically and neither reachable by
+       any existing suite.
+6. [ ] **Get past SLUB init**, then a Buildroot busybox+musl userspace, then
+       the console on the VGA text mode.
 7. [ ] **Root filesystem on microSD** — the step that turns a booting kernel
        into a computer. Needs a block driver; console's `sd_spi.sv` is a
        proven starting point.
@@ -256,16 +273,22 @@ over; it becomes a 3-port arbiter (ifetch / data / video DMA).
      runs headless with UART; once fbcon works, blue LSB returns.
      5-bit-blue cost is invisible in text mode.
 
-## Memory map (draft)
+## Memory map (as built — this table was a draft until 2026-08-04)
 
 | Range | What |
 |---|---|
-| 0x0000_0000+ | flash XIP: bootloader + kernel image staging |
-| 0x0001_0000 | MMIO: UART, GPIO-lite, QSPI_CFG (as tt-riscv) |
-| 0x0002_0000 | CLINT |
-| 0x0003_0000 | PLIC-lite |
-| 0x0004_0000 | VGA ctrl (charbuf base ptr, cursor, enable) |
-| 0x0100_0000+ | PSRAM 8 MiB: kernel, rootfs (initramfs), charbuf |
+| 0x0000_0000+ | flash XIP: SBI firmware; `.payload` at 0x4000, `.dtb` at 0x6000 |
+| 0x0001_0000 | MMIO: LED, UART, GPIO-lite, QSPI_CFG (as tt-riscv) |
+| 0x0002_0000 | CLINT (full 64 KB window decoded) |
+| 0x0004_0000 | VGA ctrl + PS/2 (full 64 KB window) |
+| 0x00C0_0000–0x00FF_FFFF | **PLIC** — the top 4 MB of flash space, not a 64 KB carve-out: it is register-compatible with `sifive,plic-1.0.0`, whose driver hard-codes the context registers at offset 0x200000 |
+| 0x0100_0000+ | RAM, 16 MB window. ULX3S: the onboard SDRAM. QSPI build: 8 MB PSRAM |
+| 0x0100_0000 | firmware .bss + M/S stacks + VGA charbuf, 64 KB, reserved in `koti.dts` |
+| 0x013F_0000 | where the firmware copies the DTB before entering a kernel |
+| 0x0140_0000 | Linux load address — the first 4 MiB boundary clear of the above, which is also what the Image header's `text_offset` asks for |
+
+`addr[22]` picks flash from RAM throughout, which is why the PLIC comes off
+the TOP of flash space: software keeps a contiguous run from zero.
 
 M-mode firmware: **write our own minimal SBI** (console putchar via
 UART/VGA, timer via CLINT, ~2-4 KB) — OpenSBI is too big for XIP+8 MiB
@@ -281,16 +304,22 @@ comfort. KianV's firmware is the reference.
    rebuild with test/build_riscv_tests.py (needs CPU repo + xpack
    gcc). Privilege (rv32mi subset) deferred until illegal-instr +
    misalign traps exist (milestone 8).
-2. xv6-riscv (rv32 port) — sv32 smoke test, far faster to debug than
-   Linux.
-3. Buildroot nommu uLinux — rung 1, de-risks everything but the MMU.
-4. Mainline Linux sv32 + custom dts + fbcon on the text console.
-5. Yocto layer (meta-koti) once the kernel is stable — feeds the
+2. ~~xv6-riscv (rv32 port)~~ and ~~Buildroot nommu uLinux~~ — **both CUT
+   2026-08-04**; see the ladder above and `sw/linux/README.md`. Going
+   straight at sv32 Linux was the right call and the evidence is that it
+   boots.
+3. **Mainline Linux sv32 + `koti.dts` — BOOTS to SLUB init, 2026-08-04.**
+   Next: past SLUB, then a busybox userspace, then fbcon on the text console.
+4. Yocto layer (meta-koti) once the kernel is stable — feeds the
    bigger own-PC project.
 
 ## Verification / bring-up
 
-- Verilator full-boot sim (RTL) — Linux to shell before FPGA.
+- ~~Verilator full-boot sim~~ — **done with iverilog instead, 2026-08-04**:
+  `test/tb_boot.v` + `test/sim_mem.sv` boot the real Image at ~45 kHz
+  simulated, which is 11 M clocks in about seven minutes and enough to reach
+  SLUB init. Verilator becomes worth the extra harness only when the boot runs
+  long enough that iverilog cannot finish it — i.e. once userspace starts.
 - ULX3S 85F: same RTL + real QSPI Pmod + real monitor.
 - Gate-level of the arbiter/video corner: video underrun under worst
   case ifetch+data+walker contention.

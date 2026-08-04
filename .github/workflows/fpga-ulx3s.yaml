@@ -120,8 +120,9 @@ jobs:
             echo '```'
             grep -E "Max frequency for clock|Max delay|Info: Critical path" fpga/ulx3s/build/nextpnr.log | head -20
             echo '```'
-            echo "Reference: the 2026-07-22 local run with UNCONSTRAINED IO got"
-            echo "8945 COMB / 2791 FF / 34.8 MHz. This run constrains every pin."
+            echo "nextpnr prints **Max frequency twice**; the FIRST is a"
+            echo "post-PLACEMENT estimate and is routinely a FAIL. Quote the"
+            echo "second. This run's post-route figure is gated below."
             if [ "${{ steps.pnr.outputs.rc }}" != "0" ]; then
               echo
               echo "**nextpnr exited ${{ steps.pnr.outputs.rc }}** — full log in the artifact."
@@ -144,3 +145,18 @@ jobs:
             echo "::error::nextpnr-ecp5 exited ${{ steps.pnr.outputs.rc }}. If this is a timing violation, the achieved Fmax is in the job summary and in fpga/ulx3s/build/nextpnr.log in the koti-fpga artifact."
             exit 1
           fi
+
+          # Belt as well as braces. The exit code above is nextpnr's own
+          # verdict, and it is the right primary gate — but it is one boolean
+          # from a tool that prints TWO Max-frequency lines, of which the first
+          # is a post-PLACEMENT estimate that is often a FAIL on a design that
+          # closes fine after routing. Asserting on the LAST line encodes
+          # "the second one is the real one" in the workflow instead of leaving
+          # it as a rule people have to remember while reading a log.
+          last=$(grep "Max frequency for clock" fpga/ulx3s/build/nextpnr.log \
+                 | tail -1)
+          echo "post-route: $last"
+          case "$last" in
+            *"(PASS"*) ;;
+            *) echo "::error::post-route timing did not pass: $last"; exit 1 ;;
+          esac

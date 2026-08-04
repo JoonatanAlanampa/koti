@@ -120,21 +120,27 @@
 		};
 	};
 
+	/*
+	 * The SBI timer. Not an MMIO device — the driver issues the TIME
+	 * extension call that sbi.c implements and takes the S-mode timer
+	 * interrupt (cause 5) the firmware injects.
+	 *
+	 * It sits at the ROOT and not under /soc on purpose. /soc is a
+	 * `simple-bus`, every child of which is expected to have a `reg`, and
+	 * this node has no registers to name — dtc says so
+	 * (`simple_bus_reg: missing or empty reg/ranges property`). A node with
+	 * no address does not belong on a bus.
+	 */
+	timer {
+		compatible = "riscv,timer";
+		interrupts-extended = <&cpu0_intc 5>;
+	};
+
 	soc {
 		#address-cells = <1>;
 		#size-cells = <1>;
 		compatible = "simple-bus";
 		ranges;
-
-		/*
-		 * The SBI timer. Not an MMIO device — the driver issues the TIME
-		 * extension call that sbi.c implements, and takes the S-mode timer
-		 * interrupt (cause 5) that the firmware injects.
-		 */
-		timer {
-			compatible = "riscv,timer";
-			interrupts-extended = <&cpu0_intc 5>;
-		};
 
 		/*
 		 * src/plic.sv is register-compatible with the SiFive PLIC, so

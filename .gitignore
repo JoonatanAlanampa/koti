@@ -19,3 +19,5 @@ test/icache.log
 
 __pycache__/
 *.elf
+test/dtc.log
+test/plic.log

@@ -74,11 +74,19 @@ jobs:
       # repo unvalidated because there is no dtc on the development host, and
       # a devicetree that is quoted as the machine's definition but has never
       # been through a compiler is a latent boot failure.
+      # WARNINGS ARE FAILURES here, and deliberately so. dtc exits 0 on a
+      # warning, so the first version of this step went green while reporting
+      # that /soc/timer had no reg property — a real modelling error (a node
+      # with no address does not belong on a simple-bus) sitting in a file
+      # quoted as the machine's definition. A devicetree is read by exactly one
+      # consumer, once, early, with no console up yet; there is no good time to
+      # find out it was approximately right.
       - name: Devicetree
         run: |
           sudo apt-get install -y device-tree-compiler
-          dtc -I dts -O dtb -W no-unit_address_vs_reg \
-              -o /tmp/koti.dtb sw/linux/koti.dts
+          dtc -I dts -O dtb -o /tmp/koti.dtb sw/linux/koti.dts 2>dtc.log
+          cat dtc.log
+          ! grep -q Warning dtc.log
           dtc -I dtb -O dts /tmp/koti.dtb > /dev/null
 
       # The suite above drives tt_um_koti directly. This one drives the ULX3S

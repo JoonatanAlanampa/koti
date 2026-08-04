@@ -721,6 +721,76 @@ async def test_satp_commit_squashes_old_fetch(dut):
 
 
 @cocotb.test()
+async def test_fetch_pair_straddling_a_page_is_not_skipped(dut):
+    """Regression for the defect that stopped Linux booting (2026-08-04).
+
+    The fetch port delivers a PAIR {fpc, fpc+4}. When that pair straddles a
+    page boundary the second word must be dropped — its translation belongs
+    to the next page, and the hardware has not looked it up. That part was
+    right. What was wrong is that `npc` still advanced by 8, so the dropped
+    instruction was never re-fetched: the core executed fpc and then fpc+8,
+    silently skipping one instruction.
+
+    It needs the MMU on, so `satp = 0` suites cannot reach it — which is why
+    all 58 official tests were green while `kfree` spun forever.
+
+    The two pages are deliberately NOT contiguous in physical memory
+    (VA 0x40000000 -> PA 0x1000, VA 0x40001000 -> PA 0x3000), so this test
+    pins BOTH halves of the required behaviour independently:
+      x20  the instruction at the page's last word ran
+      x21  the instruction at the next page's first word ran, from the PA
+           its own translation names  -> fails if npc skipped it
+      x22  the physically-adjacent word at PA 0x2000 did NOT run
+           -> fails if the pair were delivered without the drop
+    """
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+
+    ROOT, L0 = 0x0100_2000, 0x0100_3000
+    VA = 0x4000_0000                      # VPN1 = 0x100, VPN0 = 0
+    PA0, PA1 = 0x0000_1000, 0x0000_3000   # flash frames 1 and 3
+    W_END = (PA0 + 0xFFC) >> 2            # VA+0xFFC : page's LAST word
+    W_ADJ = (PA0 + 0x1000) >> 2           # PA 0x2000: physically next, wrong
+    W_NEXT = PA1 >> 2                     # VA+0x1000: correctly translated
+
+    # M builds: root[0] identity 4 MiB megapage (its own code + the flash it
+    # runs from), root[0x100] -> L0, L0[0] -> PA0, L0[1] -> PA1. All RWX+A+D.
+    # Zero the three markers first: the register file is not reset, so an
+    # untouched x22 reads as leftover garbage and would fail the "did NOT
+    # run" check for the wrong reason.
+    main = ([addi(20, 0, 0), addi(21, 0, 0), addi(22, 0, 0)]
+            + li(5, ROOT)
+            + li(6, 0x0000_00CF) + [sw(6, 5, 0)]
+            + li(6, (L0 >> 12) << 10 | 1) + [sw(6, 5, 0x400)]
+            + li(7, L0)
+            + li(6, (PA0 >> 12) << 10 | 0xCF) + [sw(6, 7, 0)]
+            + li(6, (PA1 >> 12) << 10 | 0xCF) + [sw(6, 7, 4)]
+            + li(2, 0x8000_0000 | (ROOT >> 12)) + [csrrw(0, SATP, 2), SFENCE]
+            + li(3, VA) + [csrrw(0, MEPC, 3)]
+            + li(4, 0x800) + [csrrs(0, MSTATUS, 4), MRET])   # MPP=S, enter S
+
+    # Jump INTO the last word of the page. The landing address is what makes
+    # the pair straddle: a sequential run would step npc by 8 and never put
+    # fpc on 0xFFC unless the stream is odd-word aligned, which is exactly
+    # why this went unseen for so long.
+    s_entry = li(5, VA + 0xFFC) + [jalr(0, 5, 0)]
+
+    await run_program(dut, layout(main, {
+        (PA0 >> 2): s_entry,
+        W_END:  [addi(20, 0, 1)],     # last word of the page
+        W_ADJ:  [addi(22, 0, 1), EBREAK],   # PA-adjacent: must NOT run
+        W_NEXT: [addi(21, 0, 1), EBREAK],   # VA-next: must run
+    }), ram_zero=[((ROOT - 0x0100_0000) >> 2, 2048)])
+
+    got = f"x20={reg(dut, 20)} x21={reg(dut, 21)} x22={reg(dut, 22)}"
+    assert reg(dut, 20) == 1, f"page's last word never ran: {got}"
+    assert reg(dut, 22) == 0, \
+        f"ran the physically-adjacent word — pair not dropped: {got}"
+    assert reg(dut, 21) == 1, \
+        f"next page's first word SKIPPED — npc stepped by 8 over a dropped " \
+        f"pair half instead of by 4: {got}"
+
+
+@cocotb.test()
 async def test_illegal_and_misaligned(dut):
     """Causes 4/6/0/2 with correct mtval: misaligned loads/stores/
     fetch targets/AMOs, then unknown-encoding and unknown-CSR

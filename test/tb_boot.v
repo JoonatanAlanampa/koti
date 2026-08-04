@@ -154,10 +154,16 @@ module tb_boot ();
       // +tfrom=<n> +tlen=<n>: every clock in a window, which is the only
       // resolution at which a stuck instruction explains itself.
       if (tlen != 0 && clkcnt >= tfrom && clkcnt < tfrom + tlen)
-        $display({"[%0d] pc_d %h pc_e %h | d %h rq%b we%b ak%b | rmw%b amo_wr%b",
-                  " astall%b mstall%b pstall%b trap%b valid_m%b"},
+        $display({"[%0d] pc_d %h pc_e %h | d %h rq%b we%b ak%b rd %h | rmw%b",
+                  " amo_wr%b astall%b mstall%b pstall%b trap%b valid_m%b"},
                  clkcnt, uut.core.pc_d, uut.core.pc_e,
                  {uut.d_addr, 2'b00}, uut.d_req, uut.d_we, uut.d_ack,
+                 // The DATA that came back, not just that something did. A
+                 // compare that always fails is indistinguishable from a
+                 // compare that is never reached unless you can see the value
+                 // it compared — which is the whole question when a cmpxchg
+                 // loop will not converge.
+                 uut.d_rdata,
                  uut.core.rmw_m, uut.core.amo_wr, uut.core.astall,
                  uut.core.mstall, uut.core.pstall, uut.core.trap_take,
                  uut.core.valid_m);

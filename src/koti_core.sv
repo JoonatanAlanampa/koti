@@ -196,10 +196,40 @@ module koti_core #(
                     valid_d <= 1'b1;
                     ipf_d   <= 1'b0;
                     fbuf    <= if_rdata2;
-                    // a pair straddling a page boundary would carry the
-                    // wrong translation for its second word: drop it
-                    fbuf_v  <= !(mmu_i_on && fpc[11:2] == 10'h3FF);
-                    npc     <= fpc + 32'd8;
+                    // A pair straddling a page boundary carries the wrong
+                    // translation for its second word, so the second word is
+                    // dropped. THEN npc MUST STEP BY ONE WORD, NOT TWO --
+                    // otherwise the dropped instruction is never fetched at
+                    // all and the machine silently executes fpc, then fpc+8.
+                    //
+                    // That was the bug that stopped Linux booting (found
+                    // 2026-08-04). `npc <= fpc + 8` was unconditional, so
+                    // every straddling pair skipped an instruction outright.
+                    // It survived this long because npc normally steps by 8,
+                    // which never changes fpc[2] -- so a straddle needs a
+                    // fetch stream that is ODD-word aligned (fpc == 4 mod 8),
+                    // which only happens after a redirect to a 4-mod-8 target
+                    // that then runs to the end of its page. Linux hits it in
+                    // kfree(): the retry edge is `jal zero,kfree+0xfc` and
+                    // that target is 0x...ffc, the last word of a page, so
+                    // EVERY pass dropped the next instruction -- the `lw a3,
+                    // 4(a4)` that loads the SLUB tid. a3 kept a stale value,
+                    // the tid compare in __update_cpu_freelist_fast could
+                    // never match, and kfree spun forever with the console
+                    // silent after "SLUB: HWalign=64".
+                    //
+                    // Invisible to every existing suite: it needs the MMU on
+                    // (the 58 official tests run with satp = 0, where
+                    // mmu_i_on is false and nothing is ever dropped) AND a
+                    // 4-mod-8 entry that reaches a page end AND the skipped
+                    // instruction to matter.
+                    if (mmu_i_on && fpc[11:2] == 10'h3FF) begin
+                        fbuf_v <= 1'b0;
+                        npc    <= fpc + 32'd4;
+                    end else begin
+                        fbuf_v <= 1'b1;
+                        npc    <= fpc + 32'd8;
+                    end
                 end
             end else if (iw_state == 2'd0 && !fbusy && !valid_d && !fbuf_v
                          && !halted && !pstall && !flush_ex) begin

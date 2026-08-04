@@ -24,6 +24,7 @@ module koti_core #(
     input  logic        clk,
     input  logic        rst,
     input  logic        mtip, msip, meip,
+    input  logic        seip,       // S-level external, from the PLIC
     output logic        halted,
     output logic [7:0]  led,
     output logic        uart_txd,
@@ -490,8 +491,16 @@ module koti_core #(
     // 8 MiB high mirror (addr[24] && addr[23]). Device MMIO pages
     // (io_m 0x0001, CLINT 0x0002, PLIC 0x0003, VGA 0x0004) are writable;
     // everything else in flash space (addr[24]=0) is read-only XIP.
-    wire pa_dev      = !d_pa[24] && d_pa[23:16] >= 8'h01
-                                 && d_pa[23:16] <= 8'h04;
+    // Device windows inside flash space: the four 64 KB carve-outs at
+    // 0x0001..0x0004, plus the PLIC, which owns the TOP 4 MB
+    // (0x00C0_0000..0x00FF_FFFF) because a register-compatible SiFive layout
+    // puts its context registers at offset 0x200000. Without the second term
+    // every PLIC write would be rejected as a write to read-only flash — and
+    // reads would work, so it would look like a controller that accepts
+    // configuration and then ignores it.
+    wire pa_dev      = !d_pa[24] && ((d_pa[23:16] >= 8'h01
+                                   && d_pa[23:16] <= 8'h04)
+                                  || d_pa[23:22] == 2'b11);
     wire pa_flash_ro = !d_pa[24] && !pa_dev;
 
     // The RAM-high check is about a MIRROR, not about a size limit, which is
@@ -620,7 +629,7 @@ module koti_core #(
               .trap(trap_take), .trap_irq(irq_take), .trap_kind(trap_kind),
               .trap_pc(pc_e), .trap_tval(trap_tval),
               .mret(mret_take), .sret(sret_take),
-              .mtip(mtip), .msip(msip), .meip(meip),
+              .mtip(mtip), .msip(msip), .meip(meip), .seip_pin(seip),
               .irq(csr_irq), .trap_vec(csr_trap_vec),
               .mepc_rd(csr_mepc), .sepc_rd(csr_sepc),
               .satp_rd(csr_satp), .priv_rd(csr_priv),

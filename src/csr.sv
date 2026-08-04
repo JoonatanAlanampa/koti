@@ -35,6 +35,12 @@ module csr (
     input  logic        mret, sret,
     // interrupt lines (level)
     input  logic        mtip, msip, meip,
+    // S-level external interrupt from the PLIC. Separate from the
+    // software-set mip.SEIP bit below, and ORed with it — which is what the
+    // spec asks for: mip.SEIP reads as the union of the platform's pin and
+    // whatever M-mode software has injected, and M-mode writes must not be
+    // able to clear a request the PLIC is still making.
+    input  logic        seip_pin,
     // to the pipeline
     output logic        irq,         // take an interrupt now
     output logic [31:0] trap_vec,    // where this cycle's trap goes
@@ -56,7 +62,11 @@ module csr (
     // interrupt enables (mie register bits)
     logic        ssie, stie, seie, msie, mtie, meie;
     // software-set pending bits (the rest of mip is wired from inputs)
-    logic        ssip, stip, seip;
+    logic        ssip, stip, seip_sw;
+    // What the rest of the file sees as "S external pending": the PLIC's line
+    // ORed with the software-injected bit. Everything downstream — mip/sip
+    // reads and the p_sei enable term — is unchanged and simply picks this up.
+    wire         seip = seip_sw | seip_pin;
     // trap state
     logic [31:0] mtvec_q, mepc_q, mcause_q, mscratch_q, mtval_q;
     logic [31:0] stvec_q, sepc_q, scause_q, sscratch_q, stval_q;
@@ -209,7 +219,7 @@ module csr (
             spp <= 1'b0; mpp <= 2'b00; sum_b <= 1'b0; mxr_b <= 1'b0;
             ssie <= 1'b0; stie <= 1'b0; seie <= 1'b0;
             msie <= 1'b0; mtie <= 1'b0; meie <= 1'b0;
-            ssip <= 1'b0; stip <= 1'b0; seip <= 1'b0;
+            ssip <= 1'b0; stip <= 1'b0; seip_sw <= 1'b0;
             mtvec_q <= 32'd0; mepc_q <= 32'd0; mcause_q <= 32'd0;
             mscratch_q <= 32'd0; mtval_q <= 32'd0;
             stvec_q <= 32'd0; sepc_q <= 32'd0; scause_q <= 32'd0;
@@ -279,7 +289,7 @@ module csr (
                 12'h342: mcause_q   <= wnew;
                 12'h343: mtval_q    <= wnew;
                 12'h344: begin ssip <= wnew[1]; stip <= wnew[5];
-                               seip <= wnew[9]; end   // M injects S irqs
+                               seip_sw <= wnew[9]; end  // M injects S irqs
                 default: ;
             endcase
 endmodule

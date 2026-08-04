@@ -20,6 +20,7 @@ SOURCES = [
     SRC_DIR / "sdram_ctrl.sv",
     SRC_DIR / "icache.sv",
     SRC_DIR / "clint.sv",
+    SRC_DIR / "plic.sv",
     SRC_DIR / "vga_text.sv",
     SRC_DIR / "vga_timing.sv",
     SRC_DIR / "ps2_rx.sv",

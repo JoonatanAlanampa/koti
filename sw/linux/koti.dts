@@ -135,5 +135,32 @@
 			compatible = "riscv,timer";
 			interrupts-extended = <&cpu0_intc 5>;
 		};
+
+		/*
+		 * src/plic.sv is register-compatible with the SiFive PLIC, so
+		 * mainline's driver runs it unmodified. That is the whole reason it
+		 * occupies 4 MB of address space: the context registers live at
+		 * offset 0x200000 and the driver hard-codes that.
+		 *
+		 * ONE entry in interrupts-extended, and it is the S-mode one. The
+		 * driver derives the hardware context index from the POSITION in
+		 * this list, so a single S entry means it drives context 0 — which
+		 * is the only context the RTL implements. Adding an M-mode entry
+		 * first, as a fuller PLIC's devicetree would, silently shifts the
+		 * supervisor context to 1 and the driver would then program
+		 * registers that do not exist.
+		 *
+		 * riscv,ndev is 4: source IDs 1..4, of which only 1 (the keyboard)
+		 * is currently wired in project.sv.
+		 */
+		plic0: interrupt-controller@c00000 {
+			compatible = "sifive,plic-1.0.0";
+			reg = <0x00c00000 0x00400000>;
+			interrupt-controller;
+			#interrupt-cells = <1>;
+			#address-cells = <0>;
+			interrupts-extended = <&cpu0_intc 9>;
+			riscv,ndev = <4>;
+		};
 	};
 };

@@ -32,7 +32,12 @@ module tb_cpu ();
 
   koti_core #(.UART_DIV(4)) c0 (
       .clk(clk), .rst(rst),
-      .mtip(mtip), .msip(msip), .meip(meip),
+      // seip tied low: this bench drives the core directly, with no PLIC in
+      // sight. It must be TIED rather than left unconnected — an open input
+      // reads as x, and x on the S-external line propagates straight into the
+      // interrupt-pending comparison, so every test here would start taking
+      // decisions on an unknown.
+      .mtip(mtip), .msip(msip), .meip(meip), .seip(1'b0),
       .halted(halted), .led(led), .uart_txd(uart_txd),
       .gpio_in(8'd0), .qspi_cfg(qspi_cfg),
       .if_req(if_req), .if_addr(if_addr), .if_ack(if_ack),

@@ -21,6 +21,7 @@ project:
     - "koti_core.sv"
     - "qspi_ctrl.sv"
     - "clint.sv"
+    - "plic.sv"
     - "vga_text.sv"
     - "vga_timing.sv"
     - "ps2_rx.sv"

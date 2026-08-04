@@ -56,6 +56,31 @@ jobs:
           vvp tb_icache.vvp | tee icache.log
           grep -q "tb_icache: PASS" icache.log
 
+      # PLIC standalone, same pure-Verilog pattern. An interrupt controller is
+      # another block that can be wrong by being QUIET: one that never asserts
+      # eip breaks nothing visible in a polling system, it just means
+      # interrupts never arrive. The bench therefore asserts on the
+      # claim/complete SEQUENCE, and its own discriminating power was checked
+      # by mutation — flipping the threshold comparison, the tie-break
+      # direction, or the in-flight latch each make it fail.
+      - name: PLIC
+        run: |
+          cd test
+          iverilog -g2012 -o tb_plic.vvp ../src/plic.sv tb_plic.v
+          vvp tb_plic.vvp | tee plic.log
+          grep -q "tb_plic: PASS" plic.log
+
+      # The machine description has to actually compile. koti.dts went into the
+      # repo unvalidated because there is no dtc on the development host, and
+      # a devicetree that is quoted as the machine's definition but has never
+      # been through a compiler is a latent boot failure.
+      - name: Devicetree
+        run: |
+          sudo apt-get install -y device-tree-compiler
+          dtc -I dts -O dtb -W no-unit_address_vs_reg \
+              -o /tmp/koti.dtb sw/linux/koti.dts
+          dtc -I dtb -O dts /tmp/koti.dtb > /dev/null
+
       # The suite above drives tt_um_koti directly. This one drives the ULX3S
       # harness (fpga/ulx3s/ulx3s_top.sv) through the J1 header wires, which is
       # the only thing that exercises the Pmod row permutation, the orientation

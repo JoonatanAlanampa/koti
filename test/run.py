@@ -14,6 +14,7 @@ SOURCES = [
     SRC_DIR / "koti_core.sv",
     SRC_DIR / "qspi_ctrl.sv",
     SRC_DIR / "clint.sv",
+    SRC_DIR / "plic.sv",
     SRC_DIR / "vga_text.sv",
     SRC_DIR / "vga_timing.sv",
     SRC_DIR / "ps2_rx.sv",

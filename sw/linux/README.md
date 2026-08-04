@@ -82,23 +82,37 @@ off for the FPGA build and kept for the QSPI build, where it is correct.
 Net effect: **Linux gets the whole 16 MB window bar a 64 KB reservation** —
 12 MB contiguous above the kernel at `0x01400000`, plus the ~4 MB below it.
 
-### 2. There is no PLIC — so Linux gets no device interrupts
+### 2. There is no PLIC — BUILT 2026-08-04, `src/plic.sv`
 
-`PLAN.md`'s architecture delta 7 lists a "PLIC-lite" as part of the design.
-It was never built: there is no `src/plic.sv`. What exists instead is a
-single wire — `project.sv` does `assign kb_irq = kb_avail;` straight into
-the core's `meip`.
+`PLAN.md`'s architecture delta 7 had listed a "PLIC-lite" since the start and
+it was never built. What stood in for it was one wire — `project.sv` did
+`assign kb_irq = kb_avail;` straight into the core's `meip` — which meant
+Linux had no interrupt controller to bind a driver to, and the keyboard raised
+an **M-mode** interrupt while `mideleg` delegates SEIP, which nothing raised.
+A keystroke could not reach supervisor mode however the kernel was configured.
 
-Two consequences, both real:
+**It is register-compatible with the SiFive PLIC**, so mainline's
+`sifive,plic-1.0.0` driver runs it unmodified. That is worth paying for:
+every other koti device needs a custom driver, and the interrupt controller
+is the one place where adopting somebody else's register map buys a whole
+working one. The price is address space — the context registers live at
+offset `0x200000` and the driver hard-codes it, so the PLIC cannot fit in a
+64 KB carve-out beside the CLINT. It takes the **top 4 MB of flash address
+space**, `0x00C0_0000`–`0x00FF_FFFF`, off the top rather than out of the low
+addresses so software keeps a contiguous run from zero.
 
-- Linux has no interrupt controller to bind to, so no driver can claim an
-  interrupt. That is survivable for rung 1 (a UART/SBI console is polled and
-  the timer is CPU-local) and **not** survivable for a keyboard.
-- The keyboard raises **MEIP**, an M-mode interrupt. `mideleg = 0x222`
-  delegates *SEIP*, but nothing raises SEIP, so as things stand a keystroke
-  traps to the firmware and never reaches S-mode at all. Either the firmware
-  forwards it by setting SEIP in `mip` (cheap, and the same trick it already
-  uses for the timer), or a PLIC-lite gets built.
+**Why not the cheap alternative.** Forwarding `meip` into `mip.SEIP` from
+M-mode firmware needs no new hardware and does not work: `sip.SEIP` is
+read-only to supervisor mode (`csr.sv` only lets S write SSIP), so once the
+handler returns nothing S can do clears the bit and it re-traps forever.
+Breaking that loop needs a non-standard SBI call on every single interrupt.
+Claim/complete is an acknowledgement path that already exists in the spec.
+
+Wired today: source 1 = the keyboard. **VSync is deliberately not wired** even
+though `PLAN.md` lists it — `vt_vs` is a pulse, and a level-sensitive gateway
+would either miss it or latch it forever depending on which cycle it landed
+on. It needs a read-to-clear status bit first, the way the keyboard has one.
+Sources 2–4 are tied low so the register map already has room.
 
 ### 3. Loading a multi-megabyte kernel over a 115200 UART
 
@@ -141,8 +155,9 @@ booting; worth measuring before blaming the SDRAM for a sluggish machine.
    enters it with `a0` = hartid and `a1` = the DTB, which the firmware copies
    out of flash into RAM first. Covered by
    `test_boots_a_kernel_image_with_the_linux_handoff`.
-3. Forward MEIP to SEIP in the firmware, or build `plic.sv` (gap 2). Not
-   needed for rung 1; needed the moment a keyboard matters.
+3. ~~Forward MEIP to SEIP, or build `plic.sv`~~ **DONE 2026-08-04** (gap 2):
+   a SiFive-register-compatible PLIC at `0x00C0_0000`, driving the core's new
+   S-external input. `koti.dts` has the node; `test/tb_plic.v` covers it.
 4. Build a kernel. Rung 1 is Buildroot nommu with the console on UART; it
    proves the boot handoff, the DTB and the SBI without the MMU in the way.
    Needs a `riscv32-linux-musl` toolchain — the `xpack` compiler in

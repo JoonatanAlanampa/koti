@@ -32,6 +32,7 @@ src/project.sv
 src/koti_core.sv
 src/qspi_ctrl.sv
 src/clint.sv
+src/plic.sv
 src/vga_text.sv
 src/vga_timing.sv
 src/ps2_rx.sv

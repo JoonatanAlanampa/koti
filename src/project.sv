@@ -68,7 +68,12 @@ module tt_um_koti (
   wire [7:0]  led;
   wire        uart_txd;
   wire        mtip, msip;
-  wire        kb_irq;      // pending keyboard byte -> meip (PLIC later)
+  wire        kb_irq;      // pending keyboard byte -> meip (legacy, inert)
+  // Declared here rather than beside the plic instance: the core is
+  // instantiated above that point, and this file is read by a simulator that
+  // rejects declare-after-use (the same constraint that produced koti_core's
+  // forward-declaration block).
+  wire        plic_eip;    // PLIC -> the core's S-level external interrupt
 
   wire        if_req, if_ack;
   wire [22:0] if_addr;
@@ -95,7 +100,7 @@ module tt_um_koti (
 
   koti_core #(.UART_DIV(217)) core (
       .clk(clk), .rst(rst),
-      .mtip(mtip), .msip(msip), .meip(kb_irq),
+      .mtip(mtip), .msip(msip), .meip(kb_irq), .seip(plic_eip),
       .halted(halted), .led(led), .uart_txd(uart_txd), .gpio_in(ui_in),
       .qspi_cfg(qspi_cfg),
       .if_req(if_req), .if_addr(if_addr), .if_ack(if_ack),
@@ -112,12 +117,22 @@ module tt_um_koti (
   // aliased flash data past 64 KB into these windows every 512 KB (F1).
   wire clint_range = d_addr[22:14] == 9'h002;
   wire vga_range   = d_addr[22:14] == 9'h004;
+  // PLIC: the TOP 4 MB of flash address space, 0x00C0_0000..0x00FF_FFFF.
+  //
+  // It cannot live in a 64 KB carve-out beside the CLINT: the SiFive layout
+  // puts the context registers at offset 0x200000 and mainline's driver
+  // hard-codes that, so a register-compatible PLIC needs megabytes of window.
+  // Taking it off the TOP of flash space rather than punching a hole in the
+  // low addresses keeps software's run from zero contiguous.
+  wire plic_range  = !d_addr[22] && d_addr[21:20] == 2'b11;
   wire clint_sel   = d_req && clint_range;
   wire vga_sel     = d_req && vga_range;
-  reg  clint_ack, vga_ack;
+  wire plic_sel    = d_req && plic_range;
+  reg  clint_ack, vga_ack, plic_ack;
   always @(posedge clk) begin
       clint_ack <= rst ? 1'b0 : (clint_sel && !clint_ack);
       vga_ack   <= rst ? 1'b0 : (vga_sel && !vga_ack);
+      plic_ack  <= rst ? 1'b0 : (plic_sel && !plic_ack);
   end
 
   wire [31:0] clint_rdata;
@@ -215,10 +230,42 @@ module tt_um_koti (
   always @(posedge clk)
       if (vga_rd) vga_rdata_q <= vga_rmux;
 
+  // ---- PLIC ----
+  // Sources are level-sensitive and numbered from 1. Only the keyboard is
+  // wired: `kb_avail` stays high until software reads the scancode register
+  // and drops when it does, which is exactly the shape a PLIC gateway wants.
+  //
+  // VSync is deliberately NOT wired even though PLAN.md lists it as a source.
+  // `vt_vs` is a PULSE, and a level-sensitive gateway would either miss it or
+  // latch it forever depending on the cycle it landed on. It needs a
+  // read-to-clear status bit of its own first, the way the keyboard has one.
+  // Sources 2-4 are tied low so the register map already has room for them.
+  wire [4:1]  plic_src = {3'b000, kb_avail};
+  wire [31:0] plic_rdata;
+
+  plic #(.SOURCES(4)) plic0 (
+      .clk(clk), .rst(rst),
+      .src(plic_src),
+      .sel(plic_sel && !plic_ack), .we(d_we),
+      .addr({d_addr[19:0], 2'b00}), .wdata(d_wdata), .rdata(plic_rdata),
+      .eip(plic_eip)
+  );
+
+  // Captured on the SELECT cycle, served on the ack cycle — the same hazard
+  // the VGA block has, and for a sharper reason. Reading the claim register
+  // has a SIDE EFFECT: it takes the interrupt out of pending. By the ack cycle
+  // the winning source is gone, so a combinational read sampled then would
+  // return the next source or zero, and the handler would service the wrong
+  // interrupt while the real one stayed claimed forever.
+  reg [31:0] plic_rdata_q;
+  always @(posedge clk)
+      if (plic_sel && !plic_ack && !d_we) plic_rdata_q <= plic_rdata;
+
   wire ad_ack;
-  assign d_ack   = clint_ack || vga_ack || ad_ack;
+  assign d_ack   = clint_ack || vga_ack || plic_ack || ad_ack;
   assign d_rdata = clint_ack ? clint_rdata
-                 : vga_ack   ? vga_rdata_q : m_rdata;
+                 : vga_ack   ? vga_rdata_q
+                 : plic_ack  ? plic_rdata_q : m_rdata;
 
   // ---- video DMA + text pipeline ----
   wire        v_req, v_ack, vt_hs, vt_vs, vt_act, vt_pix;
@@ -260,7 +307,7 @@ module tt_um_koti (
       .clk(clk), .rst(rst),
       .v_req(v_req), .v_addr(v_addr), .v_ack(v_ack),
       .f_req(fc_req), .f_addr(fc_addr), .f_ack(fc_ack),
-      .d_req(d_req && !clint_range && !vga_range), .d_we(d_we),
+      .d_req(d_req && !clint_range && !vga_range && !plic_range), .d_we(d_we),
       .d_addr(d_addr), .d_wdata(d_wdata), .d_be(d_be), .d_ack(ad_ack),
       .m_req(m_req), .m_we(m_we), .m_burst(m_burst), .m_addr(m_addr),
       .m_wdata(m_wdata), .m_be(m_be), .m_ack(m_ack)

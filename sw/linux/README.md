@@ -25,28 +25,50 @@ and the difference is all software.
 
 ## The gaps, in the order they will bite
 
-### 1. The firmware sits where the kernel wants to live — BLOCKING
+### 1. The firmware sits where the kernel wants to live — SOLVED 2026-08-04
 
-`sw/sbi/link.ld` puts the firmware's RAM at `ORIGIN = 0x01000000`, and
-`sbi.S` puts the M stack at `0x01007000` and the S stack at `0x01006000`.
+`sw/sbi/link.ld` puts the firmware's RAM at `ORIGIN = 0x01000000`, `sbi.S`
+puts the M stack at `0x01007000` and the S stack at `0x01006000`, and
 `sw/console.c` puts the VGA charbuf at `0x01008000`. So the bottom ~35 KB of
 RAM is occupied — and RAM starts at `0x01000000`, which is exactly where a
-kernel wants to be loaded, because RV32 Linux maps itself with sv32
-megapages and therefore needs a **4 MiB-aligned** physical load address.
+kernel wants to load, because RV32 Linux maps itself with sv32 megapages and
+therefore needs a **4 MiB-aligned** physical address.
 
-Two ways out, and the choice matters because the window is only 16 MB:
+**Resolution: the kernel loads at `0x01400000` and the bottom 4 MiB is
+reserved.** Nothing in the firmware moves. `koti.dts` carries the
+`reserved-memory` node that says so.
 
-- **Move the firmware to the top** (`0x01FF8000` upward) and give Linux
-  `0x01000000`. Costs one linker-script edit, two constants in `sbi.S`, the
-  `CHARBUF` constant in `console.c`, and the `0x8000` charbuf offset that
-  `test/test.py` asserts on. **Recommended** — it keeps the whole 16 MB
-  contiguous and the kernel at the natural address.
-- Load the kernel at `0x01400000` instead. No code changes, but it throws
-  away 4 MiB of 16, which is a quarter of the machine's memory to save an
-  afternoon.
+> ⚠️ The first version of this file recommended the opposite — moving the
+> firmware to the top of RAM at `0x01FF8000` — and called the `0x01400000`
+> option wasteful. **That recommendation was wrong on three counts**, all
+> found while trying to implement it, and it is written down here because
+> each one is a fact about this machine worth keeping:
+>
+> 1. **There was no 16 MB window to move to the top of.** `koti_core.sv`
+>    faulted every data access with `addr[23]` set (`pa_psram_hi`), capping
+>    RAM at 8 MB. See below.
+> 2. **The simulation models do not reach that far.** `test/test.py` builds
+>    its PSRAM as `SpiMem(1 << 16)` — 64 KB — and `test/sdram_model.sv`
+>    decodes only `row[6:0]` of the part's 13 row bits, so it covers about
+>    512 KB and *aliases* above that. A firmware at `0x01FF8000` would sit
+>    outside both, so the move would have silently un-tested the firmware.
+> 3. It would have churned `link.ld`, `sbi.S`, `console.c` and four
+>    assertions in `test/test.py` — on a suite that is green — to buy less
+>    memory than the option it dismissed.
+>
+> The 4 MiB reservation costs the kernel nothing it could otherwise have
+> used, because 4 MiB alignment means `0x01400000` was the first legal load
+> address regardless.
 
-`koti.dts` is written for the first option and is **not true until it is
-done** — its `memory` node already excludes the top 32 KB.
+**What did change** is the 8 MB cap, because that one was a real defect:
+`pa_psram_hi` exists to catch the APS6404 PSRAM's 8 MiB **mirror** on the
+QSPI Pmod, where an access above 8 MB silently lands somewhere else. The
+ULX3S's RAM is soldered SDRAM with a genuine 16 MB window and nothing
+mirrors, so on that build the fault rejected real memory — and specifically
+the half a 4 MiB-aligned kernel lives in. It is now `` `ifdef KOTI_FPGA ``'d
+off for the FPGA build and kept for the QSPI build, where it is correct.
+
+Net effect: **Linux gets `0x01400000`–`0x01FFFFFF`, 12 MB contiguous.**
 
 ### 2. There is no PLIC — so Linux gets no device interrupts
 
@@ -98,14 +120,29 @@ booting; worth measuring before blaming the SDRAM for a sluggish machine.
 
 ## Order of work
 
-1. Move the firmware and charbuf to the top of RAM (gap 1). Small, and
-   everything else assumes it.
-2. Forward MEIP to SEIP in the firmware, or build `plic.sv` (gap 2). Not
+1. ~~Move the firmware off the kernel's load address~~ **DONE 2026-08-04**
+   (gap 1): kernel at `0x01400000`, bottom 4 MiB reserved, 8 MB cap lifted
+   for the FPGA build. 12 MB contiguous for Linux.
+2. **Set up the boot handoff** — `sbi.S` must enter the kernel with
+   `a0` = hartid and `a1` = the DTB address, and the kernel has to be
+   somewhere other than flash at `0x4000`. This is the next real task.
+3. Forward MEIP to SEIP in the firmware, or build `plic.sv` (gap 2). Not
    needed for rung 1; needed the moment a keyboard matters.
-3. Build a kernel. Rung 1 is Buildroot nommu with the console on UART; it
+4. Build a kernel. Rung 1 is Buildroot nommu with the console on UART; it
    proves the boot handoff, the DTB and the SBI without the MMU in the way.
-4. Rung 2 is mainline sv32 with the console on the VGA text mode, which is
+   Needs a `riscv32-linux-musl` toolchain — the `xpack` compiler in
+   `sw/build.py` is bare-metal newlib and cannot build a kernel.
+5. Rung 2 is mainline sv32 with the console on the VGA text mode, which is
    the frontier and the thing the `koti-handbook` product cannot yet claim.
+
+## A simulation limit to remember before trusting a sim boot
+
+`test/sdram_model.sv` decodes `{ba[1:0], row[6:0], col[8:0]}` — seven of the
+part's thirteen row bits — so it models about 512 KB and **aliases** beyond
+that. No current test notices, because they all work low in RAM. A kernel
+loaded at `0x01400000` would alias catastrophically in that model, so rung 1
+cannot be booted in the existing SDRAM bench without widening it first. The
+real part is fine; the bench is the limit.
 
 ## The boot handoff, for whoever writes it
 

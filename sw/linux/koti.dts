@@ -73,22 +73,42 @@
 	};
 
 	/*
-	 * RAM. The window the core can address is 16 MB of the board's 32 MB
-	 * part (addr[22] selects flash from RAM, so the map reaches half the
-	 * chip); widening it needs a wider address bus through the core and the
-	 * arbiter.
+	 * RAM: the full 16 MB window the core can address, out of the board's
+	 * 32 MB part. (addr[22] selects flash from RAM, so the map reaches half
+	 * the chip; widening it needs a wider address bus through the core and
+	 * the arbiter, for memory sv32 Linux does not need.)
 	 *
-	 * The size here is 16 MB MINUS the top 32 KB, which is where the M-mode
-	 * firmware's .bss, its two stacks and the VGA charbuf are to be moved.
-	 * They sit at the BOTTOM today (0x0100_0000..0x0100_8960) and that has to
-	 * change before this file is true — see README.md, task 1. Kernel and
-	 * firmware overlapping is not a subtle failure, but it is a confusing
-	 * one: the kernel boots and then corrupts itself the first time the
-	 * firmware takes a trap.
+	 * All 16 MB is usable only because the FPGA build lifts the RAM-high
+	 * access fault — see the `pa_ram_hi` ifdef in koti_core.sv. On the QSPI
+	 * build that fault is correct and RAM is 8 MB.
 	 */
 	memory@1000000 {
 		device_type = "memory";
-		reg = <0x01000000 0x00ff8000>;
+		reg = <0x01000000 0x01000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		/*
+		 * The bottom 4 MiB belongs to the M-mode firmware: its .bss, the
+		 * M and S stacks (0x0100_6000 / 0x0100_7000) and the VGA charbuf
+		 * (0x0100_8000). Only ~35 KB is really used, but the reservation
+		 * is a whole 4 MiB because that is the granularity that matters —
+		 * RV32 Linux maps itself with sv32 megapages and so must load on a
+		 * 4 MiB boundary, which makes 0x0140_0000 the first address it can
+		 * use. Reserving less would not buy the kernel anything.
+		 *
+		 * Leaving this out is not a subtle failure but it is a confusing
+		 * one: the kernel boots and then corrupts itself the first time
+		 * the firmware takes a trap and pushes a frame.
+		 */
+		fw_reserved: firmware@1000000 {
+			reg = <0x01000000 0x00400000>;
+			no-map;
+		};
 	};
 
 	soc {

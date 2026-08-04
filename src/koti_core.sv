@@ -493,9 +493,28 @@ module koti_core #(
     wire pa_dev      = !d_pa[24] && d_pa[23:16] >= 8'h01
                                  && d_pa[23:16] <= 8'h04;
     wire pa_flash_ro = !d_pa[24] && !pa_dev;
-    wire pa_psram_hi =  d_pa[24] &&  d_pa[23];
+
+    // The RAM-high check is about a MIRROR, not about a size limit, which is
+    // why it is not the same on both builds.
+`ifdef KOTI_FPGA
+    // ULX3S: the RAM half of the map is the board's soldered 32 MB SDRAM, and
+    // the whole 16 MB window the core can address (addr[23:0]) is genuinely
+    // there — sdram_ctrl is handed {1'b0, m_addr[21:0]} = d_pa[23:2], so every
+    // one of those addresses reaches a distinct location. Nothing mirrors, so
+    // there is nothing to catch, and faulting the top half would reject real
+    // memory. It would also reject exactly the memory that matters: a kernel
+    // has to load on a 4 MiB boundary, so it lives above this line and spends
+    // essentially its whole life there. See sw/linux/README.md.
+    wire pa_ram_hi = 1'b0;
+`else
+    // QSPI Pmod: the APS6404 is 8 MiB and its address space MIRRORS above
+    // that, so an access with addr[23] set silently lands on a location it was
+    // never meant to touch. An access fault is the only way software finds
+    // out; silently aliasing is far worse than trapping.
+    wire pa_ram_hi = d_pa[24] && d_pa[23];
+`endif
     wire dacc_fault  = dmem_op_e
-                    && ((d_isstore && pa_flash_ro) || pa_psram_hi);
+                    && ((d_isstore && pa_flash_ro) || pa_ram_hi);
 
     // d-walker: two PTE reads on the data port, issued only while the
     // M stage isn't mid-transaction (its op completes under d_seen).

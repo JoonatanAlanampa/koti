@@ -1,0 +1,110 @@
+/*
+ * koti.dts — the machine description Linux gets handed in a1.
+ *
+ * This describes what SUPERVISOR mode can see, which is why several things you
+ * might expect are deliberately absent:
+ *
+ *   no CLINT node   — mtime/mtimecmp are M-mode registers. S-mode reaches the
+ *                     timer through the SBI TIME extension, so the kernel wants
+ *                     `timebase-frequency` and the CPU-local interrupt
+ *                     controller, not an MMIO range it cannot legally touch.
+ *   no PLIC node    — koti has no PLIC. See README.md; this is the reason no
+ *                     device node below claims an interrupt.
+ *   no serial node  — koti's UART is transmit-only at a core-internal MMIO
+ *                     address and is not a 16550. The console is the SBI one.
+ *
+ * Build:  dtc -I dts -O dtb -o koti.dtb koti.dts
+ *
+ * Copyright (c) 2026 Joonatan Alanampa
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/dts-v1/;
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "joonatanalanampa,koti1";
+	model = "Koti-1 (ULX3S 85F)";
+
+	chosen {
+		/*
+		 * hvc0 is the SBI console: koti has no device Linux would bind a
+		 * tty to, so the kernel's only way out is the firmware call the
+		 * payload already uses. earlycon=sbi is what makes the boot
+		 * visible before the console driver probes — without it a kernel
+		 * that dies early dies silently, which on a machine being brought
+		 * up for the first time is the difference between a bug and a
+		 * mystery.
+		 */
+		bootargs = "console=hvc0 earlycon=sbi";
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/*
+		 * clint.sv increments mtime once per core clock and the core runs
+		 * at 25 MHz, so the timebase IS the core clock. If the core clock
+		 * ever changes, this number must change with it: Linux derives
+		 * every delay and the whole scheduler tick from it, and a wrong
+		 * value does not fail — it just makes the machine run at the
+		 * wrong speed while looking fine.
+		 */
+		timebase-frequency = <25000000>;
+
+		cpu@0 {
+			device_type = "cpu";
+			reg = <0>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa-base = "rv32i";
+			riscv,isa-extensions = "i", "m", "a", "zicsr", "zifencei";
+			mmu-type = "riscv,sv32";
+			clock-frequency = <25000000>;
+
+			cpu0_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+	};
+
+	/*
+	 * RAM. The window the core can address is 16 MB of the board's 32 MB
+	 * part (addr[22] selects flash from RAM, so the map reaches half the
+	 * chip); widening it needs a wider address bus through the core and the
+	 * arbiter.
+	 *
+	 * The size here is 16 MB MINUS the top 32 KB, which is where the M-mode
+	 * firmware's .bss, its two stacks and the VGA charbuf are to be moved.
+	 * They sit at the BOTTOM today (0x0100_0000..0x0100_8960) and that has to
+	 * change before this file is true — see README.md, task 1. Kernel and
+	 * firmware overlapping is not a subtle failure, but it is a confusing
+	 * one: the kernel boots and then corrupts itself the first time the
+	 * firmware takes a trap.
+	 */
+	memory@1000000 {
+		device_type = "memory";
+		reg = <0x01000000 0x00ff8000>;
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+
+		/*
+		 * The SBI timer. Not an MMIO device — the driver issues the TIME
+		 * extension call that sbi.c implements, and takes the S-mode timer
+		 * interrupt (cause 5) that the firmware injects.
+		 */
+		timer {
+			compatible = "riscv,timer";
+			interrupts-extended = <&cpu0_intc 5>;
+		};
+	};
+};

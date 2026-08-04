@@ -47,6 +47,70 @@ void sbi_init(void) {
     VGA_CTRL = 3;                // VGA on + UART mirrored on blue LSB
 }
 
+// ---- what to boot ----------------------------------------------------
+// Two possible S-mode targets, chosen by what is actually in memory rather
+// than by a build flag, so one firmware image serves both and every existing
+// test keeps working untouched:
+//
+//   a Linux kernel at 0x0140_0000, if one has been loaded there, or
+//   the built-in flash payload at 0x4000 otherwise.
+//
+// 0x0140_0000 is not arbitrary: RV32 Linux maps itself with sv32 megapages and
+// so must load on a 4 MiB boundary, and that is the first one clear of the
+// firmware's own RAM at the bottom of the window.
+#define KERNEL_ADDR 0x01400000u
+#define PAYLOAD_ADDR 0x00004000u
+
+// A RISC-V "Image" carries this at byte 0x38 of its header — see
+// arch/riscv/kernel/head.S. Reading uninitialised RAM could in principle
+// collide with it; at one chance in 2^32 that is not worth guarding.
+#define RISCV_IMAGE_MAGIC2 0x05435352u   // "RSC\x05"
+
+// The devicetree blob: kept in flash, copied into RAM before entry.
+// It has to end up in RAM rather than being pointed at in flash, because
+// Linux reserves the blob it is handed (early_init_fdt_reserve_self) and
+// expects it inside a memory node. DTB_DST sits just below the kernel, in
+// ordinary mappable memory rather than in the firmware's reserved region.
+#define DTB_SRC  0x00006000u
+#define DTB_DST  0x013F0000u
+#define DTB_MAX  (64u * 1024u)
+#define FDT_MAGIC 0xD00DFEEDu
+
+// The FDT header is big-endian regardless of the machine, so both fields we
+// read out of it need swapping. Unprogrammed flash reads 0xFF, which fails the
+// magic test cleanly — a missing blob costs a0 = 0, not a wild copy.
+static uint32_t be32(uint32_t v) {
+    return (v >> 24) | ((v >> 8) & 0x0000FF00u)
+         | ((v << 8) & 0x00FF0000u) | (v << 24);
+}
+
+// Returned in {a0, a1}: an 8-byte struct of two words goes back in registers
+// under ilp32, which is exactly the pair sbi.S needs.
+struct boot_target { uint32_t entry; uint32_t dtb; };
+
+struct boot_target boot_target(void) {
+    struct boot_target b = { PAYLOAD_ADDR, 0u };
+
+    const volatile uint32_t *k = (const volatile uint32_t *)KERNEL_ADDR;
+    if (k[0x38u / 4u] != RISCV_IMAGE_MAGIC2)
+        return b;                        // no kernel: run the flash payload
+
+    b.entry = KERNEL_ADDR;
+
+    const volatile uint32_t *d = (const volatile uint32_t *)DTB_SRC;
+    if (be32(d[0]) == FDT_MAGIC) {
+        uint32_t n = be32(d[1]);         // totalsize
+        if (n >= 8u && n <= DTB_MAX) {
+            volatile uint8_t *dst = (volatile uint8_t *)DTB_DST;
+            const volatile uint8_t *src = (const volatile uint8_t *)DTB_SRC;
+            for (uint32_t i = 0; i < n; i++)
+                dst[i] = src[i];
+            b.dtb = DTB_DST;
+        }
+    }
+    return b;                            // a kernel with no DTB still boots,
+}                                        // and fails visibly rather than oddly
+
 static void putc_both(char c) {
     uart_putc(c);
     con_putc(c);

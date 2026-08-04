@@ -6,10 +6,15 @@ koti; the point of *this file* is to make the gaps between "the hardware is
 complete" and "Linux boots" explicit, because they are not the same claim
 and the difference is all software.
 
-> **Status:** the machine-side contract is being built. `sbi.c` now answers
-> the SBI Base and TIME extensions, which is what Linux asks for before it
-> trusts anything else. `koti.dts` describes the machine. No kernel has been
-> built or booted yet.
+> **Status:** the machine-side contract is complete and tested. `sbi.c`
+> answers the SBI Base, TIME and SRST extensions — what Linux asks for before
+> it trusts anything else — and `sbi.S` performs the Linux boot handoff:
+> a kernel found at `0x01400000` is entered in S-mode with `a0` = hartid and
+> `a1` = the DTB, otherwise the built-in flash payload runs as before.
+> `koti.dts` describes the machine.
+>
+> **What is missing is a kernel.** Nothing has been built or booted; that
+> needs a `riscv32-linux-musl` toolchain, which is task 4 below.
 
 ## What is already true
 
@@ -34,9 +39,15 @@ RAM is occupied — and RAM starts at `0x01000000`, which is exactly where a
 kernel wants to load, because RV32 Linux maps itself with sv32 megapages and
 therefore needs a **4 MiB-aligned** physical address.
 
-**Resolution: the kernel loads at `0x01400000` and the bottom 4 MiB is
-reserved.** Nothing in the firmware moves. `koti.dts` carries the
-`reserved-memory` node that says so.
+**Resolution: the kernel loads at `0x01400000`, and only the 64 KB the
+firmware actually occupies is reserved.** Nothing in the firmware moves.
+`koti.dts` carries the `reserved-memory` node that says so.
+
+The reservation is 64 KB rather than the whole 4 MiB below the kernel because
+the 4 MiB constraint is about where the *kernel* may load, not about how much
+must be kept away from Linux: RV32 Linux maps all of RAM linearly and will
+hand out pages below its own image quite happily. Reserving the gap would
+have thrown away about 4 MB for nothing.
 
 > ⚠️ The first version of this file recommended the opposite — moving the
 > firmware to the top of RAM at `0x01FF8000` — and called the `0x01400000`
@@ -56,9 +67,9 @@ reserved.** Nothing in the firmware moves. `koti.dts` carries the
 >    assertions in `test/test.py` — on a suite that is green — to buy less
 >    memory than the option it dismissed.
 >
-> The 4 MiB reservation costs the kernel nothing it could otherwise have
-> used, because 4 MiB alignment means `0x01400000` was the first legal load
-> address regardless.
+> The reservation costs the kernel nothing it could otherwise have used,
+> because 4 MiB alignment means `0x01400000` was the first legal load address
+> regardless.
 
 **What did change** is the 8 MB cap, because that one was a real defect:
 `pa_psram_hi` exists to catch the APS6404 PSRAM's 8 MiB **mirror** on the
@@ -68,7 +79,8 @@ mirrors, so on that build the fault rejected real memory — and specifically
 the half a 4 MiB-aligned kernel lives in. It is now `` `ifdef KOTI_FPGA ``'d
 off for the FPGA build and kept for the QSPI build, where it is correct.
 
-Net effect: **Linux gets `0x01400000`–`0x01FFFFFF`, 12 MB contiguous.**
+Net effect: **Linux gets the whole 16 MB window bar a 64 KB reservation** —
+12 MB contiguous above the kernel at `0x01400000`, plus the ~4 MB below it.
 
 ### 2. There is no PLIC — so Linux gets no device interrupts
 
@@ -123,9 +135,12 @@ booting; worth measuring before blaming the SDRAM for a sluggish machine.
 1. ~~Move the firmware off the kernel's load address~~ **DONE 2026-08-04**
    (gap 1): kernel at `0x01400000`, bottom 4 MiB reserved, 8 MB cap lifted
    for the FPGA build. 12 MB contiguous for Linux.
-2. **Set up the boot handoff** — `sbi.S` must enter the kernel with
-   `a0` = hartid and `a1` = the DTB address, and the kernel has to be
-   somewhere other than flash at `0x4000`. This is the next real task.
+2. ~~Set up the boot handoff~~ **DONE 2026-08-04**: `sbi.S` now chooses its
+   S-mode target by what is in memory rather than by a build flag — a kernel
+   at `0x01400000` if one is loaded there, the flash payload otherwise — and
+   enters it with `a0` = hartid and `a1` = the DTB, which the firmware copies
+   out of flash into RAM first. Covered by
+   `test_boots_a_kernel_image_with_the_linux_handoff`.
 3. Forward MEIP to SEIP in the firmware, or build `plic.sv` (gap 2). Not
    needed for rung 1; needed the moment a keyboard matters.
 4. Build a kernel. Rung 1 is Buildroot nommu with the console on UART; it

@@ -93,20 +93,29 @@
 		ranges;
 
 		/*
-		 * The bottom 4 MiB belongs to the M-mode firmware: its .bss, the
-		 * M and S stacks (0x0100_6000 / 0x0100_7000) and the VGA charbuf
-		 * (0x0100_8000). Only ~35 KB is really used, but the reservation
-		 * is a whole 4 MiB because that is the granularity that matters —
-		 * RV32 Linux maps itself with sv32 megapages and so must load on a
-		 * 4 MiB boundary, which makes 0x0140_0000 the first address it can
-		 * use. Reserving less would not buy the kernel anything.
+		 * The M-mode firmware's own RAM: .bss, the M and S stacks
+		 * (0x0100_6000 / 0x0100_7000) and the VGA charbuf (0x0100_8000,
+		 * 40x30 bytes). All of it fits inside 64 KB.
 		 *
-		 * Leaving this out is not a subtle failure but it is a confusing
-		 * one: the kernel boots and then corrupts itself the first time
-		 * the firmware takes a trap and pushes a frame.
+		 * The reservation is 64 KB and not the whole 4 MiB below the
+		 * kernel, because the 4 MiB constraint applies to where the KERNEL
+		 * may load, not to how much has to be kept away from Linux. RV32
+		 * Linux maps all of RAM linearly and is perfectly happy to hand
+		 * out pages below its own image, so reserving the rest would throw
+		 * away about 4 MB for nothing.
+		 *
+		 * Leaving this node out entirely is not a subtle failure but it is
+		 * a confusing one: the kernel boots and then corrupts itself the
+		 * first time the firmware takes a trap and pushes a frame.
+		 *
+		 * The DTB itself is NOT reserved here on purpose. It sits at
+		 * 0x013F_0000 in ordinary memory and Linux reserves it for itself
+		 * via early_init_fdt_reserve_self(); putting it in a `no-map`
+		 * region instead would take it out of the linear map that the
+		 * early FDT code expects to read it through.
 		 */
 		fw_reserved: firmware@1000000 {
-			reg = <0x01000000 0x00400000>;
+			reg = <0x01000000 0x00010000>;
 			no-map;
 		};
 	};

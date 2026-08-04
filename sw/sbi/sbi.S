@@ -14,8 +14,20 @@ _start:
     li   t0, 0xB151              # medeleg: 0,4,6,8,12,13,15
     csrw medeleg, t0
     call sbi_init
-    li   t0, 0x4000
-    csrw mepc, t0
+
+    # Choose the S-mode target: a kernel at 0x01400000 if one is loaded there,
+    # otherwise the built-in flash payload. boot_target() returns the pair
+    # {entry, dtb} in a0/a1 (an 8-byte struct goes back in registers under
+    # ilp32), which is almost the handoff Linux wants already.
+    call boot_target
+    csrw mepc, a0                # entry, before a0 is repurposed below
+
+    # The Linux boot protocol: enter S-mode with a0 = hartid and a1 = the
+    # physical address of the devicetree blob. a1 is already right; a0 has to
+    # stop being the entry address and start being the hart number. koti is
+    # uniprocessor, so that is 0.
+    li   a0, 0
+
     li   t0, 0x800               # MPP = S
     csrs mstatus, t0
     mret

@@ -869,3 +869,132 @@ async def test_keyboard_releases_produce_nothing(dut):
         cb = bytes(ram.mem[0x8000:0x8020])
         raise AssertionError(f"{e}; VGA charbuf mirror = {cb!r}") from None
     assert got == b"Zz", f"charbuf mirror = {bytes(ram.mem[0x8000:0x8020])!r}"
+
+
+# --------------------------------------------------------- Linux boot handoff
+
+# The Linux entry contract, and where each number comes from:
+#   entry     0x0140_0000  the first 4 MiB boundary clear of the firmware's own
+#                          RAM. RV32 Linux maps itself with sv32 megapages, so
+#                          it must load 4 MiB-aligned.
+#   a0        hartid, 0    koti is uniprocessor.
+#   a1        0x013F_0000  where the firmware copies the DTB, just below the
+#                          kernel and inside ordinary mappable memory.
+#   magic     0x0543_5352  "RSC\x05" at byte 0x38 of a RISC-V Image header,
+#                          per arch/riscv/kernel/head.S. This is what the
+#                          firmware tests to decide there is a kernel at all.
+KERNEL_ADDR = 0x0140_0000
+DTB_DST = 0x013F_0000
+DTB_SRC_FLASH = 0x6000
+RISCV_IMAGE_MAGIC2 = 0x0543_5352
+
+
+def ecall():
+    return i_type(0, 0, 0, 0, 0x73)
+
+
+def fake_kernel():
+    """A stand-in kernel that reports what it was handed.
+
+    It talks through `ecall` deliberately rather than by poking the UART MMIO
+    directly. An ecall from S-mode raises cause 9, which the firmware handles;
+    the same instruction from M-mode raises cause 11, which it does not — the
+    handler prints '!' and halts. So the three characters arriving at all is
+    itself the proof that the handoff landed in SUPERVISOR mode, which is the
+    part of the contract that would otherwise need a privileged CSR read to
+    check (and a wrong answer there halts the machine instead of failing).
+
+    a7 is loaded once and not reloaded: the trap shim saves and restores the
+    whole caller-saved set and the legacy console call writes back only a0, so
+    a7 survives. That is worth relying on here because it keeps the program
+    short enough to fit under the header magic at 0x38.
+
+    Emits: 'L' (it ran), '0'+hartid, and 'D' if a1 is the DTB address else '?'.
+    """
+    x0, t0, s0, s1, a0, a1, a7 = 0, 5, 8, 9, 10, 11, 17
+    words = [
+        addi(s0, a0, 0),           # 0x00 save hartid
+        addi(s1, a1, 0),           # 0x04 save dtb pointer
+        addi(a7, x0, 1),           # 0x08 SBI legacy console_putchar
+        addi(a0, x0, ord("L")),    # 0x0c
+        ecall(),                   # 0x10
+        addi(a0, s0, ord("0")),    # 0x14 '0' + hartid
+        ecall(),                   # 0x18
+        lui(t0, 0x13F0),           # 0x1c t0 = 0x013F_0000
+        addi(a0, x0, ord("D")),    # 0x20
+        beq(s1, t0, 8),            # 0x24 skip the '?' when a1 is right
+        addi(a0, x0, ord("?")),    # 0x28
+        ecall(),                   # 0x2c
+        beq(x0, x0, 0),            # 0x30 spin here forever
+        addi(x0, x0, 0),           # 0x34 nop, padding up to the magic
+    ]
+    assert len(words) * 4 == 0x38, f"header magic must land at 0x38, not {len(words) * 4:#x}"
+    words.append(RISCV_IMAGE_MAGIC2)
+    return words
+
+
+@cocotb.test()
+async def test_boots_a_kernel_image_with_the_linux_handoff(dut):
+    """A kernel image in RAM is booted instead of the flash payload, with
+    a0 = hartid, a1 = DTB and the DTB copied out of flash into RAM.
+
+    The fallback direction — no kernel present, so the flash payload runs and
+    prints STK — is already covered by test_sbi_firmware and the three keyboard
+    tests, which is why this one only asserts the kernel direction.
+    """
+    clock = Clock(dut.clk, 40, unit="ns")  # 25 MHz
+    cocotb.start_soon(clock.start())
+
+    img = (Path(__file__).parent.parent / "sw" / "sbi"
+           / "sbi_test.bin").read_bytes()
+    flash = SpiMem(1 << 16, writable=False)
+    # 8 MiB, not the usual 64 KiB: the kernel sits 4 MiB into RAM and SpiMem
+    # models the APS6404 by WRAPPING (`addr % len(mem)`), so a short model would
+    # not error — it would alias the kernel on top of the firmware's own .bss
+    # and the test would pass or fail for entirely the wrong reason.
+    ram = SpiMem(1 << 23, writable=True)
+    flash.mem[:len(img)] = img
+
+    # A minimal flattened-devicetree header at the flash address the firmware
+    # reads. Only the first two big-endian words matter to it: the magic it
+    # validates and the total size it copies. The tail is filler with a
+    # recognisable shape so the copy can be checked byte for byte.
+    dtb = bytearray(b"\xd0\x0d\xfe\xed" + (64).to_bytes(4, "big"))
+    dtb += bytes(range(8, 64))
+    flash.mem[DTB_SRC_FLASH:DTB_SRC_FLASH + len(dtb)] = dtb
+
+    kimg = b"".join(w.to_bytes(4, "little") for w in fake_kernel())
+    # NB: one slice, not `ram.mem[off:][:n] = ...` — slicing a bytearray builds
+    # a copy, so the two-step form writes the kernel into a temporary and
+    # leaves RAM untouched.
+    koff = KERNEL_ADDR - 0x0100_0000
+    ram.mem[koff:koff + len(kimg)] = kimg
+
+    cocotb.start_soon(spi_bus(dut, flash, ram))
+
+    dut.ena.value = 1
+    dut.ui_in.value = 0b11
+    dut.uio_in.value = 0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 10)
+    dut.rst_n.value = 1
+
+    # uo[6] carries the UART once sbi_init flips the pins to VGA mode
+    for _ in range(400_000):
+        await RisingEdge(dut.clk)
+        if (int(dut.uo_out.value) >> 6) & 1:
+            break
+    else:
+        raise AssertionError("UART idle never appeared on uo[6]")
+
+    got = await uart_rx(dut, 3, bit=6, timeout=8_000_000)
+    assert got == b"L0D", (
+        f"kernel handoff reported {got!r}, expected b'L0D' — "
+        "'L' missing means the firmware never jumped to the kernel; "
+        "'?' in the third position means a1 was not the DTB address"
+    )
+
+    # and the blob really was copied, not just pointed at
+    off = DTB_DST - 0x0100_0000
+    assert bytes(ram.mem[off:off + 64]) == bytes(dtb), \
+        f"DTB copy mismatch: {bytes(ram.mem[off:off + 16])!r}"

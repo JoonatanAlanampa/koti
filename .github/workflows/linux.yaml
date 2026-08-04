@@ -19,8 +19,27 @@
 name: linux
 on:
   push:
+    # The `boot` job below is the standing regression test for two CPU defects
+    # that live in src/ — the AMO/page-walk livelock in koti_core.sv and the
+    # dropped-request deadlock in arbiter3.sv — and until 2026-08-04 this
+    # workflow did not trigger on src/ at all. A change to either file would
+    # have gone green on all four other workflows while silently reintroducing
+    # a hang that no other suite can reach. The commit that fixed the AMO
+    # livelock only ran this workflow because it happened to touch
+    # sw/linux/README.md in the same commit; that was luck, not coverage.
+    #
+    # So the trigger list is now everything the `boot` job actually consumes.
+    # The whole workflow runs rather than just `boot`, because `boot` needs the
+    # Image that `kernel` builds; on a public repo the runner minutes are free
+    # and ~15 minutes is cheap against the failure mode, which is a machine
+    # that hangs on real hardware with a blank console.
     paths:
       - 'sw/linux/**'
+      - 'src/**'                       # the machine the kernel boots on
+      - 'sw/sbi/**'                    # the firmware that enters it
+      - 'test/tb_boot.v'               # the bench
+      - 'test/sim_mem.sv'              # and its memory model
+      - 'test/mkhex.py'                # how the images are loaded
       - '.github/workflows/linux.yaml'
   workflow_dispatch:
 

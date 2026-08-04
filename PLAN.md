@@ -32,7 +32,7 @@ requirement — see "Open architecture decisions" below.
 
 Hardware bring-up (needs the board in hand):
 1. [ ] **ULX3S first power-up** — `fpga/ulx3s/README.md`, steps 1-7. Bitstream
-       and harness are done and green (**31.14 MHz** post-route, PASS at
+       and harness are done and green (**31.04 MHz** post-route, PASS at
        25 MHz; 4/4 harness tests). Needs: the board, a **Tiny VGA Pmod**
        (bought 2026-08-02, arrival unconfirmed), and the Cartridge Pmod you
        already have. **Nothing left to buy** — the PS/2 keyboard came off the
@@ -71,13 +71,14 @@ Software, in order:
        built in CI by `.github/workflows/linux.yaml` (no Buildroot: the kernel
        links no libc, so Ubuntu's `gcc-riscv64-linux-gnu` builds it directly).
        Reaches SLUB init through the real firmware, DTB and SBI console on
-       `test/tb_boot.v`; the `boot` job runs it on every kernel build. Cost
-       two real CPU defects on the way — an AMO/page-walk livelock in
-       `koti_core.sv` and a dropped-request deadlock in `arbiter3.sv`, both of
-       which would have hung the board identically and neither reachable by
-       any existing suite.
-6. [ ] **Get past SLUB init**, then a Buildroot busybox+musl userspace, then
-       the console on the VGA text mode.
+       `test/tb_boot.v`; the `boot` job runs it on every kernel build. Reaches
+       `devtmpfs: initialized` and stops on the CLOCK LIMIT, not a hang.
+       Cost **three real CPU defects** on the way — an AMO/page-walk livelock
+       and a straddling-fetch-pair instruction skip in `koti_core.sv`, and a
+       dropped-request deadlock in `arbiter3.sv`. All three need the MMU on,
+       which is why the 58 official tests (`satp = 0`) missed every one.
+6. [ ] **Keep going**: run `linux` with a bigger `maxclk` until `init` runs,
+       then a Buildroot busybox+musl userspace, then the VGA text console.
 7. [ ] **Root filesystem on microSD** — the step that turns a booting kernel
        into a computer. Needs a block driver; console's `sd_spi.sv` is a
        proven starting point.

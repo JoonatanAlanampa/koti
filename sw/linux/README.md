@@ -21,6 +21,14 @@ and the difference is all software.
 > [    0.000000] Kernel command line: console=hvc0 earlycon=sbi
 > [    0.000000] Built 1 zonelists ... Total pages: 3072
 > [    0.000000] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
+> [    0.000000] NR_IRQS: 64, nr_irqs: 64, preallocated irqs: 0
+> [    0.000000] riscv-intc: 32 local interrupts mapped
+> [    0.000000] clocksource: riscv_clocksource: mask: 0xffffffffffffffff ...
+> [    0.000153] sched_clock: 64 bits at 25MHz, resolution 40ns
+> [    0.159587] ASID allocator using 9 bits (512 entries)
+> [    0.186960] Memory: 8460K/12288K available (2324K kernel code, 301K
+>                rwdata, 468K rodata, 163K init, 158K bss, 3584K reserved)
+> [    0.219279] devtmpfs: initialized
 > ```
 >
 > Every line there is a piece of this directory being confirmed: the machine
@@ -30,17 +38,32 @@ and the difference is all software.
 > the devicetree; and the console is arriving through the legacy SBI call this
 > firmware implements. In simulation, on `test/tb_boot.v`.
 >
-> **It stalls after SLUB init**, which is the next thing to chase. It is not
-> yet a computer — there is no userspace output, and `init` has not run.
->
-> Getting this far cost two real CPU defects, both of which would have hung the
-> ULX3S in exactly the same way and neither of which any existing suite could
-> reach: an **AMO/page-walk livelock** in `koti_core.sv` and a **dropped-request
-> deadlock** in `arbiter3.sv`. Both are described in the source at the point of
-> the fix. The lesson worth carrying: 58 official tests, 1252 muldiv vectors
-> and six green suites did not touch either, because the official atomics tests
-> run with `satp = 0` and the directed sv32 tests contain no atomics. Booting a
-> real OS is a different kind of test, and this is what it was for.
+The timestamps advance, the interrupt controller and the SBI timer are up, and
+the memory subsystem reports itself. The CI run above ends on its **clock
+limit**, not on a hang — 15 M clocks is what a push spends; `workflow_dispatch`
+takes `maxclk`, `quiet` and `trace` for a longer look, and the runner is about
+five times faster at this bench than the development host.
+
+> It is **not yet a computer**: no userspace output, `init` has not run.
+
+Getting this far cost **three real CPU defects**, each of which would have hung
+the ULX3S in exactly the same way, and **all three needing the MMU on** — which
+is precisely why 58 official tests, 1252 muldiv vectors and six green suites
+touched none of them: the official atomics tests run with `satp = 0`.
+
+| # | Where | What |
+|---|---|---|
+| 1 | `koti_core.sv` | **AMO/page-walk livelock.** M holds an AMO so it holds the data port; EX's next memory op misses the 2-entry DTLB so `tlb_stall` is up; the page-table walker may only take the port while M is quiet. Each waits for the other. Linux hit it in `boot_cpu_init`, ~40 instructions before its first print. |
+| 2 | `arbiter3.sv` | **Deadlock on a dropped request.** Grant was held until `m_ack`, but `m_req` IS the granted port's own req — and the fetch port walks away on every pipeline flush, leaving the arbiter waiting for an ack nobody sends. |
+| 3 | `koti_core.sv` | **A fetch pair straddling a page skipped an instruction.** The dropped second word was right; advancing `npc` by 8 anyway was not. Needs an odd-word-aligned stream, so it only bites after a redirect to a 4-mod-8 target that reaches a page end — which `kfree()` does on every retry. That was the SLUB stall. |
+
+Each is described in the source at the point of the fix, and each is now
+regression-tested: 1 and 2 by the `boot` job, 3 additionally by
+`test_fetch_pair_straddling_a_page_is_not_skipped`.
+
+**Booting a real OS is a different kind of test, and this is what it was for.**
+Carry the prior forward: when this boot next stops, suspect the core before the
+config.
 
 ## What is already true
 

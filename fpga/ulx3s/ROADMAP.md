@@ -30,12 +30,12 @@ and the steps in `README.md`.
 
 Two results worth pulling out of the table:
 
-- **31.14 MHz — quote this one** (run 30940888908, 2026-08-04). The number
+- **31.04 MHz — quote this one** (run 30945077186, 2026-08-04). The number
   has moved five times and every earlier figure is still in circulation
   somewhere: 34.8 was an unconstrained local run whose artifacts were
   deleted; 31.69 was pre-SDRAM; 27.48 was the first SDRAM build; 30.90 and
-  31.83 were intermediate. The current build is **11467 COMB (13%), 3637 FF,
-  79 IO, 3/208 BRAM, 31.14 MHz post-route, PASS at 25 MHz** = **24.6%
+  31.83 were intermediate. The current build is **11578 COMB (13%), 3637 FF,
+  79 IO, 3/208 BRAM, 31.04 MHz post-route, PASS at 25 MHz** = **24.2%
   margin**.
   The 9.9%-margin worry recorded here when the number was 27.48 did not
   survive: the I-cache and the two 2026-08-04 core fixes together bought the
@@ -45,7 +45,7 @@ Two results worth pulling out of the table:
   and what `koti.dts` tells Linux the timebase is.
 - ⚠️ **nextpnr prints Max frequency TWICE and the first one is not the
   answer.** The 2026-08-04 run logs `23.51 MHz (FAIL)` and then
-  `31.14 MHz (PASS)`;
+  `31.04 MHz (PASS)`;
   the first is the post-PLACEMENT estimate and the second is post-route.
   Reading the wrong one turns a passing build into a panic. Same trap as
   the console repo hit.

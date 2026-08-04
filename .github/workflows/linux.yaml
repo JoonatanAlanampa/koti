@@ -203,3 +203,59 @@ jobs:
             linux-${{ env.KVER }}/System.map
             linux-${{ env.KVER }}/config-koti.txt
             linux-${{ env.KVER }}/build.log
+
+  # Boot the kernel that was just built, on the machine, and require it to say
+  # so. This is the job that turns "a kernel exists" into "an OS runs" — and it
+  # is a regression test for two core defects it found on the way there (the
+  # AMO/TLB livelock in koti_core.sv and the dropped-request deadlock in
+  # arbiter3.sv), neither of which any existing suite could reach.
+  boot:
+    needs: kernel
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install iverilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: koti-linux-Image
+          path: kimg
+
+      - name: Build the boot bench
+        run: |
+          iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_SIMMEM \
+            -o tb_boot.vvp src/*.sv test/sim_mem.sv test/tb_boot.v \
+            2>&1 | grep -v "sorry:" || true
+          test -f tb_boot.vvp
+
+      - name: Boot Linux
+        run: |
+          python3 test/mkhex.py sw/sbi/sbi_test.bin fw.hex
+          python3 test/mkhex.py kimg/arch/riscv/boot/Image kernel.hex
+          # ramoff = (0x0140_0000 - 0x0100_0000) / 4, the kernel's word offset
+          # into the RAM window. Getting it wrong loads the kernel somewhere
+          # the firmware will not find it, and the firmware then quietly runs
+          # the flash payload instead — which prints, so the failure looks like
+          # a working boot until you read what it said.
+          vvp tb_boot.vvp +flash=fw.hex +ram=kernel.hex +ramoff=1048576 \
+            +maxclk=15000000 +quiet=4000000 2>&1 | tee boot.log
+
+      # Grep for what only a real boot can produce. The banner alone would not
+      # do: "Machine model" comes from koti.dts, so it also proves the firmware
+      # found the blob in flash, copied it to RAM and passed it in a1, and that
+      # the SBI console the kernel chose is the one this firmware implements.
+      - name: It really booted
+        run: |
+          grep -q "Linux version 6.12" boot.log
+          grep -q "Machine model: Koti-1" boot.log
+          grep -q "SBI specification v0.2 detected" boot.log
+          grep -q "Kernel command line: console=hvc0 earlycon=sbi" boot.log
+          echo "boot log: $(wc -l < boot.log) lines"
+
+      - uses: actions/upload-artifact@v7
+        if: success() || failure()
+        with:
+          name: koti-boot-log
+          path: boot.log

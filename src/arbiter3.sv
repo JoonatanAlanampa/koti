@@ -49,12 +49,31 @@ module mem_arbiter3 (
 
     logic [1:0] grant;
 
+    // Release on a DROPPED request as well as on an ack (added 2026-08-04,
+    // found while booting Linux). `m_req` below IS whichever port holds the
+    // grant, so `!m_req` in a granted state means that requester walked away
+    // before it was served — and the FETCH port does exactly that, every time
+    // the pipeline flushes on a taken branch or a trap.
+    //
+    // Without this clause the arbiter sits holding a grant for a request that
+    // no longer exists: m_req is low, so no controller starts a transaction,
+    // so no ack ever arrives, so the grant is never released, and the machine
+    // stops with the data port asking for something that can never be
+    // forwarded. It is the same hazard project.sv already guards for the
+    // FPGA build's device-select latch, one level further in — that comment
+    // names the fetch port for the same reason.
+    //
+    // Safe against a transaction that HAS started: a controller only begins
+    // while m_req is high and holds its own state afterwards, so releasing on
+    // !m_req cannot cut one short. A late ack from an abandoned fetch lands
+    // while grant is G_NONE and is simply discarded, which is what should
+    // happen to an answer nobody is waiting for.
     always_ff @(posedge clk)
         if (rst)                  grant <= G_NONE;
         else if (grant == G_NONE) grant <= v_req ? G_VID
                                         : d_req ? G_DATA
                                         : f_req ? G_FETCH : G_NONE;
-        else if (m_ack)           grant <= G_NONE;
+        else if (m_ack || !m_req) grant <= G_NONE;
 
     always_comb
         case (grant)

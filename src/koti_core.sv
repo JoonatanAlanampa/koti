@@ -740,6 +740,8 @@ module koti_core #(
     assign d_wdata = amo_wr ? amo_new : st_data;
     assign d_be    = be_m;
 
+    wire wr_ok = d_active && d_ack;
+
     always_ff @(posedge clk)
         if (rst) d_seen <= 1'b0;
         else begin
@@ -747,20 +749,55 @@ module koti_core #(
                 d_data_r <= d_rdata;
                 d_seen   <= 1'b1;
             end
+            // An RMW is finished the moment its WRITE is acked, and it has to
+            // say so through the same latch — see the livelock note below.
+            // d_data_r takes old_q because that is the AMO's architectural
+            // result: rd gets the value that was in memory BEFORE the write.
+            if (amo_wr && wr_ok) begin
+                d_data_r <= old_q;
+                d_seen   <= 1'b1;
+            end
             if (!halted && !pstall) d_seen <= 1'b0;   // M advanced
         end
 
-    wire wr_ok = d_active && d_ack;
-    assign astall = rmw_m && !halted && !(amo_wr && wr_ok);
+    // ---- the AMO livelock, found by booting Linux (2026-08-04) -------------
+    //
+    // `astall` used to be `rmw_m && !halted && !(amo_wr && wr_ok)`, i.e. the
+    // RMW released the pipeline only on the single cycle its write was acked.
+    // If ANY OTHER stall was up on that cycle the instruction did not advance,
+    // `amo_wr` cleared, and the read-modify-write started again from the top —
+    // forever. And the other stall was not hypothetical:
+    //
+    //   M holds an AMO, so d_active is high, so m_port_busy is high.
+    //   EX holds the next memory instruction, which misses the 2-entry DTLB
+    //   under sv32, so tlb_stall is high, so pstall is high.
+    //   The page-table walker takes the data port only when M is quiet
+    //   (dw_req = state != 0 && !m_port_busy), and M is never quiet because
+    //   the AMO keeps restarting.
+    //
+    // Each waits for the other. Linux hits it in boot_cpu_init — the
+    // `amoor.w` in set_cpu_possible() — about 40 instructions before it would
+    // have printed its banner, so the machine hangs with nothing on the
+    // console. It is NOT specific to the FPGA build or the I-cache: any build
+    // with the MMU on can reach it, and the reason it was never seen is that
+    // the 58 official tests include rv32ua but run with satp = 0, and the
+    // directed sv32 tests contain no atomics.
+    //
+    // The fix is to let the RMW latch "done" the way every other memory access
+    // already does. d_seen then deasserts d_active, which frees the port, which
+    // lets the walker run, which clears tlb_stall, which retires the AMO.
+    wire amo_fin = d_seen || (amo_wr && wr_ok);
+    assign astall = rmw_m && !halted && !amo_fin;
 
     always_ff @(posedge clk)
         if (rst) amo_wr <= 1'b0;
-        else if (rmw_m && !halted) begin
-            if (!amo_wr && !mstall) begin
-                old_q  <= mem_word;
-                amo_wr <= 1'b1;
-            end else if (amo_wr && wr_ok)
-                amo_wr <= 1'b0;
+        // Cleared unconditionally on the write ack, not only while rmw_m holds:
+        // gating it on `!d_seen` below would leave it set into the NEXT
+        // instruction, which would then start in its write phase.
+        else if (amo_wr && wr_ok) amo_wr <= 1'b0;
+        else if (rmw_m && !halted && !amo_wr && !mstall && !d_seen) begin
+            old_q  <= mem_word;
+            amo_wr <= 1'b1;
         end
 
     always_ff @(posedge clk)
@@ -797,7 +834,12 @@ module koti_core #(
          .data(st_data[7:0]), .tx(uart_txd), .busy(uart_busy));
 
     // loads: external word through the byte-extension path
-    assign mem_word = d_seen ? d_data_r : d_rdata;
+    // During an RMW's write phase this is old_q — the value memory held BEFORE
+    // the write, which is what an AMO returns in rd. It used to be d_rdata
+    // here too, which made the result depend on whatever a memory controller
+    // happens to drive on the read bus while it is acknowledging a WRITE.
+    // Nothing specifies that, and the two candidates only agree by luck.
+    assign mem_word = d_seen ? d_data_r : (amo_wr ? old_q : d_rdata);
     wire [31:0] ld_shift = mem_word >> (8 * off_m);
     logic [31:0] ld_ext;
     always_comb

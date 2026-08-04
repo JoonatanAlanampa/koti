@@ -98,7 +98,19 @@ module tt_um_koti (
   wire [3:0] sd_out, sd_oe, sd_in;
   wire [1:0] qspi_cfg;
 
-  koti_core #(.UART_DIV(217)) core (
+  // 217 = 25 MHz / 115200. In the boot simulation it is 8 instead, and that is
+  // not cosmetic: the firmware's uart_putc polls `busy`, so the divisor sets
+  // how fast software can print, and a kernel boot log is thousands of
+  // characters. At 217 the log alone costs several million clocks — more than
+  // the boot. Nothing about the UART's correctness depends on the value; the
+  // real one is tested at 217 by every other suite in the repo.
+`ifdef KOTI_SIMMEM
+  localparam UDIV = 8;
+`else
+  localparam UDIV = 217;
+`endif
+
+  koti_core #(.UART_DIV(UDIV)) core (
       .clk(clk), .rst(rst),
       .mtip(mtip), .msip(msip), .meip(kb_irq), .seip(plic_eip),
       .halted(halted), .led(led), .uart_txd(uart_txd), .gpio_in(ui_in),
@@ -314,6 +326,44 @@ module tt_um_koti (
   );
 
 `ifdef KOTI_FPGA
+`ifdef KOTI_SIMMEM
+  // ---- simulation only: one behavioural memory instead of two controllers --
+  //
+  // See test/sim_mem.sv for what this trades away. In short: it proves nothing
+  // about qspi_ctrl or sdram_ctrl, both of which have their own strict benches
+  // and are exercised by the whole-SoC suites — and it turns ~130 clocks (QSPI)
+  // and ~8 clocks (SDRAM) per word into 1, which is what makes booting a kernel
+  // in simulation a minute rather than a day.
+  //
+  // `KOTI_SIMMEM` is defined by no synthesis build: not the TinyTapeout flow,
+  // not fpga-ulx3s.yaml, not fpga/ulx3s/synth.ps1.
+  sim_mem simmem (
+      .clk(clk), .rst(rst),
+      .req(m_req), .we(m_we), .burst(m_burst), .addr(m_addr),
+      .wdata(m_wdata), .be(m_be),
+      .ack(m_ack), .rdata(m_rdata), .rdata2(m_rdata2)
+  );
+
+  // Everything the two real controllers would have driven. Tied rather than
+  // left dangling: an undriven wire is x, and x reaching uio_out or the SDRAM
+  // pins would show up in a boot log as unrelated nonsense.
+  assign sck        = 1'b0;
+  assign sd_out     = 4'd0;
+  assign sd_oe      = 4'd0;
+  assign cs_flash_n = 1'b1;
+  assign cs_ram_n   = 1'b1;
+  assign sdram_cke  = 1'b0;
+  assign sdram_csn  = 1'b1;
+  assign sdram_rasn = 1'b1;
+  assign sdram_casn = 1'b1;
+  assign sdram_wen  = 1'b1;
+  assign sdram_a    = 13'd0;
+  assign sdram_ba   = 2'd0;
+  assign sdram_dqm  = 2'b11;
+  assign sdram_dout = 16'd0;
+  assign sdram_doe  = 1'b0;
+  wire _unused_sim  = &{1'b0, sdram_din, sd_in, qspi_cfg};
+`else
   // ---- ULX3S: flash stays on QSPI, RAM moves to the onboard SDRAM ----
   // addr[22] is the same select the QSPI controller uses internally, so the
   // split costs one wire and no change to any address anywhere.
@@ -397,6 +447,7 @@ module tt_um_koti (
   // Defaulting to zero cannot change any correct behaviour and denies x a path.
   assign m_rdata  = s_ack ? s_rdata  : q_ack ? q_rdata  : 32'd0;
   assign m_rdata2 = s_ack ? s_rdata2 : q_ack ? q_rdata2 : 32'd0;
+`endif
 `else
   qspi_ctrl qspi (
       .clk(clk), .rst(rst), .cfg(qspi_cfg),

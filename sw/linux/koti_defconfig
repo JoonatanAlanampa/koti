@@ -28,6 +28,25 @@ CONFIG_ARCH_RV32I=y
 # CONFIG_FPU is not set
 # CONFIG_RISCV_ISA_V is not set
 
+# ⚠️ And EFI is why the line above is not enough on its own. `config EFI` is
+# `default y`, `depends on OF && !XIP_KERNEL && MMU` — all true here — and it
+# does `select RISCV_ISA_C`. A `select` overrides a defconfig's "is not set",
+# so asking for no compressed instructions and saying nothing about UEFI gets
+# you compressed instructions anyway, with no warning. check_config.py caught
+# this on its first run; without that step the build would have gone green and
+# the kernel would have died on an illegal instruction with nothing printed.
+# koti is booted by its own M-mode firmware, not by a UEFI stub, so this costs
+# nothing besides the EFI stub, LIBFDT and UCS2_STRING it drops from the image.
+# CONFIG_EFI is not set
+
+# Runtime-patched extension support koti's core does not have. The alternatives
+# framework would leave these unpatched (koti.dts lists neither in
+# riscv,isa-extensions, and ZICBOM also wants riscv,cbom-block-size), so they
+# are off for size and to remove a class of "the alternative got applied
+# anyway" failure rather than because they are known to break.
+# CONFIG_RISCV_ISA_ZBB is not set
+# CONFIG_RISCV_ISA_ZICBOM is not set
+
 # One hart. The firmware refuses the IPI and RFENCE extensions rather than
 # faking them (probe_extension returns 0), which is the honest answer only
 # while this stays off.

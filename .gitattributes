@@ -1,0 +1,12 @@
+# The repo is developed on Windows with core.autocrlf on, so anything git
+# guesses is text gets its line endings rewritten on checkout. That guess is a
+# heuristic (it looks for NUL bytes near the start of the file), and these
+# files are flashed byte for byte — sbi_test.bin is loaded straight into the
+# SPI flash model and koti.dtb is compared against dtc's output. A blob whose
+# 0x0A bytes turned into 0x0D 0x0A boots nothing and diffs as "binary files
+# differ", which says nothing about why.
+*.bin binary
+*.dtb binary
+*.elf binary
+*.fst binary
+*.bit binary

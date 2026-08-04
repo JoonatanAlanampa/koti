@@ -37,6 +37,11 @@ REQUIRED = [
     ("CONFIG_NONPORTABLE", "y"),
     ("CONFIG_MMU", "y"),
     ("CONFIG_RISCV_ISA_C", "n"),
+    # EFI is asserted off not because koti minds UEFI but because `config EFI`
+    # does `select RISCV_ISA_C`, and a select beats a defconfig's "is not set".
+    # This pair is the reason this script exists: on its first run
+    # RISCV_ISA_C came back y with nothing in the log to say why.
+    ("CONFIG_EFI", "n"),
     ("CONFIG_FPU", "n"),
     ("CONFIG_SMP", "n"),
 
@@ -48,6 +53,13 @@ REQUIRED = [
     ("CONFIG_RISCV_TIMER", "y"),
     ("CONFIG_RISCV_INTC", "y"),
     ("CONFIG_SIFIVE_PLIC", "y"),
+
+    # The command line comes from koti.dts /chosen/bootargs, and that is where
+    # console=hvc0 earlycon=sbi live. CMDLINE_FORCE would override it with the
+    # built-in CMDLINE, which is "" — an empty command line boots a kernel with
+    # no console and no complaint. (RISC-V spells the default CMDLINE_FALLBACK,
+    # not the generic CMDLINE_FROM_BOOTLOADER.)
+    ("CONFIG_CMDLINE_FORCE", "n"),
 
     # the machine description and the rootfs
     ("CONFIG_OF", "y"),
@@ -65,14 +77,14 @@ REPORT = [
     "CONFIG_CC_OPTIMIZE_FOR_SIZE",
     "CONFIG_PAGE_OFFSET",
     "CONFIG_CMDLINE",
-    "CONFIG_CMDLINE_FROM_BOOTLOADER",
+    "CONFIG_CMDLINE_FALLBACK",
     "CONFIG_INITRAMFS_SOURCE",
     "CONFIG_LOG_BUF_SHIFT",
     "CONFIG_HZ",
     "CONFIG_KALLSYMS",
-    "CONFIG_EFI",
     "CONFIG_RISCV_ISA_ZBB",
     "CONFIG_RISCV_ISA_ZICBOM",
+    "CONFIG_PAGE_SIZE_4KB",
 ]
 
 

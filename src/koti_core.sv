@@ -288,8 +288,9 @@ module koti_core #(
                  .is_system(c_is_sys));
 
     // SYSTEM sub-decode (needs instr[31:20], which control never sees).
-    // EBREAK halts the core; ECALL traps (it is the SBI path); WFI and
-    // unknown SYSTEM encodings are NOPs.
+    // EBREAK halts the core in M-mode and TRAPS in S/U (see brk_take below);
+    // ECALL traps (it is the SBI path); WFI and unknown SYSTEM encodings
+    // are NOPs.
     wire [11:0] sys12 = instr_d[31:20];
     wire is_csr_d    = c_is_sys && instr_d[14:12] != 3'b000;
     wire is_ecall_d  = c_is_sys && instr_d[14:12] == 3'b000 && sys12 == 12'h000;
@@ -614,8 +615,43 @@ module koti_core #(
     // access fault: only once misalign and page fault are ruled out
     wire dacc_take = dacc_fault && !dmis_take && !dpf_take && !irq_take
                   && commit;
+
+    // EBREAK is SPLIT BY PRIVILEGE, and the split is the whole point.
+    //
+    // In M-mode it halts, exactly as it always has. Everything bare-metal on
+    // this machine depends on that and none of it changes: sw/crt0.S ends a
+    // program with it, sw/sbi/sbi.c implements SBI SRST *as* an ebreak (so
+    // "system reset" is literally the core stopping), and every test in
+    // test/ means "run until EBREAK" by "the program finished".
+    //
+    // In S/U it now raises a Breakpoint exception, cause 3, which is what the
+    // ISA says an ebreak does anywhere. Halting was fine while nothing but our
+    // own firmware ran here; it stops being fine the moment Linux does.
+    // RISC-V Linux does not use ebreak for debuggers — it compiles every
+    // WARN_ON() and BUG_ON() into an ebreak plus a __bug_table entry holding
+    // the file and line, and expects do_trap_break() to look the PC up in that
+    // table, print, and for a WARN *step past the ebreak and carry on*. A
+    // WARN is a complaint the kernel is meant to survive. The 6.12 image koti
+    // boots carries 2812 of those sites.
+    //
+    // So before this, the first WARN anywhere in the kernel stopped the
+    // machine — and because the firmware's clean shutdown is ALSO an ebreak,
+    // test/tb_boot.v could not tell that apart from a successful poweroff and
+    // reported it as PASS. A silent death that reads as a green run is the
+    // worst failure mode available, which is why this is worth a trap path.
+    //
+    // M-mode deliberately does NOT trap, though the ISA would have it trap
+    // there too: there is no debug module to take it, the firmware's own
+    // handler has no case for cause 3, and trapping would turn the shutdown
+    // path into a loop. Deviating in the one mode where nothing can service
+    // the exception is the honest trade.
+    wire ebreak_halt_e = valid_e && ebreak_e && csr_priv == 2'b11;
+    wire brk_take      = valid_e && ebreak_e && csr_priv != 2'b11
+                      && !irq_take && commit;
+
     wire trap_take = irq_take || ipf_take || ill_take || ecl_take
-                  || imis_take || dpf_take || dmis_take || dacc_take;
+                  || imis_take || dpf_take || dmis_take || dacc_take
+                  || brk_take;
     wire mret_take = valid_e && mret_e && commit && !trap_take;
     wire sret_take = valid_e && sret_e && commit && !trap_take;
     wire sfence_take = valid_e && sfence_e && commit && !trap_take;
@@ -629,15 +665,27 @@ module koti_core #(
     wire fencei_take = valid_e && fencei_e && commit && !trap_take;
     assign icache_flush = fencei_take;
 
+    // brk_take sits below ipf for the usual reason — an instruction whose own
+    // fetch page-faulted was never really there to be an ebreak — and above
+    // the data faults, which an ebreak cannot raise anyway (it is neither a
+    // branch nor a memory op, so imis/dpf/dmis/dacc are all impossible
+    // alongside it). Its position relative to ecall never matters: the two are
+    // mutually exclusive by decode, sys12 12'h001 against 12'h000.
     wire [3:0]  trap_kind = ipf_take  ? 4'd1
                           : ill_take  ? 4'd4
+                          : brk_take  ? 4'd10
                           : imis_take ? 4'd5
                           : dpf_take  ? (d_isstore ? 4'd3 : 4'd2)
                           : dmis_take ? (d_isstore ? 4'd7 : 4'd6)
                           : dacc_take ? (d_isstore ? 4'd9 : 4'd8)
                           :             4'd0;
+    // A breakpoint writes *tval with the address of the EBREAK itself, per the
+    // privileged spec. Linux does not read it — do_trap_break() finds its bug
+    // table entry from regs->epc — but a wrong tval is the kind of thing that
+    // is only ever discovered by whatever needs it next.
     wire [31:0] trap_tval = ipf_take  ? pc_e
                           : ill_take  ? instr_e
+                          : brk_take  ? pc_e
                           : imis_take ? {alu_y[31:1], 1'b0}
                           : (dpf_take || dmis_take || dacc_take) ? alu_y
                           :             32'd0;
@@ -667,14 +715,14 @@ module koti_core #(
 
     assign flush_ex  = (take_ex && !imis_take) || trap_take || mret_take
                      || sret_take || satp_take
-                     || sfence_take || fencei_take || (valid_e && ebreak_e);
+                     || sfence_take || fencei_take || ebreak_halt_e;
     assign target_ex = trap_take             ? csr_trap_vec
                      : mret_take             ? csr_mepc
                      : sret_take             ? csr_sepc
                      : satp_take             ? pc_e + 32'd4  // serialize
                      : sfence_take           ? pc_e + 32'd4  // serialize
                      : fencei_take           ? pc_e + 32'd4  // serialize
-                     : (valid_e && ebreak_e) ? pc_e          // spin + drain
+                     : ebreak_halt_e         ? pc_e          // spin + drain
                      : {alu_y[31:1], 1'b0};
 
     // ---- EX/MEM ----
@@ -692,7 +740,11 @@ module koti_core #(
             funct3_m    <= funct3_e;
             rd_m        <= rd_e;
             st_m        <= fwd2;                          // store data, forwarded
-            halt_m      <= valid_e && ebreak_e;
+            // NOT `valid_e && ebreak_e`. An S/U ebreak sets trap_take, which
+            // squashes the instruction one line above — but halt_m is a
+            // separate latch, so without the privilege term the core would
+            // take the breakpoint trap AND halt, and halting wins.
+            halt_m      <= ebreak_halt_e;
             is_amo_m    <= is_amo_e; amo5_m <= amo5_e;
             value_m     <= csr_e              ? csr_rval
                          : is_md_e            ? md_result

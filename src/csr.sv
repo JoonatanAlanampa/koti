@@ -29,7 +29,8 @@ module csr (
     input  logic [3:0]  trap_kind,   // else: 0 ecall, 1 ipf, 2 lpf,
                                      // 3 spf, 4 illegal, 5 misaligned
                                      // fetch, 6 misload, 7 misstore,
-                                     // 8 load-access, 9 store/AMO-access
+                                     // 8 load-access, 9 store/AMO-access,
+                                     // 10 breakpoint (S/U EBREAK)
     input  logic [31:0] trap_pc,
     input  logic [31:0] trap_tval,
     input  logic        mret, sret,
@@ -170,6 +171,7 @@ module csr (
             4'd7:    exc_cause = 32'd6;       // store/AMO misaligned
             4'd8:    exc_cause = 32'd5;       // load access fault
             4'd9:    exc_cause = 32'd7;       // store/AMO access fault
+            4'd10:   exc_cause = 32'd3;       // breakpoint (S/U EBREAK)
             default: exc_cause = ecall_cause;
         endcase
     wire [31:0] cause  = trap_irq ? irq_cause : exc_cause;

@@ -1,7 +1,8 @@
 # sbi.S — Koti-1 M-mode firmware: boot, delegation, trap shim.
 # Delegates S-level interrupts (mideleg=0x222) and the usual user/S
 # exceptions EXCEPT illegal instruction (rdtime emulation lives in M)
-# and ecall-from-S (that IS the SBI). Payload entry pinned at 0x4000.
+# and ecall-from-S (that IS the SBI). Breakpoint (3) is delegated too, so
+# Linux's WARN_ON/BUG_ON reach do_trap_break. Payload entry pinned at 0x4000.
     .section .text.init
     .globl _start
 _start:
@@ -11,7 +12,14 @@ _start:
     csrw mtvec, t0
     li   t0, 0x222               # mideleg: SSIP | STIP | SEIP
     csrw mideleg, t0
-    li   t0, 0xB151              # medeleg: 0,4,6,8,12,13,15
+    # medeleg: 0,3,4,6,8,12,13,15.
+    # Bit 3 is BREAKPOINT and it was added 2026-08-05 alongside making an S/U
+    # EBREAK trap instead of halting the core. Without it that trap comes to
+    # M-mode, where trap_entry below has no case for cause 3 — which would have
+    # swapped a silent halt for a silent firmware trap and looked like no
+    # improvement at all. Linux wants it in S: do_trap_break() is where every
+    # WARN_ON and BUG_ON in the kernel lands.
+    li   t0, 0xB159
     csrw medeleg, t0
     call sbi_init
 

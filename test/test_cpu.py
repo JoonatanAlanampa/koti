@@ -21,7 +21,7 @@ MSCRATCH, MEPC, MCAUSE, MIP = 0x340, 0x341, 0x342, 0x344
 MEDELEG, MIDELEG = 0x302, 0x303
 SSTATUS, SIE, STVEC = 0x100, 0x104, 0x105
 SEPC, SCAUSE, SIP = 0x141, 0x142, 0x144
-MTVAL, SATP = 0x343, 0x180
+MTVAL, STVAL, SATP = 0x343, 0x143, 0x180
 
 # ---- tiny assembler ----------------------------------------------------
 
@@ -150,7 +150,12 @@ def layout(main, sections):
 
 
 async def run_program(dut, words, max_cycles=20000, mtip_at=None,
-                      ram_zero=()):
+                      ram_zero=(), stop_on_brk=True):
+    """Run until the program stops. `stop_on_brk` is what an S/U EBREAK means
+    to THIS test: True (the default) treats it as the terminator every S/U
+    section here uses it as, False leaves it to the test's own handler — which
+    is the only way to exercise a breakpoint that is supposed to be RESUMED,
+    since a terminator and a handled trap are the same signal."""
     dut.rst.value = 1
     dut.mtip.value = 0
     dut.msip.value = 0
@@ -171,6 +176,35 @@ async def run_program(dut, words, max_cycles=20000, mtip_at=None,
         if mtip_at is not None and cyc == mtip_at:
             dut.mtip.value = 1
         if dut.halted.value:
+            return
+        # EBREAK ends a program here, and that is privilege-agnostic INTENT:
+        # every S/U section below finishes with one. Since 2026-08-05 the core
+        # only halts on an M-mode EBREAK — in S/U it raises a Breakpoint
+        # exception instead, because that is what the ISA says and what Linux
+        # needs (WARN_ON and BUG_ON are EBREAKs it expects to survive). So the
+        # harness has to recognise the trap as well as the halt; without this
+        # the S/U EBREAK vectors to whatever mtvec happens to hold and the test
+        # spins to max_cycles, which is exactly what five of them did.
+        #
+        # Watching brk_take rather than rewriting the tests is deliberate: it
+        # keeps every existing assertion untouched, including the one guarding
+        # the straddling-fetch-pair defect, which is not a test to go editing
+        # in service of an unrelated change.
+        if stop_on_brk and dut.c0.brk_take.value:
+            # Drain before reading the regfile. brk_take is an EX-stage signal,
+            # whereas the `halted` above arrives at W — halt_m -> halt_w ->
+            # halted is three stages of latency that the old path got for free.
+            # Returning the moment brk_take fires samples the registers while
+            # the instruction JUST BEFORE the EBREAK is still in M and has not
+            # written back, which is not a subtle wrongness: it read x10 as 0
+            # instead of 100 in four tests, at exactly the right PC.
+            #
+            # Three clocks is the pipeline latency, not a guess, and it is also
+            # the safe upper bound: the breakpoint redirects to mtvec, and the
+            # first instruction fetched there needs all five stages before it
+            # can write a register, so nothing from the trap handler can clobber
+            # what the test is about to assert on.
+            await ClockCycles(dut.clk, 3)
             return
     raise AssertionError("program never halted")
 
@@ -538,6 +572,59 @@ async def test_smode_ecall_delegated(dut):
     assert reg(dut, 11) == 9, "scause != ecall-from-S"
     assert reg(dut, 12) == S_ENTRY * 4 + 4
     assert reg(dut, 17) & 0x100, "sstatus.SPP should say 'came from S'"
+
+
+@cocotb.test()
+async def test_smode_ebreak_traps_and_resumes(dut):
+    """An S-mode EBREAK raises cause 3 and is RESUMABLE — it does not halt.
+
+    This is the exact shape Linux depends on and koti did not provide until
+    2026-08-05. RISC-V Linux compiles every WARN_ON() and BUG_ON() into an
+    EBREAK plus a __bug_table entry (2812 of them in the 6.12 image koti
+    boots); do_trap_break() looks the PC up in that table, prints, and for a
+    WARN steps past the EBREAK and carries on. Halting instead turned every
+    warning the kernel was designed to survive into a silent death — and
+    because the firmware's clean shutdown is also an EBREAK, test/tb_boot.v
+    reported that death as a PASS.
+
+    So the assertions here are deliberately about RESUMPTION, not just about
+    the cause: x10 == 100 is the whole point, and it is what fails if the core
+    ever goes back to halting. M-mode is unchanged and this test proves that
+    too, by ending the run the way every other test does — an EBREAK in M,
+    which still halts.
+    """
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    main = (li(1, S_HANDLER * 4) + [csrrw(0, STVEC, 1)]
+            + li(5, HANDLER * 4) + [csrrw(0, MTVEC, 5)]
+            + li(2, 1 << 3) + [csrrs(0, MEDELEG, 2)]     # breakpoint -> S
+            + li(3, S_ENTRY * 4) + [csrrw(0, MEPC, 3)]
+            + li(4, 0x800) + [csrrs(0, MSTATUS, 4),      # MPP = 01 (S)
+                              MRET])
+    s_entry = [
+        addi(10, 0, 0),
+        EBREAK,                     # cause 3 -> S handler. NOT a halt.
+        addi(10, 10, 100),          # only runs if the breakpoint was resumed
+        ECALL,                      # undelegated: back to M to end the run
+    ]
+    s_handler = [
+        csrrs(11, SCAUSE, 0),
+        csrrs(12, SEPC, 0),
+        csrrs(14, STVAL, 0),
+        addi(13, 12, 4),            # step past it, exactly as do_trap_break
+        csrrw(0, SEPC, 13),         # does for a WARN
+        SRET,
+    ]
+    m_handler = [EBREAK]            # M-mode EBREAK still halts: that is the end
+    await run_program(dut, layout(main, {HANDLER: m_handler,
+                                         S_HANDLER: s_handler,
+                                         S_ENTRY: s_entry}),
+                      stop_on_brk=False)
+    assert reg(dut, 11) == 3, "scause != 3 (breakpoint)"
+    assert reg(dut, 12) == S_ENTRY * 4 + 4, "sepc != the EBREAK's own address"
+    assert reg(dut, 14) == S_ENTRY * 4 + 4, "stval != the EBREAK's own address"
+    assert reg(dut, 10) == 100, \
+        "execution did not resume past the breakpoint — an S-mode EBREAK " \
+        "halted the core instead of trapping, which is what kills a WARN_ON"
 
 
 @cocotb.test()

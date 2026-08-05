@@ -1,0 +1,114 @@
+# userspace — build the rootfs koti's kernel boots into.
+#
+# Ladder item 7: a real userspace. sw/linux/init.S is a ~20-instruction stand-in
+# that prints one line and asks for power-off; it proves execve works and
+# nothing more. A machine you can USE needs a shell, and a shell needs a libc,
+# and a libc for rv32 is the one thing Ubuntu's cross-toolchain does not ship.
+# That is the whole reason .github/workflows/linux.yaml can avoid Buildroot for
+# the kernel — freestanding, links no libc — and cannot avoid it here.
+#
+# SEPARATE WORKFLOW, AND THE CPIO IS COMMITTED. Buildroot builds an entire
+# toolchain from source: roughly forty minutes cold. Putting that in front of
+# every push to src/ would make the CPU regression loop unusable. So this runs
+# on demand, and its output is committed as sw/linux/rootfs.cpio the same way
+# sw/linux/koti.dtb and sw/sbi/sbi_test.bin already are — build products that
+# need a tool the ordinary path does not have. linux.yaml then just consumes
+# the committed file.
+#
+# ⚠️ The base is an IN-TREE defconfig plus a small fragment, not a hand-written
+# defconfig. A from-scratch Buildroot config for a niche target is a long list
+# of symbols nobody can verify without running the build, and Buildroot drops
+# unmet symbols silently. Starting from a config that already builds and
+# overriding only what koti requires keeps the surface small — and
+# sw/linux/check_rootfs.py then checks the RESULT rather than the request.
+name: userspace
+
+on:
+  workflow_dispatch:
+    inputs:
+      brver:
+        description: 'Buildroot git tag to build'
+        default: '2025.02.4'
+  push:
+    paths:
+      - 'sw/linux/buildroot_koti.fragment'
+      - 'sw/linux/check_rootfs.py'
+      - '.github/workflows/userspace.yaml'
+
+jobs:
+  rootfs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Buildroot's build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libssl-dev \
+            cpio rsync unzip wget file python3 git
+
+      # Pinned to a tag, not a branch: a userspace is a thing you reproduce.
+      # A tag that does not exist fails here in seconds rather than after the
+      # forty-minute build, which is why the clone comes before anything else.
+      - name: Fetch Buildroot
+        env:
+          BRVER: ${{ inputs.brver || '2025.02.4' }}
+        run: |
+          git clone --depth 1 --branch "$BRVER" \
+            https://gitlab.com/buildroot.org/buildroot.git buildroot
+          echo "buildroot $BRVER"
+
+      # Buildroot re-downloads every package source on a cold run. The tarballs
+      # are the slow, flaky part; the compile is merely slow.
+      - name: Cache Buildroot downloads
+        uses: actions/cache@v4
+        with:
+          path: buildroot/dl
+          key: buildroot-dl-${{ inputs.brver || '2025.02.4' }}-${{ hashFiles('sw/linux/buildroot_koti.fragment') }}
+          restore-keys: |
+            buildroot-dl-${{ inputs.brver || '2025.02.4' }}-
+            buildroot-dl-
+
+      - name: Configure
+        working-directory: buildroot
+        run: |
+          make qemu_riscv32_virt_defconfig
+          cat ../sw/linux/buildroot_koti.fragment >> .config
+          make olddefconfig
+          cp .config ../buildroot-config.txt
+
+      # BEFORE the forty-minute build, not after. Every symbol checked here is
+      # one that produces a rootfs koti cannot run, and finding that out at the
+      # end of the build costs the whole build.
+      - name: The resolved config is a userspace koti can run
+        run: python3 sw/linux/check_rootfs.py --config-only buildroot-config.txt
+
+      - name: Build the rootfs
+        working-directory: buildroot
+        run: make -j$(nproc) 2>&1 | tail -80
+
+      # The claim that matters, and it is about the BINARIES rather than the
+      # build system that produced them: ELF32, RISC-V, and e_flags == 0, which
+      # means no compressed instructions and no hardware float ABI. koti's
+      # decoder has neither. A rootfs that fails this boots a perfectly healthy
+      # kernel straight into an illegal instruction at execve.
+      - name: The binaries are ones koti can execute
+        run: |
+          mapfile -t bins < <(find buildroot/output/target -type f \
+            \( -path '*/bin/*' -o -path '*/sbin/*' -o -name '*.so*' \) | head -200)
+          echo "checking ${#bins[@]} files"
+          python3 sw/linux/check_rootfs.py buildroot-config.txt "${bins[@]}"
+
+      - name: Size
+        run: |
+          ls -l buildroot/output/images/rootfs.cpio
+          echo "koti has about 8.4 MB free after the kernel, and an initramfs"
+          echo "costs that space twice while it is being unpacked."
+
+      - uses: actions/upload-artifact@v7
+        if: success() || failure()
+        with:
+          name: koti-rootfs
+          path: |
+            buildroot/output/images/rootfs.cpio
+            buildroot-config.txt

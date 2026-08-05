@@ -1,0 +1,62 @@
+# buildroot_koti.fragment — what koti needs that a stock Buildroot config does
+# not give it.
+#
+# APPLIED AS A FRAGMENT, NOT AS A WHOLE DEFCONFIG, and that is deliberate. A
+# hand-written Buildroot defconfig for a niche target is a long list of symbols
+# nobody can check without running a 40-minute build, and Buildroot drops a
+# symbol whose dependencies are unmet exactly the way kconfig does — silently.
+# So .github/workflows/userspace.yaml starts from an in-tree defconfig that is
+# already known to build (qemu_riscv32_virt), appends this, and runs
+# `make olddefconfig`. Only the lines koti genuinely requires live here, and
+# every one of them is asserted afterwards against the RESOLVED .config.
+#
+# ⚠️ THE ONE THAT MATTERS MOST IS RVC. koti's core cannot decode compressed
+# instructions, and Buildroot's RISC-V default enables them. A userspace built
+# with C would produce binaries that die on an illegal instruction the moment
+# execve lands on one — the same failure the kernel side already hit, where
+# `config EFI` quietly selected RISCV_ISA_C behind a defconfig that had asked
+# for it to be off. That cost a build there. In userspace it would cost more,
+# because the kernel would be fine and only programs would die.
+
+# rv32, and spell out the ISA rather than take "general purpose" (G), which
+# means IMAFD — koti has no FPU at all.
+BR2_riscv=y
+BR2_RISCV_32=y
+BR2_riscv_custom=y
+BR2_RISCV_ISA_CUSTOM_RVM=y
+BR2_RISCV_ISA_CUSTOM_RVA=y
+# BR2_RISCV_ISA_CUSTOM_RVF is not set
+# BR2_RISCV_ISA_CUSTOM_RVD is not set
+# BR2_RISCV_ISA_CUSTOM_RVC is not set
+
+# Soft float, matching -mabi=ilp32 everywhere else in this project. ILP32F and
+# ILP32D would pass floats in F registers koti does not have.
+BR2_RISCV_ABI_ILP32=y
+
+# koti supplies its own everything below the rootfs: the kernel is built by
+# .github/workflows/linux.yaml from sw/linux/koti_defconfig, and the M-mode
+# firmware in sw/sbi IS the SBI implementation. Buildroot must not build a
+# kernel, a bootloader or OpenSBI — they would be silently unused at best and
+# confusing artifacts at worst.
+# BR2_LINUX_KERNEL is not set
+# BR2_TARGET_OPENSBI is not set
+# BR2_TARGET_UBOOT is not set
+
+# An initramfs, because koti has no storage yet. microSD is ladder item 7; ext2
+# on a card comes after that, and until then the rootfs has to travel inside
+# the kernel Image. CONFIG_INITRAMFS_SOURCE in koti_defconfig points at the
+# cpio this produces.
+BR2_TARGET_ROOTFS_CPIO=y
+# BR2_TARGET_ROOTFS_EXT2 is not set
+# BR2_TARGET_ROOTFS_TAR is not set
+
+# ⚠️ The console is hvc0 — the SBI console sw/sbi/sbi.c implements — and NOT a
+# ttyS. koti has no 16550 and koti.dts has no serial node, so a getty spawned
+# on ttyS0 would open nothing, respawn, and fill the log while the machine
+# looked alive but unusable.
+BR2_TARGET_GENERIC_GETTY_PORT="hvc0"
+
+# Keep it small. koti has ~8.4 MB free after the kernel (measured: "Memory:
+# 8460K/12288K available"), and an initramfs costs that space twice while it is
+# being unpacked. Busybox alone is the whole point of this rung: a shell.
+BR2_INIT_BUSYBOX=y

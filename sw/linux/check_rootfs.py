@@ -60,7 +60,14 @@ REQUIRED = [
     ("BR2_RISCV_ISA_RVA", "y"),
     ("BR2_RISCV_ISA_RVC", "n"),
     ("BR2_RISCV_ISA_RVF", "n"),
-    ("BR2_RISCV_ISA_RVD", "n"),
+    # "n?" = must be off IF VISIBLE, and absence is acceptable. Double-precision
+    # depends on single, so with RVF asserted off above, Buildroot hides RVD
+    # entirely and it drops out of the config. The guarantee for D is carried by
+    # the assertion on F; demanding an explicit "is not set" for a symbol that
+    # cannot exist would just be noise. This is the ONLY reason to reach for
+    # "n?" — a dependency this list already pins — and not a way to quiet a
+    # symbol whose name might simply be wrong.
+    ("BR2_RISCV_ISA_RVD", "n?"),
     ("BR2_RISCV_ABI_ILP32", "y"),
     # koti brings its own kernel, its own SBI (sw/sbi) and no bootloader.
     ("BR2_LINUX_KERNEL", "n"),
@@ -152,15 +159,20 @@ def main():
     for sym, want in REQUIRED:
         got = cfg.get(sym)
         if sym not in seen:
-            # Not "off" — UNKNOWN. Either the name is wrong or its
-            # dependencies are unmet, and in both cases this line is asserting
-            # nothing at all. Treating it as "n" is how a typo passes.
+            # "n?" tolerates absence, for a symbol whose enabling dependency
+            # this list already asserts off. Anything else absent is UNKNOWN,
+            # not "off": either the name is wrong or its dependencies are
+            # unmet, and in both cases the line is asserting nothing at all.
+            # Treating that as "n" is how a typo passes.
+            if want == "n?":
+                print(f"  ok   {sym} = <absent>   (want n if visible)")
+                continue
             print(f"  FAIL {sym} = <absent>   (want {want})")
             bad.append(f"{sym}: absent from the resolved config — wrong "
                        f"symbol name, or its dependencies are unmet. Either "
                        f"way this assertion was checking nothing.")
             continue
-        ok = (got is None) if want == "n" else (got == want)
+        ok = (got is None) if want in ("n", "n?") else (got == want)
         shown = "n" if got is None else got
         print(f"  {'ok  ' if ok else 'FAIL'} {sym} = {shown}   (want {want})")
         if not ok:

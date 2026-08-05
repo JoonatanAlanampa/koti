@@ -51,11 +51,31 @@ on:
       maxclk:
         description: 'boot: give up after this many clocks'
         default: '15000000'
+      # ⚠️ RAISED 4M -> 8M 2026-08-05, because 4M had become WRONG rather than
+      # merely tight. The BLAKE2s self-test (blake2s_mod_init, a device_initcall
+      # two entries after the io schedulers) hashes 256 test vectors and prints
+      # NOTHING while it does, which on this machine is a legitimate silence of
+      # roughly 5M clocks. Any run whose maxclk reaches ~27M therefore hit the
+      # 4M window mid-self-test and reported "assuming stuck" about a kernel
+      # that was working perfectly. This project has already lost a day to that
+      # exact verdict once, from the same window at a different clock.
       quiet:
         description: 'boot: give up after this many clocks with no output'
-        default: '4000000'
+        default: '8000000'
       trace:
         description: 'boot: print the fetch PC every N clocks (0 = off)'
+        default: '0'
+      # The coarse trace above answers "what is it doing"; these answer "what is
+      # the loop", which is the only resolution at which a stuck instruction
+      # explains itself. tb_boot.v has supported both since it was written and
+      # the workflow simply never passed them on, so reaching for them meant
+      # editing this file — in the middle of a debugging session, which is
+      # exactly when nobody wants to.
+      tfrom:
+        description: 'boot: start the per-clock trace at this clock'
+        default: '0'
+      tlen:
+        description: 'boot: per-clock trace length, in clocks (0 = off)'
         default: '0'
 
 env:
@@ -277,8 +297,10 @@ jobs:
           # value the step used before it was made dispatchable.
           vvp tb_boot.vvp +flash=fw.hex +ram=kernel.hex +ramoff=1048576 \
             +maxclk=${{ inputs.maxclk || '15000000' }} \
-            +quiet=${{ inputs.quiet || '4000000' }} \
-            +trace=${{ inputs.trace || '0' }} 2>&1 | tee boot.log
+            +quiet=${{ inputs.quiet || '8000000' }} \
+            +trace=${{ inputs.trace || '0' }} \
+            +tfrom=${{ inputs.tfrom || '0' }} \
+            +tlen=${{ inputs.tlen || '0' }} 2>&1 | tee boot.log
 
       # Grep for what only a real boot can produce. The banner alone would not
       # do: "Machine model" comes from koti.dts, so it also proves the firmware

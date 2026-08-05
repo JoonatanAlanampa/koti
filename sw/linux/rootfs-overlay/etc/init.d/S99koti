@@ -1,0 +1,41 @@
+#!/bin/sh
+#
+# S99koti — say, from userspace, that userspace is running.
+#
+# WHY THIS EXISTS. test/tb_boot.v needs one unambiguous string that only a
+# working userspace can produce, and it must be OURS rather than borrowed from
+# busybox's own output. A marker taken from a getty banner or /etc/issue would
+# be a claim about how Buildroot happens to word things this release, and it
+# would change under us on an upgrade with no warning and no failing test —
+# just a boot that quietly stopped being checked.
+#
+# It runs last (S99) on purpose: everything else in /etc/init.d has already
+# run, /proc and /dev are mounted, and the shell that runs this script is
+# itself proof that execve, the dynamic-free static binary, the initramfs
+# unpack and the console all worked.
+#
+# ⚠️ Keep the marker string in sync with MARKER in test/tb_boot.v. They are
+# deliberately duplicated rather than generated: the bench must not learn what
+# to expect from the thing it is testing.
+#
+# Copyright (c) 2026 Joonatan Alanampa
+# SPDX-License-Identifier: Apache-2.0
+
+case "$1" in
+	start)
+		# A little context first, because the interesting failures on real
+		# hardware are "it booted but the machine is not what I think".
+		# uname carries the kernel version and the machine name; the
+		# memory line is how you find out the initramfs did not leave
+		# enough room to do anything.
+		/bin/busybox uname -a
+		/bin/busybox grep -E '^MemTotal|^MemFree' /proc/meminfo
+		echo "koti: userspace is alive"
+		;;
+	stop)
+		;;
+	*)
+		echo "Usage: $0 {start|stop}"
+		exit 1
+		;;
+esac

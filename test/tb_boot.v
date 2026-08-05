@@ -185,9 +185,12 @@ module tb_boot ();
         $display("--- userspace runs; the firmware's panic path prints '!'");
         $display("--- first; and an S/U EBREAK is supposed to trap, not halt.");
         $fatal(1);
+      end else if (saw_marker) begin
+        $display("--- tb_boot: PASS (%0s)",
+                 uut.halted ? "userspace ran, then halted"
+                            : "userspace ran");
       end else begin
-        $display("--- tb_boot: %0s",
-                 uut.halted ? "PASS (userspace ran, then halted)" : "INCOMPLETE");
+        $display("--- tb_boot: INCOMPLETE");
       end
       $finish;
     end
@@ -198,6 +201,17 @@ module tb_boot ();
     if (rst_n) begin
       if (uut.halted)
         finish_with("core HALTED (ebreak: SBI SRST, or a firmware panic)");
+      // Reaching userspace ENDS the run successfully, and a halt is no longer
+      // required for that. The real rootfs runs busybox init, whose inittab
+      // puts a getty on hvc0 and respawns it forever — so a healthy machine
+      // with a login prompt on the console never halts, and never should. The
+      // earlier model ("a successful boot ENDS") only held while /init was a
+      // stand-in that asked for power-off. Waiting for a halt that correct
+      // behaviour will not produce would have burned the clock limit on every
+      // run and reported INCOMPLETE for a machine that had done everything
+      // asked of it.
+      else if (saw_marker)
+        finish_with("userspace reached: the marker was printed");
       else if (clkcnt >= maxclk)
         finish_with("clock limit reached");
       else if (nchars > 0 && (clkcnt - last_char_clk) > quiet)

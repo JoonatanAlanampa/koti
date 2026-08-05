@@ -94,6 +94,17 @@ REQUIRED = [
     ("BR2_TARGET_OPENSBI", "n"),
     # The rootfs has to travel inside the Image: koti has no storage yet.
     ("BR2_TARGET_ROOTFS_CPIO", "y"),
+    # musl + static is a SIZE decision — see the fragment. glibc came out at
+    # 4.09 MiB against a 12 MiB machine.
+    ("BR2_TOOLCHAIN_BUILDROOT_MUSL", "y"),
+    ("BR2_STATIC_LIBS", "y"),
+    # The overlay carries /etc/init.d/S99koti, which prints the marker
+    # test/tb_boot.v waits for. If this symbol were misspelled the overlay
+    # would be silently skipped and the only symptom would be a boot that
+    # reports INCOMPLETE forever — a soft failure nobody would trace back to a
+    # config line. The workflow additionally checks the script reached the
+    # built rootfs, because the symbol being right does not prove the path is.
+    ("BR2_ROOTFS_OVERLAY", "../sw/linux/rootfs-overlay"),
 ]
 
 

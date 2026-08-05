@@ -101,6 +101,22 @@ jobs:
             --cpio buildroot/output/images/rootfs.cpio \
             buildroot-config.txt "${bins[@]}"
 
+      # The overlay reached the rootfs, and the marker string inside it is the
+      # one the bench waits for. check_rootfs.py asserts BR2_ROOTFS_OVERLAY is
+      # spelled right; this asserts the file actually arrived and still says
+      # what test/tb_boot.v expects. The two are different claims — a correct
+      # symbol with a wrong path silently produces a rootfs with no marker, and
+      # the only symptom would be every boot reporting INCOMPLETE forever.
+      - name: The boot marker is in the rootfs
+        run: |
+          f=buildroot/output/target/etc/init.d/S99koti
+          test -x "$f" || { echo "::error::$f missing or not executable — did BR2_ROOTFS_OVERLAY apply?"; exit 1; }
+          marker=$(sed -n 's/.*localparam \[8\*MARKLEN-1:0\] MARKER = "\(.*\)";/\1/p' test/tb_boot.v)
+          test -n "$marker" || { echo "::error::could not read MARKER out of test/tb_boot.v"; exit 1; }
+          echo "bench expects: $marker"
+          grep -qF "$marker" "$f" || { echo "::error::S99koti does not print the string tb_boot.v waits for"; exit 1; }
+          echo "marker present in the rootfs"
+
       # What is actually in it, for the run where the size gate above fails.
       # The first successful build was 4.09 MiB and this listing is how it was
       # diagnosed in one look: 1.6 MB of libc.so.6 and 1.2 MB of libm.so.6.

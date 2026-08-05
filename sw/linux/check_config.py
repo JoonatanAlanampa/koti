@@ -63,7 +63,17 @@ REQUIRED = [
     # built-in CMDLINE, which is "" — an empty command line boots a kernel with
     # no console and no complaint. (RISC-V spells the default CMDLINE_FALLBACK,
     # not the generic CMDLINE_FROM_BOOTLOADER.)
-    ("CONFIG_CMDLINE_FORCE", "n"),
+    #
+    # ⚠️ Asserting CMDLINE_FORCE=n was VACUOUS for as long as it existed, and
+    # the absence check added 2026-08-05 is what exposed it: the whole
+    # CMDLINE_FALLBACK/EXTEND/FORCE choice is only visible when CONFIG_CMDLINE
+    # is non-empty, so with koti's empty CMDLINE none of them appear in the
+    # resolved config at all and "want n" was satisfied by a symbol that was
+    # not there. The real guarantee is the empty CMDLINE itself — nothing can
+    # be forced when there is nothing to force — so that is what is asserted,
+    # and FORCE is checked only if it ever becomes visible.
+    ("CONFIG_CMDLINE", '""'),
+    ("CONFIG_CMDLINE_FORCE", "n?"),
 
     # Not cryptography — boot time. CRYPTO_MANAGER_DISABLE_TESTS only EXISTS
     # inside the crypto menu, and with it absent IS_ENABLED() is false and
@@ -102,32 +112,60 @@ REPORT = [
 
 
 def parse(path):
-    """Return {symbol: value}; unset symbols are simply absent."""
-    out = {}
+    """Return (values, seen).
+
+    `seen` is every symbol the file MENTIONS in either form. kconfig writes
+    `# X is not set` for a symbol that is visible and off, and omits entirely
+    one whose dependencies are unmet or which does not exist under this name.
+
+    Keeping them apart is what stops a `want n` line from being satisfied by a
+    SYMBOL NAME THAT DOES NOT EXIST. That is not hypothetical: the Buildroot
+    checker next door shipped with BR2_RISCV_ISA_CUSTOM_RVF/RVD in its list,
+    neither symbol exists, both "passed", and the real config had floating
+    point switched on for a core with no FPU. Every `n` assertion here was open
+    to the same silent failure — a guard that cannot fail is this project's
+    signature defect.
+    """
+    values, seen = {}, set()
     set_re = re.compile(r"^(CONFIG_[A-Za-z0-9_]+)=(.*)$")
+    unset_re = re.compile(r"^# (CONFIG_[A-Za-z0-9_]+) is not set$")
     for line in Path(path).read_text().splitlines():
         m = set_re.match(line)
         if m:
-            out[m.group(1)] = m.group(2)
-    return out
+            values[m.group(1)] = m.group(2)
+            seen.add(m.group(1))
+            continue
+        m = unset_re.match(line)
+        if m:
+            seen.add(m.group(1))
+    return values, seen
 
 
 def main():
     if len(sys.argv) != 2:
         print(__doc__)
         return 2
-    cfg = parse(sys.argv[1])
+    cfg, seen = parse(sys.argv[1])
 
     bad = []
     print("=== required ===")
     for sym, want in REQUIRED:
         got = cfg.get(sym)
-        if want == "n":
-            ok = got is None
-            shown = "n" if got is None else got
-        else:
-            ok = got == want
-            shown = "n" if got is None else got
+        if sym not in seen:
+            # "n?" means the symbol is allowed not to exist — its dependencies
+            # may legitimately hide it — but must be off if it does. Anything
+            # else that is absent is UNKNOWN, not "off": either the symbol was
+            # renamed upstream, or its dependencies are unmet. Both mean the
+            # line verified nothing, and reading it as "n" is how a stale name
+            # keeps passing forever.
+            if want == "n?":
+                print(f"  ok   {sym} = <absent>   (want n if visible)")
+                continue
+            print(f"  FAIL {sym} = <absent>   (want {want})")
+            bad.append((sym, want, "<absent>"))
+            continue
+        ok = (got is None) if want in ("n", "n?") else (got == want)
+        shown = "n" if got is None else got
         print(f"  {'ok  ' if ok else 'FAIL'} {sym} = {shown}   (want {want})")
         if not ok:
             bad.append((sym, want, shown))

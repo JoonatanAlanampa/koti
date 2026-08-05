@@ -306,16 +306,51 @@ not evidence of the kernel you get. The reasoning behind the load-bearing ones:
    through the real firmware, DTB and SBI console, as far as SLUB init. The
    `boot` job in `linux.yaml` runs it on every kernel build and greps for the
    lines only a real boot produces.
-6. **Get past SLUB init.** The run stalls there with no further output. On the
-   evidence so far the prior is a third hardware defect rather than a kernel
-   config problem — the two found already were both invisible to every
-   existing test — so `+tfrom`/`+tlen` in `tb_boot.v` and the symbol lookup in
-   `System.map` are the tools, in that order. A successful boot ENDS: `init`
-   asks for power-off, the firmware's SRST is an `ebreak`, and the bench
-   reports PASS on `halted`.
-7. Then a real userspace (Buildroot busybox + musl), and after that the
-   console on the VGA text mode — which is the frontier and the thing the
+6. ~~Get past SLUB init~~ **DONE 2026-08-04** — and the prior recorded here was
+   right: it was a third hardware defect, the straddling fetch pair that
+   dropped an instruction outright (`koti_core.sv`). The boot then ran on into
+   the driver initcalls.
+   **Then it stopped again, and that second stall was NOT a hang at all**
+   (2026-08-05). Read this before spending a session on it:
+   - The boot went quiet after `io scheduler kyber registered` and every run
+     died on the quiet window. Two readings were proposed and **both were
+     wrong**: an entropy wait, and a stuck PLIC probe.
+   - It was `blake2s_mod_init` running the **BLAKE2s self-test** — the
+     `device_initcall` two entries after the io schedulers. It printed nothing
+     for **>33 million clocks** and had never once been allowed to finish.
+   - The machine was healthy the whole time. The proof is forward progress, not
+     absence of a crash: `blake2s_random_test` — a *later phase* of the same
+     self-test — first appears at 47.4M and is still running at 60M, and
+     `blake2s_compress_generic` holds 63% of samples across **1014 distinct
+     addresses**, which is a 7964-byte unrolled function being walked rather
+     than a loop being spun. ⭐ Sample COUNT cannot tell those apart; distinct
+     ADDRESS count can, and `tools/ktrace.py` now reports it.
+   - Fixed by `CONFIG_CRYPTO=y` + `CONFIG_CRYPTO_MANAGER_DISABLE_TESTS=y`.
+     CRYPTO is on purely because it is the gate that makes the disable symbol
+     *exist*: with it off the symbol is absent from the whole tree,
+     `IS_ENABLED()` is false, and the self-test cannot be switched off from
+     outside the crypto menu.
+   - 🪤 **The quiet window had become a liar.** At `quiet=4000000` any run
+     reaching ~27M died mid-self-test and reported a working kernel as stuck.
+     It is 8M now. Before believing "assuming stuck", check what the machine
+     was doing with `+trace` and `tools/ktrace.py`.
+7. **A real userspace**, in progress. `.github/workflows/userspace.yaml` builds
+   a Buildroot busybox rootfs and `sw/linux/check_rootfs.py` asserts the
+   binaries are ones this core can execute — ELF32, RISC-V, and `e_flags == 0`,
+   which means no compressed instructions and no hardware float ABI.
+   ⚠️ That check is not ceremony: Buildroot's RISC-V default enables C, and a
+   userspace built with it boots a perfectly healthy kernel straight into an
+   illegal instruction at `execve`.
+   After that, the console on VGA text mode — the frontier, and the thing the
    `koti-handbook` product cannot yet claim.
+
+**A note on what `halted` means, since 2026-08-05.** An `ebreak` in M-mode
+still stops the core; in S or U it now raises a Breakpoint exception (cause 3)
+and is resumable, because that is what Linux's `WARN_ON`/`BUG_ON` are — 2812 of
+them in this Image — and halting turned every warning the kernel was designed
+to survive into a silent death. `medeleg` gained bit 3 so the trap reaches
+S-mode. The bench correspondingly no longer treats a bare halt as success: it
+requires the marker `init.S` prints before asking for power-off.
 
 ## A simulation limit to remember before trusting a sim boot
 

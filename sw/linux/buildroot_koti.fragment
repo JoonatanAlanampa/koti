@@ -20,14 +20,29 @@
 
 # rv32, and spell out the ISA rather than take "general purpose" (G), which
 # means IMAFD — koti has no FPU at all.
+#
+# ⚠️ The symbols are BR2_RISCV_ISA_RV*, NOT BR2_RISCV_ISA_CUSTOM_RV*. The first
+# version of this file used the CUSTOM_ spelling, every line was silently a
+# no-op, and `make olddefconfig` resolved to **RVF=y and RVD=y** — a toolchain
+# emitting floating-point instructions for a core with no FPU. Nothing in the
+# fragment complained, because a kconfig line for a symbol that does not exist
+# is not an error. That is the entire reason sw/linux/check_rootfs.py reads the
+# RESOLVED config instead of trusting this file, and it caught it on the first
+# run, before the forty-minute build rather than after it.
 BR2_riscv=y
 BR2_RISCV_32=y
 BR2_riscv_custom=y
-BR2_RISCV_ISA_CUSTOM_RVM=y
-BR2_RISCV_ISA_CUSTOM_RVA=y
-# BR2_RISCV_ISA_CUSTOM_RVF is not set
-# BR2_RISCV_ISA_CUSTOM_RVD is not set
-# BR2_RISCV_ISA_CUSTOM_RVC is not set
+BR2_RISCV_ISA_RVI=y
+BR2_RISCV_ISA_RVM=y
+BR2_RISCV_ISA_RVA=y
+# BR2_RISCV_ISA_RVF is not set
+# BR2_RISCV_ISA_RVD is not set
+# BR2_RISCV_ISA_RVC is not set
+# BR2_RISCV_ISA_RVV is not set
+
+# sv32. koti has an MMU and mainline RV32 expects one; a nommu userspace would
+# be a different (and much stranger) target.
+BR2_RISCV_USE_MMU=y
 
 # Soft float, matching -mabi=ilp32 everywhere else in this project. ILP32F and
 # ILP32D would pass floats in F registers koti does not have.

@@ -47,12 +47,20 @@ EF_RISCV_FLOAT_ABI_DOUBLE = 0x0004
 REQUIRED = [
     ("BR2_riscv", "y"),
     ("BR2_RISCV_32", "y"),
+    ("BR2_RISCV_USE_MMU", "y"),
     # Spelled out rather than taking "G" (= IMAFD), because koti has no FPU.
-    ("BR2_RISCV_ISA_CUSTOM_RVM", "y"),
-    ("BR2_RISCV_ISA_CUSTOM_RVA", "y"),
-    ("BR2_RISCV_ISA_CUSTOM_RVC", "n"),
-    ("BR2_RISCV_ISA_CUSTOM_RVF", "n"),
-    ("BR2_RISCV_ISA_CUSTOM_RVD", "n"),
+    # ⚠️ These are BR2_RISCV_ISA_RV*, not BR2_RISCV_ISA_CUSTOM_RV*. This list
+    # carried the CUSTOM_ spelling on its first run and every entry was
+    # vacuously satisfied: an absent symbol reads as "n", so asking for RVF=n
+    # and RVD=n PASSED while the resolved config actually had both ON. The
+    # asserts that mattered were the two `want y` ones, which failed and
+    # exposed it. A checker whose symbol names are wrong is a checker that
+    # cannot fail — this project's signature defect, met again here.
+    ("BR2_RISCV_ISA_RVM", "y"),
+    ("BR2_RISCV_ISA_RVA", "y"),
+    ("BR2_RISCV_ISA_RVC", "n"),
+    ("BR2_RISCV_ISA_RVF", "n"),
+    ("BR2_RISCV_ISA_RVD", "n"),
     ("BR2_RISCV_ABI_ILP32", "y"),
     # koti brings its own kernel, its own SBI (sw/sbi) and no bootloader.
     ("BR2_LINUX_KERNEL", "n"),
@@ -63,13 +71,32 @@ REQUIRED = [
 
 
 def parse_config(path):
-    out = {}
+    """Return (values, seen).
+
+    `seen` is every symbol the config MENTIONS, in either form. kconfig writes
+    `# X is not set` for a symbol that is visible and off, and omits entirely
+    one whose dependencies are unmet or which does not exist at all.
+
+    That distinction is the whole point. Without it a `want n` assertion is
+    satisfied by a symbol NAME THAT DOES NOT EXIST, so a typo turns into a
+    silent pass — which is exactly what happened here: this list first asked
+    for BR2_RISCV_ISA_CUSTOM_RVF=n and BR2_RISCV_ISA_CUSTOM_RVD=n, both were
+    vacuously satisfied because neither symbol exists, and the real config had
+    floating point ON. Only the two `want y` lines failed and gave it away.
+    """
+    values, seen = {}, set()
     set_re = re.compile(r"^(BR2_[A-Za-z0-9_]+)=(.*)$")
+    unset_re = re.compile(r"^# (BR2_[A-Za-z0-9_]+) is not set$")
     for line in Path(path).read_text().splitlines():
         m = set_re.match(line)
         if m:
-            out[m.group(1)] = m.group(2).strip('"')
-    return out
+            values[m.group(1)] = m.group(2).strip('"')
+            seen.add(m.group(1))
+            continue
+        m = unset_re.match(line)
+        if m:
+            seen.add(m.group(1))
+    return values, seen
 
 
 def elf_facts(path):
@@ -117,13 +144,22 @@ def main():
         print("--config-only takes the config alone; you also passed "
               f"{len(args) - 1} file(s), which it would not check.")
         return 2
-    cfg = parse_config(args[0])
+    cfg, seen = parse_config(args[0])
     binaries = args[1:]
     bad = []
 
     print("=== buildroot config (what was asked for) ===")
     for sym, want in REQUIRED:
         got = cfg.get(sym)
+        if sym not in seen:
+            # Not "off" — UNKNOWN. Either the name is wrong or its
+            # dependencies are unmet, and in both cases this line is asserting
+            # nothing at all. Treating it as "n" is how a typo passes.
+            print(f"  FAIL {sym} = <absent>   (want {want})")
+            bad.append(f"{sym}: absent from the resolved config — wrong "
+                       f"symbol name, or its dependencies are unmet. Either "
+                       f"way this assertion was checking nothing.")
+            continue
         ok = (got is None) if want == "n" else (got == want)
         shown = "n" if got is None else got
         print(f"  {'ok  ' if ok else 'FAIL'} {sym} = {shown}   (want {want})")

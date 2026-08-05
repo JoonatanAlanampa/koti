@@ -372,6 +372,19 @@ jobs:
           grep -q "Calibrating delay loop" boot.log
           grep -qE "Memory: .*available" boot.log
           grep -q "devtmpfs: initialized" boot.log
+
+          # The CRNG is seeded, and this line is a PERFORMANCE assertion rather
+          # than a security one. While crng_init is CRNG_EMPTY, crng_make_state()
+          # runs a full extract_entropy() — a BLAKE2s hash of the whole input
+          # pool — on EVERY random draw, and the kernel draws constantly. That
+          # cost 34% of all machine time, measured on run 31038739162, and it is
+          # what made the boot look stuck after the PLIC probe.
+          #
+          # The seed comes from /chosen/rng-seed in koti.dts and is credited
+          # only because bootargs carry random.trust_bootloader=1, so this one
+          # grep covers both. If it ever stops printing, the tax is back and the
+          # only symptom is a boot that mysteriously got slower.
+          grep -q "random: crng init done" boot.log
           echo "boot log: $(wc -l < boot.log) lines"
 
       - uses: actions/upload-artifact@v7

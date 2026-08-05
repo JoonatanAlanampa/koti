@@ -65,6 +65,15 @@ REQUIRED = [
     # not the generic CMDLINE_FROM_BOOTLOADER.)
     ("CONFIG_CMDLINE_FORCE", "n"),
 
+    # Not cryptography — boot time. CRYPTO_MANAGER_DISABLE_TESTS only EXISTS
+    # inside the crypto menu, and with it absent IS_ENABLED() is false and
+    # lib/crypto/blake2s.c runs its self-test unconditionally: >33 million
+    # clocks of silence that two sessions mistook for a hang. This is exactly
+    # the failure mode this script was written for — the symbol koti depends on
+    # not existing, rather than being wrong.
+    ("CONFIG_CRYPTO", "y"),
+    ("CONFIG_CRYPTO_MANAGER_DISABLE_TESTS", "y"),
+
     # the machine description and the rootfs
     ("CONFIG_OF", "y"),
     ("CONFIG_BLK_DEV_INITRD", "y"),

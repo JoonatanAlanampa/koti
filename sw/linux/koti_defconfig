@@ -94,6 +94,32 @@ CONFIG_EXPERT=y
 # CONFIG_SUSPEND is not set
 # CONFIG_PCI is not set
 
+# ---- boot time ---------------------------------------------------------------
+# ⚠️ CONFIG_CRYPTO is enabled for ONE reason and it is not cryptography: it is
+# the gate that makes CONFIG_CRYPTO_MANAGER_DISABLE_TESTS exist at all.
+#
+# random.c selects CRYPTO_LIB_BLAKE2S, whose module_init runs
+#     if (!IS_ENABLED(CONFIG_CRYPTO_MANAGER_DISABLE_TESTS) &&
+#         WARN_ON(!blake2s_selftest())) ...
+# With CRYPTO off that symbol does not exist anywhere in the tree, so
+# IS_ENABLED() is false and the self-test runs UNCONDITIONALLY. There is no way
+# to switch it off from outside the crypto menu.
+#
+# What that costs koti, measured on run 31031529894: the boot enters
+# blake2s_mod_init at ~27.2M clocks and is STILL INSIDE IT at 60M — more than
+# 33 million clocks hashing 256 test vectors and then a random-split test, with
+# no output the whole time. Every boot before this had simply never got past it,
+# and two separate sessions read that silence as a hang: first as an entropy
+# wait, then as a stuck PLIC probe. It was neither. The machine was healthy and
+# grinding through a self-test of a hash koti does not use.
+#
+# It is slow because the function is pathological for this cache:
+# blake2s_compress_generic is 7964 bytes of unrolled straight-line code against
+# a 4 KB I-cache (src/icache.sv, 512 x 64 bit), so a single pass evicts itself
+# completely and every fetch misses. ~13 clocks per instruction, measured.
+CONFIG_CRYPTO=y
+CONFIG_CRYPTO_MANAGER_DISABLE_TESTS=y
+
 # ---- what init needs --------------------------------------------------------
 # The rootfs is a built-in initramfs: nothing on this machine can hold a real
 # one yet (ladder item 7, microSD). INITRAMFS_SOURCE is set by the workflow,

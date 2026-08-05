@@ -222,6 +222,29 @@ jobs:
       - name: The Image satisfies koti's boot contract
         run: python3 sw/linux/check_image.py linux-${KVER}/arch/riscv/boot/Image
 
+      # check_config.py asserts the LEVER (CRYPTO_MANAGER_DISABLE_TESTS=y).
+      # This asserts the EFFECT, and the two are not the same claim: the symbol
+      # makes kbuild drop blake2s-selftest.o from the link entirely, so the
+      # function vanishing from System.map is the observable that the self-test
+      # is really gone.
+      #
+      # Guarding only the config symbol would be guarding a proxy — and a proxy
+      # is precisely what failed here before. The old config looked completely
+      # fine; the symbol simply did not exist, IS_ENABLED() was false, and the
+      # self-test ran on every boot for >33 million clocks while nothing in the
+      # build said a word. Two sessions read that silence as a hung machine.
+      - name: The BLAKE2s self-test is really gone
+        working-directory: linux-${{ env.KVER }}
+        run: |
+          if grep -qE ' blake2s_selftest$' System.map; then
+            echo "::error::blake2s_selftest is still linked into the kernel."
+            echo "It costs koti >33 million clocks at every boot and the boot"
+            echo "had never got past it. CONFIG_CRYPTO must be y so that"
+            echo "CONFIG_CRYPTO_MANAGER_DISABLE_TESTS (default y) exists at all."
+            exit 1
+          fi
+          echo "blake2s_selftest: absent from System.map"
+
       # Where the bytes went. The first build of this kernel was 20.44 MiB
       # against 12 MiB of headroom, and `size vmlinux` explained none of it:
       # _etext was 1.8 MB and the rest was four 4 MiB SECTION_ALIGN gaps.

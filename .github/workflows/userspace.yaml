@@ -97,13 +97,19 @@ jobs:
           mapfile -t bins < <(find buildroot/output/target -type f \
             \( -path '*/bin/*' -o -path '*/sbin/*' -o -name '*.so*' \) | head -200)
           echo "checking ${#bins[@]} files"
-          python3 sw/linux/check_rootfs.py buildroot-config.txt "${bins[@]}"
+          python3 sw/linux/check_rootfs.py \
+            --cpio buildroot/output/images/rootfs.cpio \
+            buildroot-config.txt "${bins[@]}"
 
-      - name: Size
+      # What is actually in it, for the run where the size gate above fails.
+      # The first successful build was 4.09 MiB and this listing is how it was
+      # diagnosed in one look: 1.6 MB of libc.so.6 and 1.2 MB of libm.so.6.
+      - name: What is in it
+        if: success() || failure()
         run: |
           ls -l buildroot/output/images/rootfs.cpio
-          echo "koti has about 8.4 MB free after the kernel, and an initramfs"
-          echo "costs that space twice while it is being unpacked."
+          find buildroot/output/target -type f -printf '%10s  %P\n' \
+            | sort -rn | head -15
 
       - uses: actions/upload-artifact@v7
         if: success() || failure()

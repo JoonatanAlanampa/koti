@@ -42,6 +42,26 @@ EF_RISCV_RVC = 0x0001
 EF_RISCV_FLOAT_ABI_SINGLE = 0x0002
 EF_RISCV_FLOAT_ABI_DOUBLE = 0x0004
 
+# THE SIZE BUDGET, and it is arithmetic rather than taste.
+#
+# koti's usable window is 12 MiB — the kernel loads 4 MiB into a 16 MiB window
+# — and the boot log reports "Memory: 8468K/12288K available", so the kernel
+# and its early allocations already spend about 3.8 MB of it.
+#
+# An initramfs then costs its own size TWICE at the peak: once as the cpio
+# embedded in the Image (freed later, with initmem, but present while it is
+# being unpacked) and once as the unpacked files living in tmpfs. So
+#
+#     3.8 MB + 2 x cpio  +  room to actually run programs  <=  12 MB
+#
+# Leaving 3 MB to run in gives cpio <= 2.6 MB. Rounded down to 2.5 MiB.
+#
+# The first successful build was 4.09 MiB of glibc and would not have fitted;
+# it is what this limit was derived from. If a future rootfs needs more, the
+# honest move is to raise the RAM or move the rootfs to microSD (ladder item
+# 7), not to raise this number and find out at boot.
+MAX_CPIO_BYTES = 2560 * 1024
+
 # (symbol, expected). "n" means absent or "is not set" — kconfig writes one and
 # drops the other, and they mean the same thing to the build.
 REQUIRED = [
@@ -139,6 +159,11 @@ def main():
     # build rather than after it. Every symbol in REQUIRED produces a rootfs
     # koti cannot run, and learning that at the end costs the whole build.
     config_only = "--config-only" in args
+    cpio = None
+    if "--cpio" in args:
+        i = args.index("--cpio")
+        cpio = args[i + 1]
+        del args[i:i + 2]
     args = [a for a in args if a != "--config-only"]
     if len(args) < (1 if config_only else 2):
         print(__doc__)
@@ -209,6 +234,21 @@ def main():
         for p in problems:
             print(f"       {p}")
             bad.append(f"{b}: {p}")
+
+    if cpio is not None:
+        print("=== size (what has to fit in 12 MiB) ===")
+        size = Path(cpio).stat().st_size
+        ok = size <= MAX_CPIO_BYTES
+        print(f"  {'ok  ' if ok else 'FAIL'} {cpio}  {size} bytes "
+              f"({size / 1024 / 1024:.2f} MiB, budget "
+              f"{MAX_CPIO_BYTES / 1024 / 1024:.2f} MiB)")
+        if not ok:
+            bad.append(
+                f"{cpio}: {size / 1024 / 1024:.2f} MiB exceeds the "
+                f"{MAX_CPIO_BYTES / 1024 / 1024:.2f} MiB budget. The rootfs "
+                f"costs its size twice at peak - embedded in the Image and "
+                f"again unpacked into tmpfs - against a 12 MiB window that "
+                f"already spends ~3.8 MB on the kernel.")
 
     if checked == 0:
         # A checker that silently checks nothing is worse than no checker, and

@@ -72,6 +72,26 @@ BR2_TARGET_ROOTFS_CPIO=y
 BR2_TARGET_GENERIC_GETTY_PORT="hvc0"
 
 # Keep it small. koti has ~8.4 MB free after the kernel (measured: "Memory:
-# 8460K/12288K available"), and an initramfs costs that space twice while it is
+# 8468K/12288K available"), and an initramfs costs that space twice while it is
 # being unpacked. Busybox alone is the whole point of this rung: a shell.
 BR2_INIT_BUSYBOX=y
+
+# ⚠️ musl and static, and this is a SIZE decision with a measurement behind it.
+# The first successful build (run 31038903545) used the base defconfig's glibc
+# and came out at 4.09 MiB, of which:
+#     1634664  lib/libc.so.6
+#     1174756  lib/libm.so.6
+#      939668  bin/busybox
+#      185244  lib/ld-linux-riscv32-ilp32.so.1
+#      157204  lib/libgcc_s.so.1
+# — 2.8 MB of it glibc, with everything already stripped. That does not fit.
+# The cpio rides inside the kernel Image AND is unpacked into tmpfs, so it
+# costs its own size roughly twice against a 12 MiB window that already spends
+# ~3.8 MB on the kernel and its early allocations.
+#
+# musl folds libm into libc and is a fraction of the size; static linking then
+# removes the shared objects and the dynamic loader outright, leaving
+# essentially one binary. sw/linux/check_rootfs.py enforces the budget so this
+# cannot quietly regrow.
+BR2_TOOLCHAIN_BUILDROOT_MUSL=y
+BR2_STATIC_LIBS=y

@@ -20,8 +20,10 @@
  *   +quiet=<n>    give up after n clocks with no character out (default 20M)
  *
  * Exit: 0 chars out is a failure however it ends — a boot that says nothing
- * is not a boot. Otherwise the run ends when the core halts (which is what
- * SBI SRST does, which is what init asks for), and that is the success case.
+ * is not a boot. The run ends when the core halts, but a halt is only a PASS
+ * if the machine also SAID it got there: see the success marker below. koti
+ * halts on EBREAK and the firmware reaches EBREAK from more than one place,
+ * so "halted" and "succeeded" are not the same claim.
  *
  * Copyright (c) 2026 Joonatan Alanampa
  * SPDX-License-Identifier: Apache-2.0
@@ -78,6 +80,31 @@ module tb_boot ();
   reg   [63:0] clkcnt = 64'd0;
   reg   [63:0] last_char_clk = 64'd0;
 
+  // ---- the success marker -------------------------------------------------
+  // A halt is NOT a success on its own, and treating it as one was a real
+  // defect in this bench rather than a nicety. koti halts on EBREAK, and EBREAK
+  // is reached from places that mean opposite things: SBI SRST, which is what a
+  // finished boot asks for (sw/sbi/sbi.c), and the firmware's own panic path,
+  // which prints '!' and then halts. Both used to print "PASS (machine halted)".
+  //
+  // Until 2026-08-05 there was a third and much worse one. RISC-V Linux
+  // compiles every WARN_ON() and BUG_ON() into an EBREAK plus a __bug_table
+  // entry — 2812 of them in the 6.12 image koti boots — and koti's core halted
+  // on all of them instead of trapping. So a kernel that tripped a warning it
+  // was designed to survive stopped dead, and this bench called it a PASS.
+  // src/koti_core.sv now traps an S/U EBREAK as cause 3 and only M-mode halts,
+  // which removes that case at the source; this check is what would have caught
+  // it, and is what still catches the other two.
+  //
+  // The marker is the line sw/linux/init.S writes immediately before asking for
+  // power-off — the one point in this boot where userspace has demonstrably
+  // run. Matching the UART byte stream rather than snooping state keeps the
+  // check honest for the same reason the receiver above reads the line.
+  localparam integer MARKLEN = 24;
+  localparam [8*MARKLEN-1:0] MARKER = "koti: userspace is alive";
+  reg [8*MARKLEN-1:0] markbuf = {(8*MARKLEN){1'b0}};
+  reg                 saw_marker = 1'b0;
+
   always @(posedge clk) begin
     uart_prev <= uart_line;
     if (!urx) begin
@@ -100,6 +127,8 @@ module tb_boot ();
       $fflush;
       nchars = nchars + 1;
       last_char_clk = clkcnt;
+      markbuf = {markbuf[8*(MARKLEN-1)-1:0], ush};
+      if (markbuf == MARKER) saw_marker = 1'b1;
     end
   end
 
@@ -119,16 +148,28 @@ module tb_boot ();
     rst_n <= 1'b1;
   end
 
-  task finish_with(input [255:0] why);
+  // [8*64:1], not [255:0]. At 256 bits this held 32 characters and Verilog
+  // truncates a longer string to the LOW bits, so the two messages that matter
+  // most came out beheaded: "core HALTED (ebreak: SBI SRST, or a firmware
+  // panic)" printed as ": SBI SRST, or a firmware panic)" and "no output for
+  // the quiet window; assuming stuck" as "the quiet window; assuming stuck".
+  // Both are what a person reads at the exact moment a boot has gone wrong.
+  task finish_with(input [8*64:1] why);
     begin
       $display("\n--- tb_boot: %0s", why);
       $display("--- %0d clocks, %0d characters", clkcnt, nchars);
       if (nchars == 0) begin
         $display("--- tb_boot: FAIL (nothing was printed)");
         $fatal(1);
+      end else if (uut.halted && !saw_marker) begin
+        $display("--- tb_boot: FAIL (halted without saying \"%0s\")", MARKER);
+        $display("--- A halt nobody asked for. SBI SRST only happens after");
+        $display("--- userspace runs; the firmware's panic path prints '!'");
+        $display("--- first; and an S/U EBREAK is supposed to trap, not halt.");
+        $fatal(1);
       end else begin
         $display("--- tb_boot: %0s",
-                 uut.halted ? "PASS (machine halted)" : "INCOMPLETE");
+                 uut.halted ? "PASS (userspace ran, then halted)" : "INCOMPLETE");
       end
       $finish;
     end

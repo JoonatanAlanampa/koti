@@ -306,7 +306,17 @@ jobs:
       # do: "Machine model" comes from koti.dts, so it also proves the firmware
       # found the blob in flash, copied it to RAM and passed it in a1, and that
       # the SBI console the kernel chose is the one this firmware implements.
+      #
+      # Skipped on a TRACED run, and that is not laziness. tb_boot writes
+      # characters with $write (no newline) and trace lines with $display (with
+      # one), so a trace line lands in the MIDDLE of whatever the kernel was
+      # printing: "Linux ver[41000] fetch ...\nsion 6.12". Every grep below then
+      # fails on a boot that was perfectly healthy, which is exactly what
+      # happened to run 31031529894 — it went red while proving the machine was
+      # fine. A diagnostic run is not a regression run, and a red badge that
+      # means "you asked for a trace" trains people to ignore red badges.
       - name: It really booted
+        if: ${{ (inputs.trace || '0') == '0' && (inputs.tlen || '0') == '0' }}
         run: |
           grep -q "Linux version 6.12" boot.log
           grep -q "Machine model: Koti-1" boot.log

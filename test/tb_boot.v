@@ -105,6 +105,13 @@ module tb_boot ();
   reg [8*MARKLEN-1:0] markbuf = {(8*MARKLEN){1'b0}};
   reg                 saw_marker = 1'b0;
 
+  // Heartbeat deferral: at_line_start is true when the last character emitted
+  // was a newline (or nothing has been emitted yet), hb_pending means a
+  // heartbeat came due mid-message and is waiting for the line to end.
+  reg         at_line_start = 1'b1;
+  reg         hb_pending    = 1'b0;
+  integer     hb_mclk       = 0;
+
   always @(posedge clk) begin
     uart_prev <= uart_line;
     if (!urx) begin
@@ -129,6 +136,13 @@ module tb_boot ();
       last_char_clk = clkcnt;
       markbuf = {markbuf[8*(MARKLEN-1)-1:0], ush};
       if (markbuf == MARKER) saw_marker = 1'b1;
+      // Track whether the machine is mid-line, so the heartbeat below can stay
+      // out of the middle of a kernel message. See hb_pending.
+      at_line_start = (ush == 8'h0A);
+      if (hb_pending && at_line_start) begin
+        $display("[tb_boot: %0d Mclk, %0d chars]", hb_mclk, nchars);
+        hb_pending = 1'b0;
+      end
     end
   end
 
@@ -141,7 +155,11 @@ module tb_boot ();
     if (!$value$plusargs("trace=%d", trace))   trace  = 0;
     if (!$value$plusargs("tfrom=%d", tfrom))   tfrom  = 0;
     if (!$value$plusargs("tlen=%d", tlen))     tlen   = 0;
-    heartbeat = 10000000;
+    // A plusarg so the line-splitting behaviour above can actually be TESTED:
+    // at the 10M default a boot emits one or two heartbeats, which is far too
+    // coarse to prove they never land mid-message. With +heartbeat=500 a short
+    // program produces hundreds and the property is checkable in seconds.
+    if (!$value$plusargs("heartbeat=%d", heartbeat)) heartbeat = 10000000;
     $display("tb_boot: maxclk=%0d quiet=%0d uart_div=%0d",
              maxclk, quiet, UART_DIV);
     repeat (10) @(posedge clk);
@@ -184,8 +202,27 @@ module tb_boot ();
         finish_with("clock limit reached");
       else if (nchars > 0 && (clkcnt - last_char_clk) > quiet)
         finish_with("no output for the quiet window; assuming stuck");
-      else if (clkcnt % heartbeat == 0 && clkcnt != 0)
-        $display("\n[tb_boot: %0d Mclk, %0d chars]", clkcnt / 1000000, nchars);
+      // The heartbeat waits for a line boundary, and that is not cosmetic.
+      // $write emits characters with no newline while $display appends one, so
+      // a heartbeat landing mid-message SPLITS it:
+      //
+      //     [    0.000
+      //     [tb_boot: 10 Mclk, 1903 chars]
+      //     151] sched_clock: 64 bits at 25MHz
+      //
+      // Every grep in the `boot` job then fails on a boot that was perfectly
+      // healthy. That is not hypothetical — the line above is copied out of run
+      // 31042251426. The kernel spends only about 1% of its clocks actually
+      // transmitting, so it bites a couple of percent of runs: rare enough to
+      // look like flakiness, frequent enough to teach people to re-run red
+      // jobs, which is the worst thing a regression gate can do.
+      else if (clkcnt % heartbeat == 0 && clkcnt != 0) begin
+        hb_mclk = clkcnt / 1000000;
+        if (at_line_start)
+          $display("[tb_boot: %0d Mclk, %0d chars]", hb_mclk, nchars);
+        else
+          hb_pending = 1'b1;      // emitted by the receiver at the next '\n'
+      end
 
       // +trace=<n>: where the fetch port is pointing, every n clocks. This is
       // the only question worth asking of a boot that prints nothing — a

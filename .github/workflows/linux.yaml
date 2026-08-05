@@ -48,9 +48,16 @@ on:
   # below are the values a push uses, so a push is unchanged.
   workflow_dispatch:
     inputs:
+      # Raised 15M -> 20M 2026-08-05, to buy margin for the assertions below
+      # rather than for its own sake. At 15M "devtmpfs: initialized" was the
+      # LAST line printed, arriving with almost nothing to spare, so asserting
+      # it would have turned any 5% slowdown into a red run that meant nothing.
+      # 20M leaves about a third in hand. It costs ~3 minutes a push, against a
+      # failure mode of a machine that hangs on real hardware with a blank
+      # console. Deeper coverage is a workflow_dispatch away.
       maxclk:
         description: 'boot: give up after this many clocks'
-        default: '15000000'
+        default: '20000000'
       # ⚠️ RAISED 4M -> 8M 2026-08-05, because 4M had become WRONG rather than
       # merely tight. The BLAKE2s self-test (blake2s_mod_init, a device_initcall
       # two entries after the io schedulers) hashes 256 test vectors and prints
@@ -319,7 +326,7 @@ jobs:
           # `inputs` is null on a push, so each of these falls back to the same
           # value the step used before it was made dispatchable.
           vvp tb_boot.vvp +flash=fw.hex +ram=kernel.hex +ramoff=1048576 \
-            +maxclk=${{ inputs.maxclk || '15000000' }} \
+            +maxclk=${{ inputs.maxclk || '20000000' }} \
             +quiet=${{ inputs.quiet || '8000000' }} \
             +trace=${{ inputs.trace || '0' }} \
             +tfrom=${{ inputs.tfrom || '0' }} \
@@ -341,10 +348,30 @@ jobs:
       - name: It really booted
         if: ${{ (inputs.trace || '0') == '0' && (inputs.tlen || '0') == '0' }}
         run: |
+          # The banner four: the machine was described, entered and heard from.
           grep -q "Linux version 6.12" boot.log
           grep -q "Machine model: Koti-1" boot.log
           grep -q "SBI specification v0.2 detected" boot.log
           grep -q "Kernel command line: console=hvc0 earlycon=sbi" boot.log
+
+          # Ratcheted forward 2026-08-05. The four above all print at kernel
+          # time 0.000000, so together they proved only that the kernel STARTED
+          # — a machine that died immediately after the banner passed this job
+          # for as long as it existed. Each line below is a subsystem that has
+          # to have worked, and each was chosen because it is what the three CPU
+          # defects found so far actually broke:
+          #
+          #   Calibrating delay loop   the SBI timer and the DTB's timebase
+          #                            agree; lpj came from a real frequency
+          #   Memory: .. available     the page allocator came up and mem_init
+          #                            finished — the AMO/page-walk livelock
+          #                            and the dropped-request deadlock both
+          #                            died before here
+          #   devtmpfs: initialized    driver model up, past the SLUB fast path
+          #                            where the straddling fetch pair hung
+          grep -q "Calibrating delay loop" boot.log
+          grep -qE "Memory: .*available" boot.log
+          grep -q "devtmpfs: initialized" boot.log
           echo "boot log: $(wc -l < boot.log) lines"
 
       - uses: actions/upload-artifact@v7

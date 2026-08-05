@@ -45,7 +45,45 @@
 		 * up for the first time is the difference between a bug and a
 		 * mystery.
 		 */
-		bootargs = "console=hvc0 earlycon=sbi";
+		bootargs = "console=hvc0 earlycon=sbi random.trust_bootloader=1";
+
+		/*
+		 * ⚠️ THIS SEED IS NOT SECRET AND NOT RANDOM. It is a fixed
+		 * constant committed to a public repository, and the bytes are
+		 * deliberately patterned so that nobody can mistake it for
+		 * entropy. It exists to make the machine usable, not secure.
+		 *
+		 * WHY IT IS HERE. Until the CRNG is seeded, `crng_init` is
+		 * CRNG_EMPTY, and crng_make_state() takes a branch that runs a
+		 * full extract_entropy() — a BLAKE2s hash of the whole input
+		 * pool — on EVERY SINGLE random draw. Read straight off the
+		 * disassembly: `bnez a4, +0xc` skips the extract_entropy call
+		 * once crng_init is non-zero. The kernel draws random numbers
+		 * constantly (hashing, path walking, the allocator), so on koti
+		 * that branch cost 34% of all machine time, measured on the
+		 * traced run 31038739162. The boot was not stuck — every one of
+		 * its random numbers was costing a hash.
+		 *
+		 * Crediting the seed moves crng_init off CRNG_EMPTY, which is
+		 * all it takes to retire that branch. It needs
+		 * random.trust_bootloader=1 above, because
+		 * CONFIG_RANDOM_TRUST_BOOTLOADER is not available in this
+		 * config and add_bootloader_randomness() only credits what it
+		 * is told to trust. Linux erases the property from the DTB
+		 * after reading it, which is why nothing downstream sees it.
+		 *
+		 * ⛔ THE REAL FIX IS A HARDWARE ENTROPY SOURCE. koti has a whole
+		 * FPGA to put a ring-oscillator TRNG in, and once one exists
+		 * this property should be deleted rather than kept alongside
+		 * it. Until then: do not put anything on this machine that
+		 * depends on unpredictable numbers, because there are none.
+		 */
+		rng-seed = [
+			6b 6f 74 69 20 66 69 78 65 64 20 73 65 65 64 2c
+			20 6e 6f 74 20 73 65 63 72 65 74 2c 20 6e 6f 74
+			20 72 61 6e 64 6f 6d 2e 20 73 65 65 20 6b 6f 74
+			69 2e 64 74 73 20 66 6f 72 20 77 68 79 2e 0a 00
+		];
 	};
 
 	cpus {

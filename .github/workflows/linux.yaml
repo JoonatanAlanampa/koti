@@ -56,8 +56,8 @@ on:
       # failure mode of a machine that hangs on real hardware with a blank
       # console. Deeper coverage is a workflow_dispatch away.
       maxclk:
-        description: 'boot: give up after this many clocks'
-        default: '20000000'
+        description: 'boot: give up after this many clocks (blank = 20M, or 250M when full=yes)'
+        default: ''
       # ⚠️ RAISED 4M -> 8M 2026-08-05, because 4M had become WRONG rather than
       # merely tight. The BLAKE2s self-test (blake2s_mod_init, a device_initcall
       # two entries after the io schedulers) hashes 256 test vectors and prints
@@ -66,9 +66,24 @@ on:
       # 4M window mid-self-test and reported "assuming stuck" about a kernel
       # that was working perfectly. This project has already lost a day to that
       # exact verdict once, from the same window at a different clock.
+      # ⚠️ 2026-08-06: THIS HEURISTIC IS MEASURING THE WRONG THING LATE IN THE
+      # BOOT, and that is why it must be effectively off for a full run. After
+      # the PLIC probe koti goes legitimately silent for a very long time: the
+      # next fourteen initcalls (simple_pm_bus, three clk drivers, n_null, pty,
+      # hvc_sbi, random_sysctls, topology_sysfs, cacheinfo_sysfs, serport,
+      # atkbd, psmouse, hid, hid_generic) print NOTHING, and the initramfs is
+      # being gunzipped and unpacked underneath them on an async kthread. That
+      # was traced symbol by symbol on 2026-08-06 — kernfs_name_hash and strcmp,
+      # then vsnprintf, then inflate_fast and zlib_inflate_table, then `eat` in
+      # init/initramfs.c — at 40 to 127 DISTINCT addresses per symbol, which is
+      # ktrace.py's own test for "slow, not stuck". The machine was healthy.
+      #
+      # That makes three separate times a silent-but-working koti has been read
+      # as a hang. And the real rootfs is roughly forty times the archive the
+      # trace was taken on, so this silence gets LONGER, not shorter.
       quiet:
-        description: 'boot: give up after this many clocks with no output'
-        default: '8000000'
+        description: 'boot: give up after this many clocks with no output (blank = 8M, or ~off when full=yes)'
+        default: ''
       trace:
         description: 'boot: print the fetch PC every N clocks (0 = off)'
         default: '0'
@@ -100,6 +115,27 @@ on:
         default: 'rootfs'
         type: choice
         options: ['rootfs', 'init']
+      # Whether this run is allowed to CLAIM that koti reaches userspace.
+      #
+      # It is a declaration by the caller and deliberately not inferred from
+      # maxclk, because inferring it would need a threshold, and a threshold set
+      # slightly too low is a gate that silently stops applying — which is the
+      # exact defect this workflow was just repaired for. Declared, it is one
+      # word and it is unambiguous.
+      #
+      # Why the two are separate at all: reaching a shell is on the order of
+      # 1e8 clocks, which is upwards of an hour of iverilog even on a runner
+      # that does ~25k clocks/s. A push cannot afford that on every change to
+      # src/, and the `boot` job's real job on a push is regression cover for
+      # the two CPU defects it found (the AMO/page-walk livelock and the
+      # dropped-request deadlock), which show up in the first few million
+      # clocks. So a push runs the cheap partial boot and SAYS SO; the
+      # userspace claim is checked by a run that asks for it.
+      full:
+        description: 'boot: run to userspace and require it (slow, ~1h+)'
+        default: 'no'
+        type: choice
+        options: ['no', 'yes']
 
 env:
   # Pinned, not "latest": the kernel config in sw/linux/koti_defconfig was
@@ -379,6 +415,10 @@ jobs:
           test -f tb_boot.vvp
 
       - name: Boot Linux
+        env:
+          FULL: ${{ inputs.full || 'no' }}
+          MAXCLK: ${{ inputs.maxclk }}
+          QUIET: ${{ inputs.quiet }}
         run: |
           # pipefail, and it is load-bearing rather than hygiene. A `run:` step
           # with no `shell:` key executes under `bash -e {0}` — WITHOUT
@@ -403,9 +443,18 @@ jobs:
           # a working boot until you read what it said.
           # `inputs` is null on a push, so each of these falls back to the same
           # value the step used before it was made dispatchable.
+          # Blank inputs resolve here rather than in the `default:` above,
+          # because the budget depends on what the run is FOR and a default
+          # cannot see that. A push (inputs null) gets the cheap partial boot.
+          if [ "${FULL:-no}" = "yes" ]; then
+            : "${MAXCLK:=250000000}"; : "${QUIET:=240000000}"
+          else
+            : "${MAXCLK:=20000000}"; : "${QUIET:=8000000}"
+          fi
+          echo "full=${FULL:-no} maxclk=$MAXCLK quiet=$QUIET"
           vvp tb_boot.vvp +flash=fw.hex +ram=kernel.hex +ramoff=1048576 \
-            +maxclk=${{ inputs.maxclk || '20000000' }} \
-            +quiet=${{ inputs.quiet || '8000000' }} \
+            +maxclk=$MAXCLK \
+            +quiet=$QUIET \
             +trace=${{ inputs.trace || '0' }} \
             +tfrom=${{ inputs.tfrom || '0' }} \
             +tlen=${{ inputs.tlen || '0' }} 2>&1 | tee boot.log
@@ -487,14 +536,38 @@ jobs:
       # deliberately truncated, and a red badge meaning "you asked for a trace"
       # teaches people to ignore red badges. Exploring means asking for a
       # trace; a plain run is a regression run and must reach userspace.
-      - name: It reached userspace
+      # It ALWAYS runs and ALWAYS prints the verdict, and it only FAILS when the
+      # run declared `full: yes`. Those are two deliberate choices.
+      #
+      # Always printing, because the thing that went wrong here was not a wrong
+      # threshold, it was that the verdict was invisible. A partial run's badge
+      # cannot say "reached userspace" and must not be read as saying it, so on
+      # a partial run this emits a NOTICE naming what was and was not checked.
+      # Silence would recreate the defect at a different address.
+      #
+      # Only failing on a full run, because a partial run is truncated ON
+      # PURPOSE and INCOMPLETE is its correct outcome. A gate that fails for the
+      # expected outcome teaches people to ignore it — the same argument the
+      # traced-run skip above is built on.
+      - name: The bench's verdict
         if: ${{ (inputs.trace || '0') == '0' && (inputs.tlen || '0') == '0' }}
+        env:
+          FULL: ${{ inputs.full || 'no' }}
         run: |
           verdict=$(grep -E '^--- tb_boot: (PASS|INCOMPLETE|FAIL)' boot.log | tail -1)
           echo "bench verdict: ${verdict:-<no verdict line at all>}"
           case "$verdict" in
-            *PASS*) exit 0 ;;
+            *PASS*)
+              echo "::notice::koti reached userspace: $verdict"
+              exit 0 ;;
           esac
+          if [ "${FULL:-no}" != "yes" ]; then
+            echo "::notice::Partial boot (full=no). This run checked that the \
+          kernel starts, times, allocates and brings up devtmpfs -- it did NOT \
+          check that koti reaches userspace, and INCOMPLETE is its expected \
+          outcome. Run this workflow with full=yes to check that claim."
+            exit 0
+          fi
           echo "::error::koti did not reach userspace. ${verdict:-tb_boot printed no verdict.}"
           echo "The marker the bench waits for is the one line that can only be"
           echo "printed by code running in user mode. Whatever else this log"

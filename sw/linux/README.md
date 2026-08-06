@@ -352,6 +352,80 @@ to survive into a silent death. `medeleg` gained bit 3 so the trap reaches
 S-mode. The bench correspondingly no longer treats a bare halt as success: it
 requires the marker `init.S` prints before asking for power-off.
 
+## What the `boot` job's green badge means — and what it does not
+
+Read this before quoting a green `linux` run as evidence of anything.
+
+On **2026-08-06** three runs dispatched the day before to answer "does koti
+reach userspace?" were re-read. All three are green. **None of them reached
+userspace**, and two never executed one instruction in user mode. Two separate
+holes let that happen:
+
+1. `tb_boot` ends an `INCOMPLETE` run with `$finish`, so `vvp` exits 0, and no
+   step ever read the verdict line. The `It really booted` greps were the only
+   gate, and every line they match is printed inside the kernel's first 0.29
+   simulated seconds.
+2. The `FAIL` verdicts *do* `$fatal` and `vvp` *does* exit 1 — but the step
+   pipes through `tee`, and a `run:` step with no `shell:` key uses
+   `bash -e {0}` **without pipefail**, so the status was `tee`'s. The verdict
+   that exists to catch a kernel dying on a `WARN_ON`/`BUG_ON` had never been
+   able to turn the job red.
+
+Both are fixed. What the badge means now is explicit:
+
+| run | budget | what a green badge claims |
+|---|---|---|
+| push, or `full=no` | 20M clocks | the kernel starts, times itself, allocates, and brings up `devtmpfs` — and **nothing about userspace**. `INCOMPLETE` is its correct outcome and it says so in a notice. |
+| `full=yes` | 250M clocks, quiet window ~off | koti reached userspace: a shell from `sw/linux/rootfs.cpio` printed the marker `test/tb_boot.v` waits for. |
+
+They are separate because reaching a shell is on the order of 1e8 clocks —
+upwards of an hour of iverilog at the ~25k clocks/s a runner manages — and a
+push cannot spend that on every change to `src/`. The push job's real value is
+regression cover for the two CPU defects it found (the AMO/page-walk livelock
+and the dropped-request deadlock), and both show up in the first few million
+clocks.
+
+### The silence after the PLIC probe is not a hang
+
+Three times now a silent-but-working koti has been read as a stuck machine. The
+third was traced symbol by symbol on 2026-08-06, reproduced bit-for-bit on the
+development host from the CI `Image` artifact, and the profile moves through
+completely different code as it goes: `kernfs_name_hash` and `strcmp` (sysfs
+nodes), then `vsnprintf`, then `inflate_fast` and `zlib_inflate_table`, then
+`eat` in `init/initramfs.c` — **the initramfs being gunzipped and unpacked** —
+at 40 to 127 *distinct* addresses per symbol, which is `tools/ktrace.py`'s own
+test for "slow, not stuck".
+
+It is structural, not pathological. `System.map` puts `plic_driver_init` at
+initcall #126, and the next fourteen (`simple_pm_bus`, three clk drivers,
+`n_null`, `pty`, `hvc_sbi`, `random_sysctls`, `topology_sysfs`,
+`cacheinfo_sysfs`, `serport`, `atkbd`, `psmouse`, `hid`, `hid_generic`) print
+nothing at all. ⚠️ The real rootfs is roughly forty times the archive that trace
+was taken on, so the silence gets **longer**. Any `quiet` window tuned against
+the one-program initramfs is tuned against the easy case.
+
+### Reproducing a boot on the development host
+
+No CI round trip is needed to trace one, and this is the cheapest debugging loop
+available. The host cannot build the kernel — its RISC-V toolchain is bare-metal
+newlib — but it does not have to:
+
+```sh
+gh run download <id> -n koti-linux-Image -D img     # Image AND System.map
+iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_SIMMEM \
+  -o tb_boot.vvp src/*.sv test/sim_mem.sv test/tb_boot.v
+py -3 test/mkhex.py sw/sbi/sbi_test.bin fw.hex
+py -3 test/mkhex.py img/arch/riscv/boot/Image kernel.hex
+vvp tb_boot.vvp +flash=fw.hex +ram=kernel.hex +ramoff=1048576 \
+    +maxclk=30000000 +quiet=29000000 +trace=2000
+py -3 tools/ktrace.py img/System.map boot.log --from <clock>
+```
+
+⚠️ Take the `System.map` from the **same run** as the log — `ktrace.py` says why.
+The reproduction is exact only while `src/`, `sw/sbi/` and `test/sim_mem.sv` are
+unchanged since that run; check with `git diff --stat <sha> HEAD -- src sw/sbi
+test/sim_mem.sv` before trusting a clock number to match.
+
 ## A simulation limit to remember before trusting a sim boot
 
 `test/sdram_model.sv` decodes `{ba[1:0], row[6:0], col[8:0]}` — seven of the

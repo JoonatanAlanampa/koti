@@ -6,6 +6,7 @@
 # 0x0A bytes turned into 0x0D 0x0A boots nothing and diffs as "binary files
 # differ", which says nothing about why.
 *.bin binary
+*.cpio binary
 *.dtb binary
 *.elf binary
 *.fst binary

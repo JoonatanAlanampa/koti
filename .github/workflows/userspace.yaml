@@ -117,6 +117,25 @@ jobs:
           grep -qF "$marker" "$f" || { echo "::error::S99koti does not print the string tb_boot.v waits for"; exit 1; }
           echo "marker present in the rootfs"
 
+      # The record `linux` checks the committed cpio against, written here
+      # beside the archive it describes so both land in the same artifact and
+      # get committed together. A cpio committed with a stale record, or a
+      # record committed without its cpio, is exactly the drift this exists to
+      # catch — so they are produced as a pair and never by hand.
+      #
+      # Then the pair is verified HERE, with the same script `linux` will run,
+      # against the files as they would be committed. A check that first
+      # executes in the workflow that consumes the artifact is a check whose
+      # first run is on someone else's push.
+      - name: Record what built this rootfs, and verify the pair
+        run: |
+          cp buildroot/output/images/rootfs.cpio sw/linux/rootfs.cpio
+          python3 sw/linux/check_initramfs.py sw/linux/rootfs.cpio \
+            --write-provenance
+          cp sw/linux/rootfs.provenance buildroot/output/images/
+          echo "--- verifying the pair the way linux.yaml will ---"
+          python3 sw/linux/check_initramfs.py sw/linux/rootfs.cpio
+
       # What is actually in it, for the run where the size gate above fails.
       # The first successful build was 4.09 MiB and this listing is how it was
       # diagnosed in one look: 1.6 MB of libc.so.6 and 1.2 MB of libm.so.6.
@@ -133,4 +152,5 @@ jobs:
           name: koti-rootfs
           path: |
             buildroot/output/images/rootfs.cpio
+            buildroot/output/images/rootfs.provenance
             buildroot-config.txt

@@ -84,6 +84,22 @@ on:
       tlen:
         description: 'boot: per-clock trace length, in clocks (0 = off)'
         default: '0'
+      # `rootfs` is the real userspace — busybox on musl, an inittab, a getty.
+      # `init` is sw/linux/init.S, the ~20-instruction stand-in that prints the
+      # marker and asks for power-off.
+      #
+      # init.S is KEPT and kept reachable rather than deleted, because the two
+      # answer different questions. The stand-in proves execve works and the
+      # console is up, in about 30 KB and with no libc, no shell and no
+      # scheduler pressure; the real rootfs proves the machine is USABLE. When
+      # a boot fails somewhere after execve, the first useful question is
+      # whether it fails with the stand-in too, and that has to be one input
+      # away rather than a revert.
+      initramfs:
+        description: 'kernel: which initramfs to embed'
+        default: 'rootfs'
+        type: choice
+        options: ['rootfs', 'init']
 
 env:
   # Pinned, not "latest": the kernel config in sw/linux/koti_defconfig was
@@ -181,23 +197,63 @@ jobs:
       - name: Unpack
         run: tar xf linux-${KVER}.tar.xz
 
-      # /init, and the /dev/console node without which it would run with no
-      # file descriptors and print nothing. gen_init_cpio makes the device
-      # node from this description without needing root.
-      - name: Build the one-program initramfs
+      # The initramfs, which since 2026-08-06 is a REAL userspace by default:
+      # sw/linux/rootfs.cpio, a 1.14 MiB static-musl busybox built by the
+      # `userspace` workflow and committed like sw/linux/koti.dtb and
+      # sw/sbi/sbi_test.bin — build products whose tool (Buildroot, ~40 minutes
+      # and a whole toolchain from source) cannot sit in front of every push.
+      #
+      # ⚠️ A COMMITTED BUILD PRODUCT GOES STALE IN SILENCE, so it is checked
+      # here rather than trusted: check_initramfs.py reads the archive that is
+      # about to be embedded and asserts the members the boot cannot do without,
+      # that every ELF inside is rv32 with e_flags == 0 (koti decodes no
+      # compressed instructions and has no FPU), that it fits the size budget,
+      # that the overlay in the working tree still matches the copy inside the
+      # cpio byte for byte, and that the Buildroot fragment still hashes to what
+      # built it. Above all it asserts the archive contains the exact marker
+      # string test/tb_boot.v waits for — without which no boot can ever pass
+      # and the symptom is a timeout, which reads as a broken CPU.
+      #
+      # The `init` alternative is sw/linux/init.S plus the /dev/console node
+      # without which it would run with no file descriptors and print nothing.
+      # gen_init_cpio makes the device node from this description without root.
+      - name: Build the initramfs
+        env:
+          WHICH: ${{ inputs.initramfs || 'rootfs' }}
         run: |
-          riscv64-linux-gnu-gcc -march=rv32ima -mabi=ilp32 \
-            -nostdlib -static -no-pie -Wl,--build-id=none \
-            -o init sw/linux/init.S
-          riscv64-linux-gnu-readelf -h init | grep -E 'Class|Type|Machine'
-          cat > initramfs.desc <<EOF
+          echo "initramfs: $WHICH"
+          if [ "$WHICH" = "rootfs" ]; then
+            python3 sw/linux/check_initramfs.py sw/linux/rootfs.cpio
+            # A single .cpio is a supported value for CONFIG_INITRAMFS_SOURCE
+            # and is embedded as-is; the .cpio suffix is what selects that path
+            # (init/Kconfig), so the committed file must keep that name.
+            echo "INITRAMFS=$PWD/sw/linux/rootfs.cpio" >> "$GITHUB_ENV"
+          else
+            riscv64-linux-gnu-gcc -march=rv32ima -mabi=ilp32 \
+              -nostdlib -static -no-pie -Wl,--build-id=none \
+              -o init sw/linux/init.S
+            riscv64-linux-gnu-readelf -h init | grep -E 'Class|Type|Machine'
+            cat > initramfs.desc <<EOF
           dir /dev 0755 0 0
           nod /dev/console 0600 0 0 c 5 1
           dir /proc 0755 0 0
           dir /sys 0755 0 0
           file /init $PWD/init 0755 0 0
           EOF
-          cat initramfs.desc
+            cat initramfs.desc
+            echo "INITRAMFS=$PWD/initramfs.desc" >> "$GITHUB_ENV"
+          fi
+
+      # init.S is built on EVERY run, whichever initramfs is embedded. It is
+      # the fallback the `initramfs: init` input exists to reach, and a fallback
+      # that has silently stopped compiling is not a fallback. This costs about
+      # a second.
+      - name: The stand-in initramfs still builds
+        run: |
+          riscv64-linux-gnu-gcc -march=rv32ima -mabi=ilp32 \
+            -nostdlib -static -no-pie -Wl,--build-id=none \
+            -o /tmp/init_standin sw/linux/init.S
+          riscv64-linux-gnu-readelf -h /tmp/init_standin | grep -E 'Class|Machine'
 
       - name: Configure
         working-directory: linux-${{ env.KVER }}
@@ -205,8 +261,16 @@ jobs:
           cp ../sw/linux/koti_defconfig arch/riscv/configs/
           make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- koti_defconfig
           ./scripts/config --file .config \
-            --set-str INITRAMFS_SOURCE "$GITHUB_WORKSPACE/initramfs.desc"
+            --set-str INITRAMFS_SOURCE "$INITRAMFS"
           make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
+          # olddefconfig can drop a value whose dependencies are unmet, and an
+          # empty INITRAMFS_SOURCE builds a kernel with an EMPTY initramfs that
+          # boots perfectly and then panics with "No working init found" — a
+          # failure that looks like userspace rather than like a build. Assert
+          # the RESULT, which is the same lesson check_config.py exists for.
+          got=$(sed -n 's/^CONFIG_INITRAMFS_SOURCE="\(.*\)"$/\1/p' .config)
+          echo "CONFIG_INITRAMFS_SOURCE=$got"
+          test "$got" = "$INITRAMFS"
           # Copied here and not after the build: the config is most wanted on
           # the runs that FAIL, and every step after this one can fail.
           cp .config config-koti.txt
@@ -316,6 +380,20 @@ jobs:
 
       - name: Boot Linux
         run: |
+          # pipefail, and it is load-bearing rather than hygiene. A `run:` step
+          # with no `shell:` key executes under `bash -e {0}` — WITHOUT
+          # pipefail — so in `vvp ... | tee boot.log` the pipeline's status is
+          # tee's, and tee always succeeds. tb_boot's two hard-failure verdicts
+          # ("nothing was printed", "halted without saying <marker>") end in
+          # $fatal and vvp really does exit 1, and that 1 was being thrown away
+          # here. Measured on this bench, not reasoned about: a $fatal vvp
+          # gives exit 1 run directly and exit 0 run through `| tee`.
+          #
+          # The second verdict is the one that matters most: it exists
+          # precisely to catch a kernel that dies on a WARN_ON/BUG_ON, and it
+          # has never been able to turn this job red since the day it was
+          # added.
+          set -o pipefail
           python3 test/mkhex.py sw/sbi/sbi_test.bin fw.hex
           python3 test/mkhex.py kimg/arch/riscv/boot/Image kernel.hex
           # ramoff = (0x0140_0000 - 0x0100_0000) / 4, the kernel's word offset
@@ -386,6 +464,43 @@ jobs:
           # only symptom is a boot that mysteriously got slower.
           grep -q "random: crng init done" boot.log
           echo "boot log: $(wc -l < boot.log) lines"
+
+      # ---- the bench's own verdict, which nothing has ever read --------------
+      # tb_boot decides PASS / INCOMPLETE / FAIL and prints it on the last line,
+      # and until 2026-08-06 no step in this workflow looked at it. That left
+      # the greps above as the only thing between a dead machine and a green
+      # badge — and every one of them matches a line the kernel prints inside
+      # its first 0.29 simulated seconds. INCOMPLETE ends with $finish, not
+      # $fatal, so vvp exits 0 and the job goes green.
+      #
+      # This is not hypothetical and it is not old. Both runs dispatched on
+      # 2026-08-05 to answer "does koti reach userspace?" are GREEN in the run
+      # list and both ended INCOMPLETE, having never executed one userspace
+      # instruction:
+      #   31042403683  maxclk=70M — went silent after the PLIC probe at ~26.8M
+      #                clocks and stayed silent for the whole 15M quiet window
+      #   31045107094  maxclk=20M — hit the clock limit at "futex hash table
+      #                entries", about 0.29 s of kernel time in
+      #
+      # Skipped on a traced run for the same reason the greps are, and the
+      # reasoning there applies with more force here: a diagnostic run is
+      # deliberately truncated, and a red badge meaning "you asked for a trace"
+      # teaches people to ignore red badges. Exploring means asking for a
+      # trace; a plain run is a regression run and must reach userspace.
+      - name: It reached userspace
+        if: ${{ (inputs.trace || '0') == '0' && (inputs.tlen || '0') == '0' }}
+        run: |
+          verdict=$(grep -E '^--- tb_boot: (PASS|INCOMPLETE|FAIL)' boot.log | tail -1)
+          echo "bench verdict: ${verdict:-<no verdict line at all>}"
+          case "$verdict" in
+            *PASS*) exit 0 ;;
+          esac
+          echo "::error::koti did not reach userspace. ${verdict:-tb_boot printed no verdict.}"
+          echo "The marker the bench waits for is the one line that can only be"
+          echo "printed by code running in user mode. Whatever else this log"
+          echo "contains, execve has not happened. Last 15 lines:"
+          tail -15 boot.log
+          exit 1
 
       - uses: actions/upload-artifact@v7
         if: success() || failure()

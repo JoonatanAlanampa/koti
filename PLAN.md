@@ -30,13 +30,22 @@ requirement — see "Open architecture decisions" below.
 
 ## TODO — the ladder to a usable machine
 
-Hardware bring-up (needs the board in hand):
+Hardware bring-up — ✅ **THE BOARD ARRIVED 2026-08-06. This is now doable
+work, not a wait:**
 1. [ ] **ULX3S first power-up** — `fpga/ulx3s/README.md`, steps 1-7. Bitstream
        and harness are done and green (**31.04 MHz** post-route, PASS at
-       25 MHz; 4/4 harness tests). Needs: the board, a **Tiny VGA Pmod**
-       (bought 2026-08-02, arrival unconfirmed), and the Cartridge Pmod you
-       already have. **Nothing left to buy** — the PS/2 keyboard came off the
-       list with decision 2 below.
+       25 MHz; 4/4 harness tests). Needs: ~~the board~~ ✅ **in hand
+       2026-08-06**, a **Tiny VGA Pmod** (bought 2026-08-02, **arrival still
+       unconfirmed** — the only thing here still in transit), and the
+       Cartridge Pmod you already have. **Nothing left to buy** — the PS/2
+       keyboard came off the list with decision 2 below.
+       ⚠ The VGA Pmod gates only the **font glyph visual check**; the UART
+       path — which is what the kernel ladder's console actually is — needs
+       nothing but the board. Do not treat the missing Pmod as a blocker on
+       the ladder.
+       ⚠ First real risk on this step is **SDRAM `RD_ADV`**: the part is
+       clocked on `~clk`, and if the fitted device returns data later than
+       the model predicts, writes look fine and every read is corrupted.
        Closes the long-standing **font glyph visual check**.
 
 Software, in order:

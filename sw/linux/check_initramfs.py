@@ -278,6 +278,43 @@ def main():
     print(f"  {'FAIL' if nbad else 'ok  '} {len(elves)} ELF members, "
           f"{nbad} koti cannot execute")
 
+    # ---- 4b. nothing may block the boot waiting for absent hardware ----------
+    # /etc/network/interfaces is generated from BR2_SYSTEM_DHCP, and the base
+    # defconfig (qemu_riscv32_virt) sets it to eth0 because QEMU has a virtio
+    # NIC. koti has no network interface at all. Buildroot pairs that stanza
+    # with /etc/network/if-pre-up.d/wait_iface, which loops `sleep 1` for
+    # `wait-delay` seconds when the interface is missing — 15 seconds, which at
+    # koti's 25 MHz timebase is 375 MILLION clocks, spent by S40network before
+    # S99koti ever runs and against a full-boot budget of 250M.
+    #
+    # It is checked here, on the generated file, rather than on the Buildroot
+    # symbol: the symbol is one way to produce this stanza and not the only one,
+    # and it is the FILE that stalls the boot. Same reason the marker is looked
+    # for in the cpio instead of in the fragment.
+    #
+    # ⚠️ The failure this prevents is a nasty one to debug, because the wait
+    # PRINTS. "Waiting for interface eth0 to appear...." reads like progress,
+    # the quiet-window heuristic never trips, and the run just ends INCOMPLETE
+    # having done everything right.
+    ifaces = by_name.get("etc/network/interfaces")
+    if ifaces is not None:
+        configured = re.findall(r"^\s*iface\s+(\S+)",
+                                ifaces.data.decode("utf-8", "replace"),
+                                re.MULTILINE)
+        extra = [i for i in configured if i != "lo"]
+        if extra:
+            print(f"  FAIL /etc/network/interfaces configures {extra}")
+            bad.append(
+                f"/etc/network/interfaces configures {', '.join(extra)}, but "
+                f"koti has no network interface. if-pre-up.d/wait_iface will "
+                f"`sleep 1` once per second of `wait-delay` waiting for a "
+                f"device that cannot appear - 15 s is 375M clocks at 25 MHz, "
+                f"more than a whole full-boot budget, and it prints while it "
+                f"does it so nothing looks wrong. Set BR2_SYSTEM_DHCP=\"\" in "
+                f"sw/linux/buildroot_koti.fragment and rebuild the rootfs.")
+        else:
+            print(f"  ok   /etc/network/interfaces configures only lo")
+
     # ---- 5. freshness: the overlay, byte for byte ----------------------------
     for p in overlay_files():
         rel = str(p.relative_to(OVERLAY)).replace("\\", "/")

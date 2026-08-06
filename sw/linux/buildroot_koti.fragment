@@ -103,3 +103,32 @@ BR2_STATIC_LIBS=y
 # us on an upgrade with no failing test, just a boot that quietly stopped
 # being checked.
 BR2_ROOTFS_OVERLAY="../sw/linux/rootfs-overlay"
+
+# ⚠️ NO NETWORK INTERFACE, AND THIS COSTS 375 MILLION CLOCKS IF LEFT ALONE.
+#
+# The base is qemu_riscv32_virt_defconfig, which has a virtio-net and therefore
+# sets BR2_SYSTEM_DHCP="eth0". That is inherited configuration for hardware koti
+# does not have and will not have: there is no MAC anywhere in src/, and none is
+# planned. Buildroot turns that symbol into an /etc/network/interfaces stanza
+#
+#     auto eth0
+#     iface eth0 inet dhcp
+#       wait-delay 15
+#
+# and ships /etc/network/if-pre-up.d/wait_iface, which on an interface that does
+# not exist does exactly what it says:
+#
+#     while [ ${IF_WAIT_DELAY} -gt 0 ]; do ... sleep 1 ... done
+#
+# Fifteen sleeps of one second each. koti's timebase is 25 MHz, so that is
+# 375,000,000 clocks of simulated time burned by S40network — BEFORE S99koti
+# runs — against a full-boot budget of 250M. A boot that reaches userspace
+# perfectly would still have been reported INCOMPLETE, and the clocks would have
+# gone somewhere nobody was looking, because the wait happens inside a script
+# whose output ("Waiting for interface eth0 to appear....") looks like progress.
+#
+# Found by reading the committed rootfs on 2026-08-06, before spending the hour.
+# sw/linux/check_initramfs.py now asserts the RESULT — that nothing but lo is
+# configured — rather than this symbol, because what stalls the boot is the
+# generated file, and more than one setting can produce it.
+BR2_SYSTEM_DHCP=""

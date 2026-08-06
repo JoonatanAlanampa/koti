@@ -404,6 +404,28 @@ nothing at all. ⚠️ The real rootfs is roughly forty times the archive that t
 was taken on, so the silence gets **longer**. Any `quiet` window tuned against
 the one-program initramfs is tuned against the easy case.
 
+### The rootfs can burn the whole clock budget without anything looking wrong
+
+The base Buildroot config is `qemu_riscv32_virt_defconfig`, which has a virtio
+NIC and therefore sets `BR2_SYSTEM_DHCP="eth0"`. **koti has no network interface
+of any kind.** Buildroot turns that symbol into an `/etc/network/interfaces`
+stanza with `wait-delay 15`, and ships `/etc/network/if-pre-up.d/wait_iface`,
+which on a missing interface loops `sleep 1` fifteen times.
+
+At koti's 25 MHz timebase that is **375,000,000 clocks** spent by `S40network`
+**before `S99koti` ever runs** — half again the entire 250M full-boot budget. A
+machine that reached userspace perfectly would still have reported `INCOMPLETE`.
+
+⚠️ **And it prints while it does it.** `Waiting for interface eth0 to appear....`
+looks like progress, so the quiet-window heuristic never trips and nothing in
+the log says anything is wrong. If a `full=yes` run comes back `INCOMPLETE`,
+**grep the log for `Waiting for interface` before suspecting the CPU.**
+
+Fixed by `BR2_SYSTEM_DHCP=""` in `buildroot_koti.fragment`, and guarded by
+`check_initramfs.py`, which asserts the **generated file** configures nothing but
+`lo` — not the Buildroot symbol, because more than one setting can produce that
+stanza and it is the file that stalls the boot.
+
 ### Reproducing a boot on the development host
 
 No CI round trip is needed to trace one, and this is the cheapest debugging loop

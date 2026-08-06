@@ -426,6 +426,40 @@ Fixed by `BR2_SYSTEM_DHCP=""` in `buildroot_koti.fragment`, and guarded by
 `lo` — not the Buildroot symbol, because more than one setting can produce that
 stanza and it is the file that stalls the boot.
 
+### If a full run comes back INCOMPLETE, check these two things first
+
+Both cost an hour to discover by running, and nothing to check by grepping.
+
+**1. `Waiting for interface` — the stall above.** Fixed in the fragment, but the
+committed `rootfs.cpio` only carries the fix once the `userspace` workflow has
+been re-run and both files re-committed.
+
+**2. `printk: legacy console [hvc0] enabled` — did userspace have a console at
+all?** This is the next most likely failure and it has not been ruled out.
+
+The kernel prints through the SBI **earlycon** (`earlycon=sbi`, a *bootconsole*).
+Userspace does not: `S99koti` writes to stdout, which `/init` points at
+`/dev/console`, and `/dev/console` needs a **real** registered console. With
+`console=hvc0` that is `hvc_riscv_sbi`, whose `hvc_sbi_init` is initcall **#133**
+— seven after the PLIC probe, and *past where every boot so far has been
+observed*. Neither boot log to date contains that line, but neither reached the
+initcall either, so this is "not yet", not "broken".
+
+If it never appears, userspace can run perfectly and the marker still never
+reaches the UART, and the bench would report `INCOMPLETE` for a machine that did
+everything right — the same shape as the network stall. What to look for, in
+order:
+
+- `printk: legacy console [hvc0] enabled` and `bootconsole [sbi0] disabled` —
+  the console handover. Present ⇒ this is not the problem.
+- koti's firmware answers `sbi_console_getchar` (legacy EID 2) from
+  `ps2_getchar()`, returning -1 when idle, which is what the legacy spec
+  requires and what stops hvc's poll loop spinning. That much is already
+  correct in `sw/sbi/sbi.c`.
+- If hvc never binds, the honest fixes are `keep_bootcon` (so the earlycon stays
+  alive for userspace) or booting with `console=` pointed somewhere real — not
+  changing the marker.
+
 ### Reproducing a boot on the development host
 
 No CI round trip is needed to trace one, and this is the cheapest debugging loop

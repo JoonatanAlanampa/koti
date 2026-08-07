@@ -97,7 +97,12 @@ IOBUF  PORT "ftdi_rxd" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
 # the board's USB descriptor as the answer — it says "ULX3S FPGA 85K v3.0.8",
 # which is stale factory EEPROM data, not the PCB revision.
 LOCATE COMP "wifi_gpio0" SITE "F1";
-IOBUF  PORT "wifi_gpio0" PULLMODE=UP IO_TYPE=LVCMOS33;
+# PULLMODE=DOWN, not UP: this pin is now DRIVEN LOW to keep the ESP32 off the
+# microSD bus it shares with us (sd_* are wifi_gpio2/4/12/13/14/15). A pull-up
+# here would fight the driver during configuration, which is the window where an
+# awake ESP32 could grab the card. See the long comment in ulx3s_top.sv — and
+# note F1 is `wifi_en` on a v3.0.x board and `wifi_gpio0` only on v3.1.x.
+IOBUF  PORT "wifi_gpio0" PULLMODE=DOWN IO_TYPE=LVCMOS33;
 
 # ---- onboard microSD, driven in SPI mode ----
 # Sites copied from console/fpga/ulx3s.lpf, which has run this exact bus on this

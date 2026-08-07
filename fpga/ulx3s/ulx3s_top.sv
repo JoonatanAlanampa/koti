@@ -89,7 +89,34 @@ module ulx3s_top (
     inout  wire  [15:0] sdram_d
 );
 
-  assign wifi_gpio0 = 1'b1;                  // keep the ESP32 booted
+  // ⛔ DRIVEN LOW, AND IT IS WHY THE SD CARD CAN WORK AT ALL.
+  //
+  // The SD bus IS the ESP32's GPIOs — upstream's constraint file says so:
+  //   sd_clk=GPIO14 sd_cmd=GPIO15 sd_d[0]=GPIO2 sd_d[1]=GPIO4
+  //   sd_d[2]=GPIO12 sd_d[3]=GPIO13
+  //   "# wifi_gpio2,4,12,13,14,15 are shared with SD card."
+  // An ESP32 that is awake and driving those pins fights the FPGA for the card,
+  // and the FPGA loses on whichever line the ESP32 holds.
+  //
+  // AND F1 IS THE ESP32's ENABLE ON THIS BOARD. The pin changed meaning across
+  // revisions, and upstream's v3.1.6 file annotates the change itself:
+  //     v3.0.x : F1 = wifi_en     (L2 = wifi_gpio0)
+  //     v3.1.x : F1 = wifi_gpio0  (L2 = wifi_gpio22, wifi_en moved to J5)
+  // The board's USB descriptor says "85K v3.0.8", which had been written off as
+  // stale factory data. On v3.0.x that makes F1 `wifi_en`, so the pull-up this
+  // line used to carry was ENABLING the ESP32 onto the SD bus.
+  //
+  // LOW is correct on either revision: on v3.0.x it holds the ESP32 in reset; on
+  // v3.1.x it is gpio0, which puts the ESP32 in serial-download mode where it
+  // runs no firmware and drives none of the shared pins. Actively driven rather
+  // than pulled, so there is no ambiguity about who wins the pin.
+  //
+  // ⚠️ The line this replaces claimed "keep the ESP32 booted (it can power-cycle
+  // the board otherwise)". If that is real the symptom is unmistakable — the
+  // board dies and the COM port disappears — and it recovers by unplugging,
+  // because every bitstream here is loaded to SRAM and gone at power-off. That
+  // makes this a safe experiment rather than a gamble.
+  assign wifi_gpio0 = 1'b0;
 
   // ------------------------------------------------------- reset
   // BTN0 (PWR) is pulled up and reads 0 when pressed. The POR counter holds

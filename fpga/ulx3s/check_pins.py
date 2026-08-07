@@ -251,10 +251,14 @@ def main() -> int:
         return 1
     print("\nOK: every port is constrained, every site matches ULX3S v2.0 —")
     print("    except wifi_gpio0, which is deliberately the v3.1.x site (F1).")
-    print("The board on the bench is a PCB v3.1.8, established 2026-08-07, and")
-    print("the revision no longer needs checking: the five signals that moved")
-    print("between v2.0 and v3.1.x are all wifi_*, and wifi_gpio0 is the only")
-    print("one this design uses. Every other site is identical on both.")
+    print("⚠️  F1's MEANING depends on the board revision, and it is not cosmetic:")
+    print("      v3.0.x : F1 = wifi_en     (L2 = wifi_gpio0)")
+    print("      v3.1.x : F1 = wifi_gpio0  (L2 = wifi_gpio22, wifi_en on J5)")
+    print("    The port is named wifi_gpio0 here for continuity with console, but")
+    print("    ulx3s_top DRIVES IT LOW either way, to keep the ESP32 off the")
+    print("    microSD bus it shares with the FPGA (sd_* = wifi_gpio2/4/12/13/")
+    print("    14/15). The USB descriptor says v3.0.8; on that revision this pin")
+    print("    is the ESP32's enable. Every non-wifi site is identical on both.")
     return 0
 
 

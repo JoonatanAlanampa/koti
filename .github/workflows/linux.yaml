@@ -444,7 +444,8 @@ jobs:
           # rung landed and killed this bench — and therefore the standing
           # userspace gate — from 05430e7 until it was noticed.
           iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_SIMMEM \
-            -o tb_boot.vvp src/*.sv vendor/*.sv test/sim_mem.sv test/tb_boot.v \
+            -o tb_boot.vvp src/*.sv vendor/sd_spi.sv vendor/spi_master.sv \
+            test/sim_mem.sv test/tb_boot.v \
             2>&1 | grep -v "sorry:" || true
           test -f tb_boot.vvp
 
@@ -699,7 +700,8 @@ jobs:
             --timescale 1ns/1ps \
             -Isrc -DKOTI_FPGA -DKOTI_SIMMEM \
             --top-module tb_boot -o tb_boot_vl \
-            src/*.sv vendor/*.sv test/sim_mem.sv test/tb_boot.v
+            src/*.sv vendor/sd_spi.sv vendor/spi_master.sv \
+            test/sim_mem.sv test/tb_boot.v
           ls -l obj_dir/tb_boot_vl
 
       - name: Boot Linux under Verilator

@@ -178,6 +178,55 @@ host in seconds: `test/tb_fpga_bram.v` (plain Verilog, no cocotb) boots this
 exact configuration through `ulx3s_top` with `sdram_model` on the SDRAM pins and
 asserts the banner. CI runs it in `test.yaml`.
 
+## ✅ 2c. The onboard microSD — **DONE ON HARDWARE 2026-08-07**
+
+Flash the `bram` variant built with `image: sdtest` and open the console:
+
+```
+init: OK
+block 0 tail: 00 00 00 00 00 00 55 aa
+55 aa PRESENT — genuinely the card's data
+reread: identical / block 12345: differs from block 0 / pass CLEAN
+```
+
+That is koti's own CPU reading 512-byte blocks through `src/sd_ctrl.sv` and the
+vendored `sd_spi`, returning the card's **MBR signature**. Repeatable and
+address-dependent, so it is not a stuck bus. **No Pmod and no soldering** — the
+card slot is onboard, on the underside.
+
+### 🪤 If it says `init: FAILED, status 00000004`, read this before touching anything
+
+That message says `SD_ERR` and *looks* exactly like "no card". On 2026-08-07 it
+was neither the card, nor the seating, nor the ESP32 — it was **one character of
+Verilog**:
+
+```systemverilog
+assign sd_d[0] = 1'bz;          // ⛔ this is the bug
+```
+
+A bare `1'bz` with no other driver gives yosys nothing to build a tristate from,
+so the port collapses to a **plain input — and on a plain input the LPF's
+`PULLMODE=UP` does not take effect.** MISO then floats **LOW**, every byte
+clocked off the card reads `0x00`, and `sd_spi` never sees a response. The check
+is the nextpnr log:
+
+```
+bad:   Info: pin 'sd_d[0]$tr_io' constrained to Bel ...     (no $iobuf_i line)
+good:  Info: $sd_d[0]$iobuf_i: sd_d_$_TBUF__Y.Y             (a real tristate)
+```
+
+⛔ **The tristate mux in `ulx3s_top.sv` is load-bearing.** Its enable is always 0
+in normal operation, so it looks like dead code — deleting it silently breaks the
+card. ⚠️ **CI cannot catch that**: `test/sd_card_model.sv` supplies its own
+pull-up, so every bench stays green while the board goes deaf.
+
+**The instrument for this class of fault is `image: sdraw`.** It muxes `sd_spi`
+off the pins, hand-clocks CMD0 from software and prints the raw bytes, and it can
+**drive** the MISO pin to test continuity (slot must be empty). One run splits
+the problem: `ff` everywhere = the card never drove the line; `00` everywhere =
+something holds it low; any byte with the top bit clear = the card is alive and
+the fault is koti's.
+
 ## 3. Memory Pmod on J1, orientation strap
 
 **J1 = gp/gn 0-3.** Either the Cartridge Pmod (`../../../pmod-cartridge`,

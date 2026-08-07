@@ -12,6 +12,7 @@ from cocotb_tools.runner import get_runner
 TEST_DIR = Path(__file__).parent
 SRC_DIR = TEST_DIR.parent / "src"
 FPGA_DIR = TEST_DIR.parent / "fpga" / "ulx3s"
+VENDOR_DIR = TEST_DIR.parent / "vendor"
 
 SOURCES = [
     SRC_DIR / "project.sv",
@@ -34,6 +35,15 @@ SOURCES = [
     SRC_DIR / "csr.sv",
     SRC_DIR / "tlb.sv",
     SRC_DIR / "uart_tx.sv",
+    # The microSD stack. project.sv instantiates sd_ctrl under KOTI_FPGA, which
+    # this bench defines, so leaving these out is not "not testing SD" — it is
+    # an elaboration error that fails the whole harness suite. It did: `test`
+    # went red at 05430e7 (the commit that added the SD rung) and stayed red,
+    # while the two SD benches this workflow runs separately were both green.
+    # A suite can be green in every step a human reads and still be red.
+    SRC_DIR / "sd_ctrl.sv",
+    VENDOR_DIR / "sd_spi.sv",
+    VENDOR_DIR / "spi_master.sv",
     FPGA_DIR / "ulx3s_top.sv",
     TEST_DIR / "sdram_model.sv",
     TEST_DIR / "tb_fpga.v",

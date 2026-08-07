@@ -42,14 +42,23 @@ module sd_spi #(
 
     input  wire        init,            // pulse: run the bring-up sequence
     input  wire        rd,              // pulse: read block `blk`
+    input  wire        wr,              // pulse: write block `blk`
     input  wire [31:0] blk,
-    output logic       ready,           // initialised, idle, accepting `rd`
+    output logic       ready,           // initialised, idle, accepting rd/wr
     output logic       busy,
     output logic       err,
 
     output logic       rvalid,          // one pulse per received data byte
     output logic [7:0] rdata,
     output logic       rdone,           // pulse: 512 bytes + CRC consumed
+
+    // Write side. The engine PULLS its data: it drives `wptr` and expects
+    // `wbyte` to be that byte of the block, combinationally. No handshake,
+    // because a handshake is one more thing to get wrong and the source is a
+    // plain buffer that can always answer.
+    output logic [8:0] wptr,
+    input  wire [7:0]  wbyte,
+    output logic       wdone,           // pulse: written AND the card is idle
 
     output logic       cs_n,
     output logic       sck,
@@ -88,13 +97,19 @@ module sd_spi #(
   end
 
   // --------------------------------------------------------------- sequencer
-  typedef enum logic [3:0] {
+  typedef enum logic [4:0] {
     S_IDLE, S_PWR, S_SEQ, S_TX, S_R1, S_EXTRA, S_AFTER,
-    S_TOKEN, S_DATA, S_CRC, S_TAIL, S_READY, S_ERR
+    S_TOKEN, S_DATA, S_CRC, S_TAIL, S_READY, S_ERR,
+    // The write path. A write is NOT a read with the arrows reversed: after
+    // the card accepts the data it goes BUSY for milliseconds, holding MISO
+    // low while it erases and programs, and nothing on the read path waits on
+    // anything like that. S_WBUSY is that wait, and skipping it corrupts the
+    // NEXT command rather than this one.
+    S_WGAP, S_WTOK, S_WDATA, S_WCRC, S_WRESP, S_WBUSY
   } st_t;
 
   typedef enum logic [2:0] {
-    Q_CMD0, Q_CMD8, Q_CMD55, Q_ACMD41, Q_CMD58, Q_CMD16, Q_READ
+    Q_CMD0, Q_CMD8, Q_CMD55, Q_ACMD41, Q_CMD58, Q_CMD16, Q_READ, Q_WRITE
   } seq_t;
 
   st_t  st;
@@ -130,6 +145,7 @@ module sd_spi #(
     b_req  <= 1'b0;                     // default: no byte requested
     rvalid <= 1'b0;
     rdone  <= 1'b0;
+    wdone  <= 1'b0;
 
     if (rst) begin
       st      <= S_IDLE;
@@ -142,6 +158,7 @@ module sd_spi #(
       ccs     <= 1'b0;
       pending <= 1'b0;
       dcnt    <= '0;
+      wptr    <= 9'd0;
     end else begin
       unique case (st)
 
@@ -162,6 +179,15 @@ module sd_spi #(
             budget  <= 16'd16;
             mkcmd(8'h51, blk_arg, 8'h01, 3'd0);   // CMD17 READ_SINGLE_BLOCK
             seq     <= Q_READ;
+            pending <= 1'b0;
+            st      <= S_TX;
+          end else if (wr && ready) begin
+            busy    <= 1'b1;
+            cs_n    <= 1'b0;
+            budget  <= 16'd16;
+            mkcmd(8'h58, blk_arg, 8'h01, 3'd0);   // CMD24 WRITE_BLOCK
+            seq     <= Q_WRITE;
+            wptr    <= 9'd0;
             pending <= 1'b0;
             st      <= S_TX;
           end
@@ -302,6 +328,13 @@ module sd_spi #(
                 st <= S_ERR;
               end
 
+            Q_WRITE:
+              if (r1 == 8'h00) begin
+                st <= S_WGAP;
+              end else begin
+                st <= S_ERR;
+              end
+
             default: st <= S_ERR;
           endcase
         end
@@ -367,6 +400,135 @@ module sd_spi #(
           end
         end
 
+        // ================= CMD24 WRITE_BLOCK, the write path =================
+
+        // ---- one idle byte between the R1 and the data token ----
+        // The spec calls for at least one byte of gap. Cards do accept the
+        // token immediately, but not all of them, and the failure is a write
+        // that reports success and lands nowhere.
+        S_WGAP: begin
+          if (!pending) begin
+            b_req   <= 1'b1;
+            b_tx    <= 8'hFF;
+            pending <= 1'b1;
+          end else if (b_ack) begin
+            pending <= 1'b0;
+            st      <= S_WTOK;
+          end
+        end
+
+        // ---- the start-of-block token ----
+        // 0xFE for a single-block write, the same token the card sends us on a
+        // read. (Multi-block writes use 0xFC and a stop token; not implemented,
+        // because CMD24 is enough for a block driver that writes one at a time.)
+        S_WTOK: begin
+          if (!pending) begin
+            b_req   <= 1'b1;
+            b_tx    <= 8'hFE;
+            pending <= 1'b1;
+          end else if (b_ack) begin
+            pending <= 1'b0;
+            wptr    <= 9'd0;
+            st      <= S_WDATA;
+          end
+        end
+
+        // ---- 512 payload bytes, pulled from the caller ----
+        // `wbyte` is expected to be combinational on `wptr`, so the byte is
+        // already there when it is loaded. wptr advances only on b_ack, so a
+        // byte cannot be skipped by a stall in the SPI master.
+        S_WDATA: begin
+          if (!pending) begin
+            b_req   <= 1'b1;
+            b_tx    <= wbyte;
+            pending <= 1'b1;
+          end else if (b_ack) begin
+            pending <= 1'b0;
+            if (wptr == 9'd511) begin
+              dcnt <= 10'd2;
+              st   <= S_WCRC;
+            end else begin
+              wptr <= wptr + 9'd1;
+            end
+          end
+        end
+
+        // ---- 2 CRC bytes ----
+        // Dummy: SPI-mode CRC is off, and the card ignores these. They are not
+        // optional though — the card counts them, and swallowing them would
+        // leave it waiting two bytes into the next command.
+        S_WCRC: begin
+          if (!pending) begin
+            b_req   <= 1'b1;
+            b_tx    <= 8'hFF;
+            pending <= 1'b1;
+          end else if (b_ack) begin
+            pending <= 1'b0;
+            if (dcnt == 10'd1) begin
+              tok_tries <= 16'd50000;
+              st        <= S_WRESP;
+            end
+            dcnt <= dcnt - 10'd1;
+          end
+        end
+
+        // ---- the data response token: xxx0sss1 ----
+        // ⚠️ THIS IS THE ONLY THING THAT SAYS THE WRITE WORKED. Without
+        // checking it a rejected block looks exactly like an accepted one, and
+        // the corruption shows up much later as a damaged filesystem. Wait for
+        // a byte with bit0 set and bit4 clear, then sss must be 010.
+        //   010 accepted   101 CRC error   110 write error
+        S_WRESP: begin
+          if (!pending) begin
+            b_req   <= 1'b1;
+            b_tx    <= 8'hFF;
+            pending <= 1'b1;
+          end else if (b_ack) begin
+            pending <= 1'b0;
+            if ((b_rx & 8'h11) == 8'h01) begin
+              if ((b_rx & 8'h1F) == 8'h05) begin
+                tok_tries <= 16'hFFFF;
+                st        <= S_WBUSY;
+              end else begin
+                st <= S_ERR;                              // rejected, and said so
+              end
+            end else if (tok_tries == 0) begin
+              st <= S_ERR;
+            end else begin
+              tok_tries <= tok_tries - 16'd1;
+            end
+          end
+        end
+
+        // ---- the card is BUSY: it holds MISO LOW while it programs ----
+        // Milliseconds, not microseconds, and there is nothing like it on the
+        // read path. Deselecting before the card lets go corrupts whatever
+        // command comes next, so this wait is part of the write.
+        S_WBUSY: begin
+          if (!pending) begin
+            b_req   <= 1'b1;
+            b_tx    <= 8'hFF;
+            pending <= 1'b1;
+          end else if (b_ack) begin
+            pending <= 1'b0;
+            // ⚠️ DO NOT PULSE `wdone` HERE. Completion is signalled in
+            // S_TAIL, at the same instant `busy` drops — that is the whole
+            // discipline `rdone` follows, and it is what makes "done" mean
+            // "and you may issue the next command". Signalling here instead
+            // let software start a read while busy was still high, and
+            // sd_ctrl's `if (!busy)` guard silently DROPPED it: the next read
+            // returned the previous block's data, which looks like a
+            // addressing bug and is not one. Caught by tb_sd's read-after-write.
+            if (b_rx != 8'h00) begin
+              st <= S_TAIL;
+            end else if (tok_tries == 0) begin
+              st <= S_ERR;
+            end else begin
+              tok_tries <= tok_tries - 16'd1;
+            end
+          end
+        end
+
         // ---- deselect, then one trailing byte so the card releases MISO ----
         S_TAIL: begin
           if (!pending) begin
@@ -376,7 +538,11 @@ module sd_spi #(
             pending <= 1'b1;
           end else if (b_ack) begin
             pending <= 1'b0;
-            rdone   <= 1'b1;
+            // One completion point for both operations, distinguished by which
+            // one is in flight. Two separate points would be two chances to get
+            // the busy/done ordering wrong.
+            rdone   <= (seq != Q_WRITE);
+            wdone   <= (seq == Q_WRITE);
             busy    <= 1'b0;
             st      <= S_IDLE;
           end

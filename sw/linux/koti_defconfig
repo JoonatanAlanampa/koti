@@ -125,15 +125,16 @@ CONFIG_CRYPTO_MANAGER_DISABLE_TESTS=y
 # workflow). Built IN, not a module: it is the device a root filesystem lives
 # on, and a module cannot be loaded from a filesystem that is not mounted yet.
 #
-# ⛔ READ-ONLY, and that is HARDWARE, not a driver limitation: the SPI engine
-# implements CMD17 and has no CMD24, so no block can be written at all. The
-# disk is marked read-only so a write fails cleanly as EROFS instead of
-# appearing to succeed. Making it writable is a gateware change first.
+# READ-WRITE since 2026-08-07: CMD24 was added to the SPI engine upstream in
+# console and re-vendored, so the card can now be written as well as read. It
+# was read-only for one day, and that was hardware rather than a driver
+# limitation.
 CONFIG_KOTI_SD=y
 # ext2 rather than ext4: ext4 is several hundred KB of code on a machine with
-# 8.6 MB of RAM, and its journal is useless on a device that cannot write.
-# ext2 is small, and unlike squashfs it can become writable later WITHOUT
-# reformatting the card — which matters, because that is the plan.
+# 8.6 MB of RAM. ext2 is small, and unlike squashfs it is writable — which is
+# exactly why it was chosen while the hardware still could not write.
+# ⚠️ NO JOURNAL. An unclean shutdown can leave damage, so `sync` before pulling
+# the power. That is the cost of ext2, stated rather than discovered.
 CONFIG_EXT2_FS=y
 # The partition scanner. The card carries an MBR: one partition for the raw
 # kernel image the firmware loads at LBA 2048, one for the filesystem.

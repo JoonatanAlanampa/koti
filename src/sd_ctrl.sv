@@ -81,7 +81,14 @@ module sd_ctrl #(
     // in project.sv, so the intercept there needs no new pattern.
     input  wire        sel,
     input  wire        we,
-    input  wire [1:0]  reg_a,          // which register: d_addr[1:0]
+    // THREE bits, not two. The write path needs two more registers than the
+    // four a 2-bit select can reach, and widening the select is free — the
+    // window is 64 KB. Widening it also preserves every existing register at
+    // its existing offset, which matters because `SD_DATA = 0` as a
+    // read-pointer rewind is compiled into sdboot.c, sdtest.c and the Linux
+    // driver; redefining offset 8 to mean something else would have broken all
+    // three silently.
+    input  wire [2:0]  reg_a,          // which register: d_addr[2:0]
     input  wire [31:0] wdata,
     output logic [31:0] rdata,
 
@@ -99,7 +106,7 @@ module sd_ctrl #(
 );
 
   // ---------------------------------------------------------- the SD engine
-  logic        init_pulse, rd_pulse;
+  logic        init_pulse, rd_pulse, wr_pulse;
   logic [31:0] lba;
   logic        ready, busy, err;
   logic        rvalid, rdone;
@@ -109,11 +116,33 @@ module sd_ctrl #(
   // module's actual outputs are driven in one place further down.
   logic eng_cs_n, eng_sck, eng_mosi;
 
+  // ---- the write buffer -------------------------------------------------
+  // 512 bytes as 128 words, filled by software before the write is started.
+  // The engine PULLS from it: it drives `wptr` and this answers
+  // combinationally, so there is no handshake and no way to feed a byte late.
+  logic [31:0] wbuf [0:127];
+  logic [8:0]  wptr;
+  logic [7:0]  wbyte;
+  logic        wdone;
+  logic [6:0]  wsw;                     // software's fill pointer, in WORDS
+
+  // Little-endian, matching the read side: word 0's byte 0 is the block's byte
+  // 0. Getting this backwards would write a block that is byte-swapped within
+  // every word — which reads back as plausible garbage rather than as an error.
+  always_comb
+      case (wptr[1:0])
+          2'd0: wbyte = wbuf[wptr[8:2]][7:0];
+          2'd1: wbyte = wbuf[wptr[8:2]][15:8];
+          2'd2: wbyte = wbuf[wptr[8:2]][23:16];
+          2'd3: wbyte = wbuf[wptr[8:2]][31:24];
+      endcase
+
   sd_spi #(.CLK_HZ(CLK_HZ)) card (
       .clk(clk), .rst(rst),
-      .init(init_pulse), .rd(rd_pulse), .blk(lba),
+      .init(init_pulse), .rd(rd_pulse), .wr(wr_pulse), .blk(lba),
       .ready(ready), .busy(busy), .err(err),
       .rvalid(rvalid), .rdata(rbyte), .rdone(rdone),
+      .wptr(wptr), .wbyte(wbyte), .wdone(wdone),
       .cs_n(eng_cs_n), .sck(eng_sck), .mosi(eng_mosi), .miso(sd_miso)
   );
 
@@ -199,6 +228,8 @@ module sd_ctrl #(
       if (rst) begin
           init_pulse <= 1'b0;
           rd_pulse   <= 1'b0;
+          wr_pulse   <= 1'b0;
+          wsw        <= 7'd0;
           lba        <= 32'd0;
           rptr       <= 7'd0;
           done_q     <= 1'b0;
@@ -212,29 +243,32 @@ module sd_ctrl #(
           // Sticky, and cleared by STARTING work rather than by reading the
           // status: a flag cleared by its own read cannot be polled twice, and
           // the Linux driver will want to check it after the fact.
-          if (rdone)                    done_q <= 1'b1;
-          if (init_pulse || rd_pulse)   done_q <= 1'b0;
+          if (rdone || wdone)                        done_q <= 1'b1;
+          if (init_pulse || rd_pulse || wr_pulse)    done_q <= 1'b0;
           // One-clock pulses: sd_spi wants a pulse, and a level would restart
           // the command for as long as the write was held.
           init_pulse <= 1'b0;
           rd_pulse   <= 1'b0;
+          wr_pulse   <= 1'b0;
 
           if (sel_wr)
               case (reg_a)
-                  2'd0: begin
+                  3'd0: begin
                       // Ignored unless the engine is idle. A read started
                       // mid-transfer would leave the buffer half from one block
                       // and half from another, which is the kind of corruption
-                      // that reads as a filesystem bug.
+                      // that reads as a filesystem bug. A WRITE started
+                      // mid-transfer is worse: it puts half a block on the card.
                       if (!busy) begin
                           init_pulse <= wdata[0];
                           rd_pulse   <= wdata[1];
+                          wr_pulse   <= wdata[2];
                       end
                       if (wdata[1] && !busy) rptr <= 7'd0;
                   end
-                  2'd1: lba  <= wdata;
-                  2'd2: rptr <= 7'd0;          // any write rewinds the buffer
-                  2'd3: begin
+                  3'd1: lba  <= wdata;
+                  3'd2: rptr <= 7'd0;          // any write rewinds the buffer
+                  3'd3: begin
                       raw_en   <= wdata[0];
                       raw_cs_n <= wdata[1];
                       raw_sck  <= wdata[2];
@@ -242,6 +276,16 @@ module sd_ctrl #(
                       raw_miso_oe  <= wdata[4];
                       raw_miso_drv <= wdata[5];
                   end
+                  // ---- the write buffer ----
+                  // Push a word and advance. Separate from the read buffer's
+                  // register on purpose: offset 8 already means "rewind the
+                  // READ pointer" to three pieces of committed software, and
+                  // overloading it would have broken all of them silently.
+                  3'd4: begin
+                      wbuf[wsw] <= wdata;
+                      wsw       <= wsw + 7'd1;
+                  end
+                  3'd5: wsw <= 7'd0;           // rewind the fill pointer
                   default: ;
               endcase
 
@@ -249,7 +293,7 @@ module sd_ctrl #(
           // buffer without software touching a pointer. Wraps rather than
           // saturating: 128 words is the whole block and wrapping makes a
           // read-past-the-end obviously periodic instead of stuck on one value.
-          if (sel_rd && reg_a == 2'd2)
+          if (sel_rd && reg_a == 3'd2)
               rptr <= rptr + 7'd1;
       end
 
@@ -259,14 +303,14 @@ module sd_ctrl #(
   logic [31:0] rmux;
   always_comb
       case (reg_a)
-          2'd0:    rmux = {28'd0, done_q, err, busy, ready};
-          2'd1:    rmux = lba;
-          2'd2:    rmux = buf_mem[rptr];
+          3'd0:    rmux = {28'd0, done_q, err, busy, ready};
+          3'd1:    rmux = lba;
+          3'd2:    rmux = buf_mem[rptr];
           // MISO first, so a test is `SD_RAW & 1`. The three driven values come
           // back too: if they read as what was written, the MMIO path is proven
           // in the same breath, and a stuck MISO cannot be blamed on a write
           // that silently went nowhere.
-          2'd3:    rmux = {25'd0, raw_miso_drv, raw_miso_oe,
+          3'd3:    rmux = {25'd0, raw_miso_drv, raw_miso_oe,
                            raw_mosi, raw_sck, raw_cs_n, raw_en, miso_sync};
           default: rmux = 32'd0;
       endcase

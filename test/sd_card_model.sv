@@ -79,8 +79,24 @@ module sd_card_model #(
       payload = 8'((lba * 32'd13) + (i * 32'd7));
   endfunction
 
+  // ---- CMD24 WRITE_BLOCK ----------------------------------------------
+  // ⚠️ THE WRITE DATA PHASE NEEDS ITS OWN RECEIVE STATE. byte_in() starts a
+  // command frame on any byte matching 01xxxxxx, and a 512-byte payload is full
+  // of those — so without this the model would parse the data being written to
+  // it as commands. That is not a subtle failure but it is a confusing one.
+  localparam [1:0] W_NONE = 2'd0, W_TOK = 2'd1, W_DAT = 2'd2, W_CRC = 2'd3;
+  reg  [1:0]  wphase  = W_NONE;
+  reg  [9:0]  wcnt    = 10'd0;
+  reg  [7:0]  wmem [0:511];       // the block just written, for the bench
+  reg         wr_got  = 1'b0;     // one-shot: a full block arrived
+  reg  [31:0] wr_lba  = 32'd0;
+  reg         is_write = 1'b0;
+  reg         dresp_ready = 1'b0; // receive -> transmit handover, like cmd_ready
+  reg  [3:0]  busy_left = 4'd0;
+
   localparam [3:0] S_IDLE = 4'd0, S_RESP = 4'd1, S_WAIT = 4'd2,
-                   S_TOK  = 4'd3, S_DATA = 4'd4, S_CRC  = 4'd5;
+                   S_TOK  = 4'd3, S_DATA = 4'd4, S_CRC  = 4'd5,
+                   S_DRESP = 4'd6, S_BUSY = 4'd7;
 
   // ⚠️ STATE OWNERSHIP IS SPLIT ON PURPOSE, and getting this wrong is what the
   // first version of this file got wrong. Two processes on the two sck edges
@@ -125,7 +141,27 @@ module sd_card_model #(
 
   task byte_in(input [7:0] b);
     begin
-      if (in_frame) begin
+      if (wphase != W_NONE) begin
+        case (wphase)
+          // A real card waits for the token rather than assuming the next byte
+          // is it, which is what makes sd_spi's idle gap byte legal.
+          W_TOK: if (b == 8'hFE) begin wphase = W_DAT; wcnt = 10'd0; end
+          W_DAT: begin
+                   wmem[wcnt] = b;
+                   if (wcnt == 10'd511) begin wphase = W_CRC; wcnt = 10'd0; end
+                   else                      wcnt = wcnt + 10'd1;
+                 end
+          // Two CRC bytes, ignored but COUNTED: a card that did not count them
+          // would be two bytes out for the rest of the transaction.
+          W_CRC: if (wcnt == 10'd1) begin
+                   wphase      = W_NONE;
+                   wr_got      = 1'b1;
+                   dresp_ready = 1'b1;
+                   busy_left   = 4'd6;   // hold MISO low, as a real card does
+                 end else wcnt = wcnt + 10'd1;
+          default: ;
+        endcase
+      end else if (in_frame) begin
         frame[fn] = b;
         if (fn == 3'd5) begin
           in_frame = 1'b0;
@@ -156,7 +192,8 @@ module sd_card_model #(
     begin
       cmd     = frame[0][5:0];
       arg     = {frame[1], frame[2], frame[3], frame[4]};
-      is_read = (cmd == 6'd17);
+      is_read  = (cmd == 6'd17);
+      is_write = (cmd == 6'd24);
 `ifdef SD_MODEL_DEBUG
       $display("[card %0t] CMD%0d arg=%08h", $time, cmd, arg);
 `endif
@@ -185,6 +222,10 @@ module sd_card_model #(
                  rd_lba  = arg;
                  queue_r1(8'h00);
                end
+        6'd24: begin                                // WRITE_BLOCK
+                 wr_lba = arg;
+                 queue_r1(8'h00);
+               end
         default: queue_r1(8'h04);                   // illegal command
       endcase
     end
@@ -197,7 +238,10 @@ module sd_card_model #(
   // mode-0 contract; loading one edge later shifts every response by a bit.
   always @(negedge sck) if (!cs_n) begin
     if (rx_n == 4'd0) begin
-      if (cmd_ready) begin
+      if (dresp_ready) begin
+        dresp_ready = 1'b0;
+        st          = S_DRESP;
+      end else if (cmd_ready) begin
         cmd_ready = 1'b0;
         st        = S_RESP;
         resp_i    = 3'd0;
@@ -207,7 +251,13 @@ module sd_card_model #(
       case (st)
         S_RESP: begin
           tx_sh = resp[resp_i];
-          if (resp_i + 3'd1 == resp_n) st = is_read ? S_WAIT : S_IDLE;
+          if (resp_i + 3'd1 == resp_n) begin
+            if (is_read) st = S_WAIT;
+            else begin
+              st = S_IDLE;
+              if (is_write) wphase = W_TOK;   // now expect the data token
+            end
+          end
           else                         resp_i = resp_i + 3'd1;
         end
         // Idle bytes before the data token: a real card takes microseconds to
@@ -228,6 +278,16 @@ module sd_card_model #(
           if (wait_i == 4'd0) wait_i = 4'd1;
           else begin wait_i = 4'd0; st = S_IDLE; end
         end
+        // ---- the data response token, then BUSY ----
+        // 0x05 = xxx0_0101 = accepted. Then MISO is held LOW for a few bytes,
+        // which is the part of a write that has no analogue in a read: a real
+        // card is erasing and programming and cannot be talked to.
+        S_DRESP: begin tx_sh = 8'h05; st = S_BUSY; end
+        S_BUSY:  begin
+                   tx_sh = 8'h00;
+                   if (busy_left == 4'd0) st = S_IDLE;
+                   else busy_left = busy_left - 4'd1;
+                 end
         default: tx_sh = 8'hFF;
       endcase
     end else begin

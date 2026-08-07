@@ -329,7 +329,7 @@ module tt_um_koti (
 `ifdef KOTI_FPGA
   sd_ctrl sd (
       .clk(clk), .rst(rst),
-      .sel(sd_sel_i && !sd_ack), .we(d_we), .reg_a(d_addr[1:0]),
+      .sel(sd_sel_i && !sd_ack), .we(d_we), .reg_a(d_addr[2:0]),
       .wdata(d_wdata), .rdata(sd_rdata),
       .sd_cs_n(sd_cs_n), .sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso),
       .sd_miso_drv(sd_miso_drv), .sd_miso_oe(sd_miso_oe)

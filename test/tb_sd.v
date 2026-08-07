@@ -32,7 +32,7 @@ module tb_sd ();
   always #20 clk = ~clk;                    // 25 MHz
 
   reg         sel = 1'b0, we = 1'b0;
-  reg  [1:0]  reg_a = 2'd0;
+  reg  [2:0]  reg_a = 3'd0;
   reg  [31:0] wdata = 32'd0;
   wire [31:0] rdata;
 
@@ -49,7 +49,7 @@ module tb_sd ();
   );
 
   integer errors = 0;
-  integer i;
+  integer i, bad;
   reg [31:0] got, word;
   reg [7:0]  want_b, got_b;
 
@@ -62,7 +62,7 @@ module tb_sd ();
     end
   endtask
 
-  task mmio_wr(input [1:0] a, input [31:0] d);
+  task mmio_wr(input [2:0] a, input [31:0] d);
     begin
       @(posedge clk); sel = 1'b1; we = 1'b1; reg_a = a; wdata = d;
       @(posedge clk); sel = 1'b0; we = 1'b0;
@@ -80,7 +80,7 @@ module tb_sd ();
   // supposed to change, which is exactly the buffer walk. Cost: the first
   // version of this bench reported the whole block as wrong data while the
   // capture was byte-perfect.
-  task mmio_rd(input [1:0] a, output [31:0] d);
+  task mmio_rd(input [2:0] a, output [31:0] d);
     begin
       @(posedge clk); sel = 1'b1; we = 1'b0; reg_a = a;
       @(posedge clk); sel = 1'b0;
@@ -103,7 +103,7 @@ module tb_sd ();
       // `!==`, not `!`: an X status makes `!got[0]` FALSE, so a plain negation
       // exits the loop instantly and the bench then fails for the wrong reason.
       while (got[0] !== 1'b1 && n < 400_000) begin
-        mmio_rd(2'd0, got);
+        mmio_rd(3'd0, got);
         n = n + 1;
       end
       if (n >= 400_000) begin
@@ -122,7 +122,7 @@ module tb_sd ();
       n = 0;
       got = 32'd0;
       while (got[3] !== 1'b1 && n < 400_000) begin
-        mmio_rd(2'd0, got);
+        mmio_rd(3'd0, got);
         n = n + 1;
       end
       if (n >= 400_000) begin
@@ -136,15 +136,15 @@ module tb_sd ();
   // the expected values cannot drift from what a card would serve.
   task read_block_and_check(input [31:0] lba);
     begin
-      mmio_wr(2'd1, lba);                            // SD_LBA
-      mmio_wr(2'd0, 32'h2);                          // start read
+      mmio_wr(3'd1, lba);                            // SD_LBA
+      mmio_wr(3'd0, 32'h2);                          // start read
       wait_block("the block read");
-      mmio_rd(2'd0, got);
+      mmio_rd(3'd0, got);
       check(!got[2], "err raised on a good read");
 
-      mmio_wr(2'd2, 32'd0);                          // rewind the buffer
+      mmio_wr(3'd2, 32'd0);                          // rewind the buffer
       for (i = 0; i < 128; i = i + 1) begin
-        mmio_rd(2'd2, word);
+        mmio_rd(3'd2, word);
         for (integer b = 0; b < 4; b = b + 1) begin
           want_b = card.payload(lba, i * 4 + b);
           got_b  = word[8*b +: 8];
@@ -164,9 +164,9 @@ module tb_sd ();
     rst = 1'b0;
 
     $display("tb_sd: init");
-    mmio_wr(2'd0, 32'h1);                            // start init
+    mmio_wr(3'd0, 32'h1);                            // start init
     wait_ready("init");
-    mmio_rd(2'd0, got);
+    mmio_rd(3'd0, got);
     $display("  status after init = %08h", got);
     check(got[0] === 1'b1, "ready after init");
     check(got[2] !== 1'b1, "err after init");
@@ -182,9 +182,43 @@ module tb_sd ();
 
     // The rewind: after 128 reads the pointer has wrapped to 0 anyway, so
     // rewind explicitly and confirm the first word again.
-    mmio_wr(2'd2, 32'd0);
-    mmio_rd(2'd2, word);
+    mmio_wr(3'd2, 32'd0);
+    mmio_rd(3'd2, word);
     check(word[7:0] === card.payload(32'd12345, 0), "buffer rewinds on write");
+
+    // ---- CMD24: write a block, then read it back -----------------------
+    // The engine gained a write path on 2026-08-07. Before this the hardware
+    // could not write at all, so a Linux filesystem on the card was read-only.
+    //
+    // The pattern is DERIVED FROM THE INDEX and not constant: a constant would
+    // pass even if every byte written were the same one, and byte-order bugs in
+    // the word-to-byte unpacking are exactly what this has to catch.
+    $display("tb_sd: write block 77");
+    mmio_wr(3'd5, 32'd0);                            // rewind the fill pointer
+    for (i = 0; i < 128; i = i + 1)
+      mmio_wr(3'd4, {8'(i*4+3), 8'(i*4+2), 8'(i*4+1), 8'(i*4+0)});
+    mmio_wr(3'd1, 32'd77);                           // LBA
+    mmio_wr(3'd0, 32'h4);                            // start write
+    wait_block("write");
+
+    check(card.wr_got === 1'b1, "card received a block");
+    check(card.wr_lba === 32'd77, "card saw the right LBA");
+    // Every byte, in order. This is the check that catches a word unpacked
+    // big-endian: the block would arrive complete and byte-swapped within each
+    // word, which reads back as plausible data rather than as an error.
+    bad = 0;
+    for (i = 0; i < 512; i = i + 1)
+      if (card.wmem[i] !== 8'(i)) bad = bad + 1;
+    check(bad === 0, "all 512 bytes arrived in order");
+    if (bad !== 0)
+      $display("  %0d byte(s) wrong; wmem[0..3] = %02h %02h %02h %02h",
+               bad, card.wmem[0], card.wmem[1], card.wmem[2], card.wmem[3]);
+
+    // And the engine must be usable again afterwards — the busy wait is the
+    // part of a write with no analogue in a read, and getting it wrong corrupts
+    // the NEXT command rather than this one.
+    $display("tb_sd: read after write");
+    read_block_and_check(32'd7);
 
     $display("--- %0d error(s)", errors);
     if (errors == 0) $display("--- tb_sd: PASS");

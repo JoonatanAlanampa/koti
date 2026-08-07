@@ -42,6 +42,13 @@
 #define SD_DONE   0x8u                // sticky: the buffer holds a full block
 #define SD_START_INIT 0x1u
 #define SD_START_RD   0x2u
+// ---- writes (CMD24) ----
+// ⚠️ The ENGINE gained CMD24 on 2026-08-07; before that the hardware could not
+// write a block at all. Fill SD_WDATA with 128 words, then start.
+// Order matters: SD_WREWIND, 128 x SD_WDATA, SD_LBA, then SD_START_WR.
+#define SD_WDATA   REG32(0x00050010)   // w: push a word into the write buffer
+#define SD_WREWIND REG32(0x00050014)   // w: rewind the fill pointer (value ignored)
+#define SD_START_WR   0x4u
 #define SD_BLOCK_WORDS 128u
 
 // Bring-up escape hatch: drive the four wires from software and read MISO back.

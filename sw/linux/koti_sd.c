@@ -9,12 +9,16 @@
  * planned for — PLAN.md item 8 says the same about USB — so this is a small
  * driver rather than a disappointment.
  *
- * ⛔ READ-ONLY, AND NOT BY CHOICE. The engine implements CMD0, CMD8, CMD55,
- * ACMD41, CMD58, CMD16 and CMD17. There is NO CMD24, so the hardware cannot
- * write a block at all. The disk is therefore marked read-only, which turns a
- * silent data-loss bug into a clean EROFS. Making it writable is a GATEWARE
- * change first (vendor/sd_spi.sv, and per vendor/README.md that means changing
- * console's copy and re-vendoring), then a few dozen lines here.
+ * READ AND WRITE since 2026-08-07. The disk was read-only for one day, and not
+ * by choice: the engine had CMD17 and no CMD24, so the HARDWARE could not write
+ * a block at all. CMD24 was added upstream in console and re-vendored, and the
+ * write path below is the software half.
+ *
+ * ⚠️ A WRITE IS NOT A READ WITH THE ARROWS REVERSED. After taking the data the
+ * card erases and programs, holding MISO low for milliseconds, and only then
+ * answers. The engine waits for that and signals completion at the same instant
+ * it drops `busy` — so a write here takes far longer than a read and the
+ * timeout is sized for it.
  *
  * NO INTERRUPT. sd_ctrl has no IRQ line, so a transfer is polled. That is why
  * the tag set asks for BLK_MQ_F_BLOCKING: without it ->queue_rq runs where it
@@ -40,9 +44,11 @@
 #include <linux/platform_device.h>
 
 /* Register map — must match src/sd_ctrl.sv and sw/koti.h. */
-#define KOTI_SD_CTRL	0x00	/* w: bit0 init, bit1 read; r: status */
+#define KOTI_SD_CTRL	0x00	/* w: bit0 init, bit1 read, bit2 write */
 #define KOTI_SD_LBA	0x04
 #define KOTI_SD_DATA	0x08	/* r: next word, pointer++; w: rewind */
+#define KOTI_SD_WDATA	0x10	/* w: push a word into the write buffer */
+#define KOTI_SD_WREWIND	0x14	/* w: rewind the fill pointer */
 
 #define KOTI_SD_READY	BIT(0)
 #define KOTI_SD_BUSY	BIT(1)
@@ -51,13 +57,16 @@
 
 #define KOTI_SD_START_INIT	BIT(0)
 #define KOTI_SD_START_RD	BIT(1)
+#define KOTI_SD_START_WR	BIT(2)
 
 #define KOTI_SD_SECTOR		512
 #define KOTI_SD_WORDS		(KOTI_SD_SECTOR / 4)
 
-/* A block read is ~400 us at 12.5 MHz. A second is four orders of magnitude of
- * headroom and still bounded, which is what matters: a card that stops
- * answering must produce an IO error rather than a machine that never returns.
+/* A block read is ~400 us at 12.5 MHz; a write can legitimately take a hundred
+ * milliseconds on a cheap card, because the card erases and programs before it
+ * answers. One second covers both and is still BOUNDED, which is the point: a
+ * card that stops answering must produce an IO error, not a machine that never
+ * returns.
  */
 #define KOTI_SD_IO_TIMEOUT_MS	1000
 #define KOTI_SD_INIT_TIMEOUT_MS	2000
@@ -115,6 +124,36 @@ static int koti_sd_read_sector(struct koti_sd *sd, sector_t lba, void *dst)
 	return 0;
 }
 
+static int koti_sd_write_sector(struct koti_sd *sd, sector_t lba, void *src)
+{
+	const u32 *in = src;
+	int i, ret;
+
+	/* Fill first, start second. The controller latches nothing until the
+	 * start write, so the order is not a race — but rewinding first is what
+	 * makes a retry after an error land at word 0 rather than wherever the
+	 * failed attempt stopped.
+	 */
+	writel(0, sd->base + KOTI_SD_WREWIND);
+	for (i = 0; i < KOTI_SD_WORDS; i++)
+		writel(in[i], sd->base + KOTI_SD_WDATA);
+
+	writel((u32)lba, sd->base + KOTI_SD_LBA);
+	writel(KOTI_SD_START_WR, sd->base + KOTI_SD_CTRL);
+
+	ret = koti_sd_wait(sd, KOTI_SD_DONE, KOTI_SD_IO_TIMEOUT_MS);
+	if (ret)
+		return ret;
+	/* The engine sets ERR when the card's data-response token said the block
+	 * was rejected. Not checking it would report success for a write that
+	 * never landed, which is the one failure a filesystem cannot survive.
+	 */
+	if (readl(sd->base + KOTI_SD_CTRL) & KOTI_SD_ERR)
+		return -EIO;
+
+	return 0;
+}
+
 static blk_status_t koti_sd_queue_rq(struct blk_mq_hw_ctx *hctx,
 				     const struct blk_mq_queue_data *bd)
 {
@@ -124,14 +163,22 @@ static blk_status_t koti_sd_queue_rq(struct blk_mq_hw_ctx *hctx,
 	struct bio_vec bv;
 	sector_t lba = blk_rq_pos(rq);
 	blk_status_t sts = BLK_STS_OK;
+	int err;
 
 	blk_mq_start_request(rq);
 
-	/* The hardware cannot write, so anything but a read is refused here
-	 * rather than acknowledged and dropped. set_disk_ro() should stop these
-	 * ever arriving; this is the second line of defence.
+	/* A flush is a no-op that must still be answered: there is no write
+	 * cache anywhere between here and the card, because every write waits
+	 * for the card to finish programming before it returns. Failing it
+	 * would make the filesystem think its data is at risk; ignoring it
+	 * would hang the request.
 	 */
-	if (req_op(rq) != REQ_OP_READ) {
+	if (req_op(rq) == REQ_OP_FLUSH) {
+		blk_mq_end_request(rq, BLK_STS_OK);
+		return BLK_STS_OK;
+	}
+
+	if (req_op(rq) != REQ_OP_READ && req_op(rq) != REQ_OP_WRITE) {
 		blk_mq_end_request(rq, BLK_STS_IOERR);
 		return BLK_STS_OK;
 	}
@@ -149,7 +196,10 @@ static blk_status_t koti_sd_queue_rq(struct blk_mq_hw_ctx *hctx,
 				sts = BLK_STS_IOERR;
 				break;
 			}
-			if (koti_sd_read_sector(sd, lba, buf + off)) {
+			err = (req_op(rq) == REQ_OP_WRITE)
+				? koti_sd_write_sector(sd, lba, buf + off)
+				: koti_sd_read_sector(sd, lba, buf + off);
+			if (err) {
 				sts = BLK_STS_IOERR;
 				break;
 			}
@@ -262,11 +312,6 @@ static int koti_sd_probe(struct platform_device *pdev)
 	sd->disk->private_data = sd;
 	snprintf(sd->disk->disk_name, DISK_NAME_LEN, "kotisd");
 	set_capacity(sd->disk, sd->sectors);
-
-	/* See the header: the hardware has no write command. Saying so here is
-	 * what makes a write attempt fail cleanly instead of appearing to work.
-	 */
-	set_disk_ro(sd->disk, 1);
 
 	ret = add_disk(sd->disk);
 	if (ret)

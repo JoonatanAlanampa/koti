@@ -13,7 +13,7 @@ fix" is the one that stops being the proven version.
 
 | file | from | upstream commit | proven by |
 | --- | --- | --- | --- |
-| `sd_spi.sv` | `console/fpga/sd_spi.sv` | `b0bb8be` (2026-07-29) | its own cocotb suite (`console/test/test_sdload.py`): a card that stays busy through several ACMD41s, a bad-magic image, a checksum mismatch, and no card at all. ⚠️ **On hardware, only the NO-CARD path has ever run** — see below |
+| `sd_spi.sv` | `console/fpga/sd_spi.sv` | `9d75e1c` (2026-08-07, CMD24 added upstream FOR koti) | its own cocotb suite (`console/test/test_sdload.py`): a card that stays busy through several ACMD41s, a bad-magic image, a checksum mismatch, and no card at all. ⚠️ **On hardware, only the NO-CARD path has ever run** — see below |
 | `spi_master.sv` | `console/fpga/spi_master.sv` | `b0bb8be` (2026-07-29) | same |
 | `tmds_encoder.sv` | `console/fpga/tmds_encoder.sv` | `e82bc30` (2026-08-06) | ⭐ **on real hardware**: console drove its own video engine onto the user's HDMI monitor from a ULX3S 85F v3.1.8 — the same board koti runs on |
 | `dvi_tx.sv` | `console/fpga/dvi_tx.sv` | `e82bc30` (2026-08-06) | same |

@@ -97,10 +97,22 @@ Software, in order:
          bench, since koti boots from a 32 KB fabric flash.
        - **The text console works too**, on HDMI, with no framebuffer driver:
          SBI `console_putchar` writes the VGA text buffer as well as the UART.
-7. [ ] **Root filesystem on microSD** — the initramfs is embedded today, so this
-       is about persistence rather than booting. Needs a Linux block driver over
-       `sd_ctrl`, and a partition layout that coexists with the raw kernel area
-       at LBA 2048.
+7. [~] **Root filesystem on microSD — READ HALF DONE ON HARDWARE 2026-08-07.**
+       ```
+       kotisd: kotisd1 kotisd2
+       koti-sd 50000.mmc: 61067264 sectors (29818 MiB), read-only
+       # mount /dev/kotisd2 /mnt   -> a file read back byte-exact
+       ```
+       `sw/linux/koti_sd.c` is a blk-mq driver for `src/sd_ctrl.sv`; the card
+       carries an MBR with p1 (type 0xDA) for the raw kernel and p2 (ext2) for
+       the filesystem. `tools/sdkernel.py` writes all three.
+       - ⛔ **THE OTHER HALF IS PERSISTENCE, AND IT IS GATEWARE FIRST.**
+         `vendor/sd_spi.sv` has CMD17 and **no CMD24** — the hardware cannot
+         write a block at all. The disk is marked read-only so writes fail as
+         `EROFS` rather than appearing to work. Order: CMD24 in the engine
+         (upstream in console, then re-vendor), a write path in `sd_ctrl.sv`,
+         then ~40 lines in the driver.
+       - ⚠️ `root=` is still the initramfs on purpose — see the defconfig.
 7b.[x] 🏆 **DONE 2026-08-07 — THE KEYBOARD WORKS AND GOAL 2 IS ACHIEVED.**
        `buildroot login: root` / `# uname -a`, typed on a real USB keyboard.
        ⛔ The old note here ("the login prompt cannot be typed at") is DEAD.

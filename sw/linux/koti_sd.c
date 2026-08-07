@@ -243,9 +243,21 @@ static int koti_sd_probe(struct platform_device *pdev)
 		goto out_tag_set;
 	}
 
-	sd->disk->major = 0;			/* dynamic */
-	sd->disk->first_minor = 0;
-	sd->disk->minors = 8;			/* room for a partition table */
+	/*
+	 * major/first_minor/minors are deliberately LEFT AT ZERO, which
+	 * blk_mq_alloc_disk() already guarantees.
+	 *
+	 * ⚠️ Setting `minors` alongside a zero major is a hard error, not a
+	 * hint: device_add_disk() takes the `major == 0` branch, hits
+	 * `WARN_ON(disk->minors)` at block/genhd.c:439 and returns -EINVAL. The
+	 * first version of this driver set minors = 8 "to leave room for a
+	 * partition table" and probe failed with a backtrace on real hardware.
+	 *
+	 * Reserving minors is not how partitions work any more anyway: with a
+	 * dynamic major the kernel allocates an extended minor for the disk and
+	 * another for each partition as it finds them, so kotisd1 and kotisd2
+	 * appear without anything being reserved up front.
+	 */
 	sd->disk->fops = &koti_sd_fops;
 	sd->disk->private_data = sd;
 	snprintf(sd->disk->disk_name, DISK_NAME_LEN, "kotisd");

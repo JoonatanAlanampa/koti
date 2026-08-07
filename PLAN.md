@@ -86,11 +86,26 @@ Software, in order:
        and a straddling-fetch-pair instruction skip in `koti_core.sv`, and a
        dropped-request deadlock in `arbiter3.sv`. All three need the MMU on,
        which is why the 58 official tests (`satp = 0`) missed every one.
-6. [ ] **Keep going**: run `linux` with a bigger `maxclk` until `init` runs,
-       then a Buildroot busybox+musl userspace, then the VGA text console.
-7. [ ] **Root filesystem on microSD** — the step that turns a booting kernel
-       into a computer. Needs a block driver; console's `sd_spi.sv` is a
-       proven starting point.
+6. [x] **DONE ON HARDWARE 2026-08-07 — Linux boots to a login prompt on the
+       real ULX3S, and the boot log is on the HDMI monitor.**
+       `Run /init as init process` / `koti: userspace is alive` /
+       `buildroot login:`, ~49 s, with busybox+musl userspace.
+       - **The kernel arrives over the microSD** (`sw/sbi/sdboot.c` +
+         `tools/sdkernel.py`): header at LBA 2048, image after it, 32-bit
+         checksum. 3,954,608 bytes = 7724 blocks in ~4 s, against ~343 s over
+         the UART. That transport was the whole gap between simulation and the
+         bench, since koti boots from a 32 KB fabric flash.
+       - **The text console works too**, on HDMI, with no framebuffer driver:
+         SBI `console_putchar` writes the VGA text buffer as well as the UART.
+7. [ ] **Root filesystem on microSD** — the initramfs is embedded today, so this
+       is about persistence rather than booting. Needs a Linux block driver over
+       `sd_ctrl`, and a partition layout that coexists with the raw kernel area
+       at LBA 2048.
+7b.[ ] ⭐ **A KEYBOARD IS NOW THE ONLY THING BETWEEN THIS AND A USABLE
+       COMPUTER.** Everything else is done: CPU, MMU, RAM, storage, OS, screen.
+       The login prompt cannot be typed at — `uart_tx.sv` is transmit-only and
+       SBI `console_getchar` reads the PS/2 block, for which there is no
+       keyboard. ⇒ item 8 is no longer a late nicety; it is the last rung.
 8. [ ] **USB HID host + its Linux driver and devicetree node** (decision 2
        below). Mainline will not recognise a soft host core any more than it
        recognises koti's PS/2 word, so a small custom driver is required

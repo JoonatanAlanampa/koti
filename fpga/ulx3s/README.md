@@ -227,6 +227,46 @@ the problem: `ff` everywhere = the card never drove the line; `00` everywhere =
 something holds it low; any byte with the top bit clear = the card is alive and
 the fault is koti's.
 
+## ✅ 2d. Linux, off the microSD, on HDMI — **DONE ON HARDWARE 2026-08-07**
+
+The whole machine. Write the kernel to the card, flash the firmware, watch it
+boot on the serial console *and* the monitor:
+
+```
+python tools/sdkernel.py write arch/riscv/boot/Image --disk N --yes   # NEEDS ADMIN
+gh workflow run fpga-ulx3s.yaml -f image=sbi
+fujprog koti-bram.bit
+```
+```
+[   49.491302] Run /init as init process
+Linux buildroot 6.12.0 #1 riscv32 GNU/Linux    MemTotal: 8868 kB
+koti: userspace is alive
+Welcome to Buildroot
+buildroot login:
+```
+
+⚠️ **DIP SWITCH 3 MUST BE ON.** This firmware enables VGA, which gives uo[0] to
+the raster and mirrors the UART on uo[6]; SW3 points the FTDI at uo[6]. With SW3
+off the console is mojibake and the board looks dead.
+
+⚠️ **Flash, THEN open the port, THEN press BTN0.** The early boot is gone
+otherwise — that is how the `sd: loading kernel` line got missed the first time.
+
+⭐ **The boot log appears on the HDMI monitor with no framebuffer driver**, and
+that is not an accident worth being confused by later: SBI `console_putchar`
+calls `putc_both()`, which writes the UART *and* the 40x30 VGA text buffer, and
+Linux's console is `hvc0` over SBI. **Nothing in Linux knows the video hardware
+exists.** A real framebuffer is separate, later work.
+
+⛔ **You cannot type at that login prompt.** koti's UART is `uart_tx.sv` —
+transmit only — and SBI `console_getchar` reads the PS/2 block, for which there
+is no keyboard. Logging in needs the USB HID host, ladder item 8, unbuilt.
+
+### If the card is not found
+The firmware falls back to its built-in flash payload and prints `STK` — a
+missing card is not a brick. `image: sdtest` checks the card path on its own,
+and `image: sdraw` is the layer below that.
+
 ## 3. Memory Pmod on J1, orientation strap
 
 **J1 = gp/gn 0-3.** Either the Cartridge Pmod (`../../../pmod-cartridge`,

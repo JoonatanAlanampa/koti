@@ -318,7 +318,7 @@ static int koti_sd_probe(struct platform_device *pdev)
 		goto out_disk;
 
 	platform_set_drvdata(pdev, sd);
-	dev_info(dev, "%u sectors (%u MiB), read-only\n",
+	dev_info(dev, "%u sectors (%u MiB), read-write\n",
 		 sectors, sectors / 2048);
 	return 0;
 

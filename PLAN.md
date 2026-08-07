@@ -97,7 +97,7 @@ Software, in order:
          bench, since koti boots from a 32 KB fabric flash.
        - **The text console works too**, on HDMI, with no framebuffer driver:
          SBI `console_putchar` writes the VGA text buffer as well as the UART.
-7. [~] **Root filesystem on microSD — READ HALF DONE ON HARDWARE 2026-08-07.**
+7. [x] **Root filesystem on microSD — READ AND WRITE, ON HARDWARE.**
        ```
        kotisd: kotisd1 kotisd2
        koti-sd 50000.mmc: 61067264 sectors (29818 MiB), read-only
@@ -106,12 +106,18 @@ Software, in order:
        `sw/linux/koti_sd.c` is a blk-mq driver for `src/sd_ctrl.sv`; the card
        carries an MBR with p1 (type 0xDA) for the raw kernel and p2 (ext2) for
        the filesystem. `tools/sdkernel.py` writes all three.
-       - ⛔ **THE OTHER HALF IS PERSISTENCE, AND IT IS GATEWARE FIRST.**
-         `vendor/sd_spi.sv` has CMD17 and **no CMD24** — the hardware cannot
-         write a block at all. The disk is marked read-only so writes fail as
-         `EROFS` rather than appearing to work. Order: CMD24 in the engine
-         (upstream in console, then re-vendor), a write path in `sd_ctrl.sv`,
-         then ~40 lines in the driver.
+       - ✅ **THE WRITE HALF IS DONE TOO, ON HARDWARE 2026-08-08.**
+         ```
+         # echo koti wrote this > /mnt/hello.txt
+         # sync ; umount /mnt ; mount /dev/kotisd2 /mnt
+         # cat /mnt/hello.txt   ->  koti wrote this
+         ```
+         The unmount is the proof: it drops the page cache, so the second read
+         came off the card. CMD24 went into the engine upstream in console
+         (`9d75e1c`) and was re-vendored; `sd_ctrl.sv` gained a write buffer the
+         engine pulls from; the driver gained `REQ_OP_WRITE` and answers
+         `REQ_OP_FLUSH` immediately because there is no cache to flush.
+       - ⚠️ **ext2 has NO JOURNAL** — `sync` before pulling the power.
        - ⚠️ `root=` is still the initramfs on purpose — see the defconfig.
 7b.[x] 🏆 **DONE 2026-08-07 — THE KEYBOARD WORKS AND GOAL 2 IS ACHIEVED.**
        `buildroot login: root` / `# uname -a`, typed on a real USB keyboard.

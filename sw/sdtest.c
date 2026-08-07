@@ -9,9 +9,12 @@
 //   1. `SD_READY` after init  — the card answered CMD0/CMD8/ACMD41/CMD58, so the
 //      four wires are right and the card is present and speaking SPI
 //   2. block 0 reads          — CMD17 works and the buffer fills
-//   3. the first 16 bytes     — printed raw, because on a FAT-formatted card
-//      block 0 is a boot sector and ends in 0x55 0xAA, which is the cheapest
-//      possible "this is really the card's data and not a stuck bus" check
+//   3. the first 16 bytes AND the last 8 — the last 8 are the ones that matter.
+//      A Windows-formatted MBR leaves its 446-byte bootstrap area all zeros, so
+//      the head of block 0 reads identically on a healthy card and on a bus
+//      stuck low; the 0x55AA signature at bytes 510-511 is the cheapest real
+//      "this is the card's data and not a stuck bus" check. ⚠️ Earlier versions
+//      of this header claimed that check while only printing the first 16 bytes
 //   4. block 0 read TWICE     — identical both times, so the buffer is not
 //      returning whatever the previous transfer left behind
 //   5. a DIFFERENT block      — must differ from block 0. This is the one that
@@ -96,6 +99,27 @@ int main(void) {
                     }
                 }
                 uart_puts("\r\n");
+
+                // The END of block 0, which is where the evidence actually is.
+                // A Windows/SD-Formatter MBR leaves the 446-byte bootstrap area
+                // ALL ZEROS, so the first 16 bytes printed above are zeros on a
+                // perfectly good card and prove nothing either way — which is
+                // exactly how a stuck-low bus would look too. The partition
+                // table and the 0x55AA signature live in the last 66 bytes, so
+                // that is the part worth looking at. This is the check this
+                // file's header claimed from the start but never performed.
+                uart_puts("  block 0 tail: ");
+                for (unsigned i = 126; i < 128; i++) {
+                    for (unsigned by = 0; by < 4; by++) {
+                        uart_hex8((a[i] >> (8 * by)) & 0xFFu);
+                        uart_putc(' ');
+                    }
+                }
+                // Bytes 510-511 are the high half of the last word, little-endian.
+                unsigned sig = (a[127] >> 16) & 0xFFFFu;
+                uart_puts(sig == 0xAA55u
+                              ? "\r\n  55 aa PRESENT — genuinely the card's data\r\n"
+                              : "\r\n  no 55 aa (unformatted card, or not the card's data)\r\n");
 
                 // Repeatability: the same block twice must be identical.
                 if (!sd_read(0, b, SD_BLOCK_WORDS)) {

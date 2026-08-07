@@ -221,10 +221,28 @@ module ulx3s_top (
   assign sd_d[3] = soc_sd_cs_n;
   assign sd_d[2] = 1'b1;
   assign sd_d[1] = 1'b1;
-  // MISO: the card drives this, EXCEPT during the bring-up continuity test,
-  // where software drives it to find out whether the pin can reach a 1 at all.
-  // `soc_sd_miso_oe` is 0 unless SD_RAW explicitly asks, and is cleared by
-  // reset, so the normal build is bit-identical in behaviour to `1'bz`.
+  // MISO: the card drives this, EXCEPT during the bring-up continuity test.
+  //
+  // ⛔⛔ DO NOT "SIMPLIFY" THIS BACK TO `assign sd_d[0] = 1'bz;`. THAT LINE IS
+  // WHAT BROKE THE SD CARD FOR A DAY, and the failure is completely silent.
+  //
+  // With a bare `1'bz` and no other driver, yosys has nothing to build a
+  // tristate out of, so the port collapses to a plain INPUT — and on a plain
+  // input the LPF's `PULLMODE=UP` did not take effect. Proof, from the two
+  // nextpnr logs of 2026-08-07:
+  //     before: pin 'sd_d[0]$tr_io' constrained ...        (no $iobuf_i at all)
+  //     after:  $sd_d[0]$iobuf_i: sd_d_$_TBUF__Y.Y         (a real tristate)
+  // The pin then floated LOW instead of high, so every byte clocked in off the
+  // card read 0x00, `sd_spi` never saw a response, and `sdtest` reported
+  // `init: FAILED, status 00000004` — which reads exactly like "no card". The
+  // card was healthy the whole time (verified in a PC reader: 29.12 GB, FAT32).
+  //
+  // Keeping a real `$_TBUF_` here is therefore LOAD-BEARING even though
+  // `soc_sd_miso_oe` is 0 in all normal operation: the tristate is what makes
+  // this a bidirectional IO, and a bidirectional IO is what carries the pull-up.
+  // ⚠️ Nothing in CI can catch a regression here — the simulation model supplies
+  // its own pull-up, so a bench stays green while the board goes deaf. The check
+  // is the nextpnr log line above.
   assign sd_d[0] = soc_sd_miso_oe ? soc_sd_miso_drv : 1'bz;
 `else
   // The QSPI build has no SD peripheral, so park the bus rather than leave it

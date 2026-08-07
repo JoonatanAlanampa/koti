@@ -161,17 +161,32 @@ kept with their evidence because each one constrains work downstream of it.
    - **It does not gate the kernel ladder.** Rung 1 runs its console on the
      UART, so this lands at ladder item 8 as before — the decision changes
      *what gets built there*, not *when*.
-3. ~~**Video: VGA Pmod or onboard GPDI?**~~ **DECIDED 2026-08-04 (user): the
-   Tiny VGA Pmod. Closed; GPDI is off the roadmap.**
-   The VGA path is already complete — `vga_text.sv` + `vga_timing.sv`, the
-   `uo` VGA personality in `project.sv`, and J2 constrained in `ulx3s.lpf` —
-   so this decision costs zero new work, which is the point when the goal is
-   a visible Linux console. Hardware is not the constraint either way: the
-   monitor bought 2026-07-30 takes **both** VGA and HDMI. GPDI would have
-   needed a TMDS encoder and a ~125 MHz DDR clock domain to free eight pins
-   that an 85F does not need freed. If it is ever wanted, both paths hang off
-   the same RGB + sync signals, so it is a pure output-side addition that
-   need not touch the text pipeline.
+3. **Video: BOTH — HDMI is the standard output, VGA stays. REVERSED BY USER
+   DIRECTIVE 2026-08-07: *"make HDMI the standard video output of koti as
+   well"*, scoped to "port console's GPDI, keep VGA too".**
+   ⛔ **The 2026-08-04 decision below said "GPDI is off the roadmap". That is
+   SUPERSEDED — do not quote it as current.** Its reasoning is kept because it
+   is still correct about the *cost*, and about the one thing that makes this
+   cheap: both paths hang off the same RGB + sync signals, so HDMI is a pure
+   output-side addition that need not touch the text pipeline.
+   - **Why this is now cheap rather than speculative: `console` has GPDI/HDMI
+     WORKING ON THIS EXACT BOARD** (colour bars on the real monitor,
+     2026-08-06). `console/fpga/tmds_encoder.sv`, `dvi_tx.sv`, `pll_25_125.v`
+     and `gpdi.lpf` are proven silicon-adjacent code on a ULX3S 85F. Vendor
+     them the way `vendor/sd_spi.sv` was vendored — do not write a TMDS encoder.
+   - **VGA is kept**, not deleted: it costs nothing, it already works, and the
+     Tiny VGA Pmod is bought. Same rule as PS/2 vs USB — a working path is not
+     removed until its replacement has been seen working on hardware.
+   - Still true and still the real work: a **~125 MHz DDR clock domain** and a
+     PLL, on a design whose post-route Fmax is 31.05 MHz. The video clock is
+     separate from the system clock, so this is a CDC question, not a timing
+     regression — but it is the part to be careful with.
+
+   ~~(superseded 2026-08-04 reasoning)~~ The VGA path is already complete —
+   `vga_text.sv` + `vga_timing.sv`, the `uo` VGA personality in `project.sv`,
+   and J2 constrained in `ulx3s.lpf` — so that decision cost zero new work.
+   Hardware was never the constraint either way: the monitor bought 2026-07-30
+   takes **both** VGA and HDMI.
 4. ~~**Caches.**~~ **DECIDED 2026-08-04 (user): an I-cache now, a D-cache
    later. IMPLEMENTED — `src/icache.sv`.**
    - **The number that settled it.** Walk `sdram_ctrl`'s FSM at 25 MHz, where

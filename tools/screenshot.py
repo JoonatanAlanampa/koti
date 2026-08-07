@@ -1,0 +1,142 @@
+# screenshot.py — render what koti's video output actually shows, from text.
+#
+#   python tools/screenshot.py session.txt out.png [--title "..."]
+#
+# ⚠️ THIS IS A RECONSTRUCTION, NOT A PHOTOGRAPH, and the README says so where it
+# uses the output. Nobody has a frame grabber on the GPDI link. What makes it
+# faithful rather than an artist's impression is that every pixel is decided by
+# three things that are all in this repo:
+#
+#   1. src/font_rom.svh   the ACTUAL glyph bitmaps the hardware scans out,
+#                         parsed here rather than redrawn
+#   2. src/vga_text.sv    the cell geometry and the character folding
+#   3. sw/console.c       the 40x30 wrap and scroll rules
+#
+# and the TEXT is the real UART capture from the machine, which carries exactly
+# the same bytes as the screen because SBI console_putchar calls putc_both().
+#
+# THREE THINGS THAT WOULD MAKE IT A LIE IF GOT WRONG, all taken from the RTL:
+#
+#   * LOWERCASE RENDERS AS UPPERCASE. vga_text.sv does
+#         chf = (ch[6:5] == 2'b11) ? ch - 8'h20 : ch
+#     and the ROM only holds 0x20..0x5F, so 0x60..0x7F fold onto 0x40..0x5F.
+#     koti's screen genuinely has no lowercase glyphs.
+#   * A CELL IS 16x16 SCREEN PIXELS, not 8x8: the scan-out indexes the font with
+#     x[3:1] and y[3:1], i.e. every font pixel is doubled. 40x16 = 640,
+#     30x16 = 480.
+#   * BIT 0 IS THE LEFTMOST PIXEL (font_rom.svh says so in its header), and row
+#     `fr` is g[fr*8 +: 8].
+#
+# Colours are the firmware's: VGA_COLOR = 0x3F = white on black (console.c).
+#
+# Copyright (c) 2026 Joonatan Alanampa
+# SPDX-License-Identifier: Apache-2.0
+import argparse
+import re
+from pathlib import Path
+
+from PIL import Image
+
+ROOT = Path(__file__).resolve().parent.parent
+FONT = ROOT / "src" / "font_rom.svh"
+
+COLS, ROWS = 40, 30
+CELL = 8            # font pixels
+SCALE = 2           # the hardware doubles every pixel: x[3:1], y[3:1]
+
+FG = (255, 255, 255)
+BG = (0, 0, 0)
+
+
+def load_font():
+    """Parse the generated font ROM. Not redrawn — the hardware's own bitmaps."""
+    text = FONT.read_text(encoding="utf-8", errors="replace")
+    glyphs = {}
+    for m in re.finditer(r"8'h([0-9A-Fa-f]{2}):\s*g\s*=\s*64'h([0-9A-Fa-f]{16});", text):
+        code = int(m.group(1), 16)
+        g = int(m.group(2), 16)
+        # font_row(ch, fr) = g[fr*8 +: 8]
+        glyphs[code] = [(g >> (fr * 8)) & 0xFF for fr in range(CELL)]
+    if not glyphs:
+        raise SystemExit(f"no glyphs parsed from {FONT}")
+    return glyphs
+
+
+def fold(ch):
+    """vga_text.sv: (ch[6:5] == 2'b11) ? ch - 0x20 : ch — lowercase -> uppercase."""
+    return ch - 0x20 if (ch >> 5) & 3 == 3 else ch
+
+
+def lay_out(text):
+    """sw/console.c's con_putc, exactly: \\n moves down, \\r homes, wrap at 40,
+    scroll at 30. Anything else is dropped rather than guessed at."""
+    buf = [[0x20] * COLS for _ in range(ROWS)]
+    x = y = 0
+
+    def scroll():
+        buf.pop(0)
+        buf.append([0x20] * COLS)
+
+    for chr_ in text:
+        c = ord(chr_)
+        if c == 0x0A:
+            x, y = 0, y + 1
+        elif c == 0x0D:
+            x = 0
+        elif 0x20 <= c < 0x80:
+            buf[y][x] = c
+            x += 1
+            if x == COLS:
+                x, y = 0, y + 1
+        else:
+            continue            # control bytes never reach the charbuf as glyphs
+        if y == ROWS:
+            scroll()
+            y = ROWS - 1
+    return buf
+
+
+def render(buf, glyphs, zoom):
+    w, h = COLS * CELL * SCALE, ROWS * CELL * SCALE
+    img = Image.new("RGB", (w, h), BG)
+    px = img.load()
+    for cy in range(ROWS):
+        for cx in range(COLS):
+            rows = glyphs.get(fold(buf[cy][cx]))
+            if not rows:
+                continue
+            for fr in range(CELL):
+                bits = rows[fr]
+                if not bits:
+                    continue
+                for fx in range(CELL):
+                    if (bits >> fx) & 1:        # bit 0 = leftmost
+                        x0 = (cx * CELL + fx) * SCALE
+                        y0 = (cy * CELL + fr) * SCALE
+                        for dy in range(SCALE):
+                            for dx in range(SCALE):
+                                px[x0 + dx, y0 + dy] = FG
+    if zoom > 1:
+        img = img.resize((w * zoom, h * zoom), Image.NEAREST)
+    return img
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Render koti's 40x30 text screen from captured console text.")
+    ap.add_argument("text", help="a file of console text (a real UART capture)")
+    ap.add_argument("out")
+    ap.add_argument("--zoom", type=int, default=1,
+                    help="integer upscale, NEAREST so pixels stay square")
+    args = ap.parse_args()
+
+    glyphs = load_font()
+    buf = lay_out(Path(args.text).read_text(encoding="utf-8", errors="replace"))
+    img = render(buf, glyphs, args.zoom)
+    img.save(args.out)
+    print(f"{args.out}: {img.width}x{img.height}, {len(glyphs)} glyphs from "
+          f"{FONT.relative_to(ROOT)}")
+
+
+if __name__ == "__main__":
+    main()

@@ -179,6 +179,16 @@ by hand. It is correct, and Linux reads `time` constantly — every
 `get_cycles()`. Each one is a full trap, save, decode and return. Fine for
 booting; worth measuring before blaming the SDRAM for a sluggish machine.
 
+✅ **MEASURED 2026-08-07, and it is not the problem: ~1%.** Counting the trace
+samples whose fetch address lands in the firmware's flash region (everything
+M-mode does, `rdtime` emulation and SBI calls together) gives **15 of 1642**
+samples on the `initramfs=init` boot and **12 of 1250** on the rootfs boot —
+0.9% and 1.0%. ⚠️ Twelve samples is a small count, so read this as "about one
+percent, and certainly not ten", not as three significant figures. For scale, the
+same traces put ~19% in the kernel's own timekeeping math (`timekeeping_advance`,
+`__ashldi3`, `__div64_32`) — the 64-bit arithmetic of a 32-bit kernel, which no
+firmware change would touch.
+
 ## Which OS — decided 2026-08-04: mainline sv32 Linux, and rung 1 is deleted
 
 `PLAN.md` had a three-rung ladder — xv6, then nommu uClinux, then sv32 Linux —
@@ -406,9 +416,17 @@ this had stopped between a fifth and a half of the way.
 
 ⏱️ 486M clocks at 25 MHz is **~19.5 seconds** to a shell on real hardware — of
 which ~10.8 s is kernel work before the console handover and ~5.6 s of that is
-inflating the initramfs. Two levers if that ever matters: embed the cpio
-uncompressed (`inflate_fast` was 27% of samples), or trim what populates sysfs.
-Neither is a defect; both are work.
+inflating the initramfs. Neither is a defect.
+
+⚠️ **And the obvious fix for the inflate is a net loss on hardware, so it was
+NOT done.** `CONFIG_INITRAMFS_COMPRESSION_NONE=y` would delete `inflate_fast`
+(27% of samples) and about 5.6 s of boot — while growing the `Image` from 3.95 MB
+to roughly 4.5 MB. The kernel has to get into SDRAM somehow, and today's only
+path is the 115200 UART (gap 3 above): **+540 KB there is +47 seconds of
+transfer to save 5.6 seconds of boot.** It becomes the right change the moment
+the kernel arrives by microSD or a fast programmer, and not before. The other
+lever — trimming what populates sysfs — costs nothing to transport, so that is
+the one to reach for first.
 
 ### The silence after the PLIC probe is not a hang
 

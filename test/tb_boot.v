@@ -114,7 +114,20 @@ module tb_boot ();
 
   always @(posedge clk) begin
     uart_prev <= uart_line;
-    if (!urx) begin
+    // Held out of reset, and that is for VERILATOR rather than for iverilog.
+    // The === guards below are enough under a 4-state simulator: uart_txd is x
+    // until the transmitter's reset branch drives it, and x === 1'b0 is false.
+    // Verilator is 2-STATE — every variable starts at 0 — so at the first
+    // posedge the line reads 0 against uart_prev's initial 1, which is exactly
+    // the falling edge this receiver is looking for. It would then clock in
+    // eight bits of the idle line and print one character out of nothing,
+    // before the machine has executed an instruction. That costs the
+    // "nothing was printed" verdict its meaning (nchars would already be 1)
+    // for the sake of a byte no hardware sent.
+    if (!rst_n) begin
+      uart_prev <= 1'b1;                           // idle, in both engines
+      urx       <= 1'b0;
+    end else if (!urx) begin
       // Falling edge = start bit. The === guards keep an x line during reset
       // from being read as a start.
       if (uart_prev === 1'b1 && uart_line === 1'b0) begin

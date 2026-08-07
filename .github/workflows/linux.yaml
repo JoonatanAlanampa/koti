@@ -136,6 +136,15 @@ on:
         default: 'no'
         type: choice
         options: ['no', 'yes']
+      # The same bench, the same image, a different engine — see the
+      # boot-verilator job. Opt-in and additive: it never replaces the iverilog
+      # `boot` job, which stays the regression gate for the three CPU defects
+      # only a real kernel has ever surfaced.
+      verilator:
+        description: 'boot: ALSO run the bench under Verilator (experimental, fast)'
+        default: 'no'
+        type: choice
+        options: ['no', 'yes']
 
 env:
   # Pinned, not "latest": the kernel config in sw/linux/koti_defconfig was
@@ -580,3 +589,169 @@ jobs:
         with:
           name: koti-boot-log
           path: boot.log
+
+  # boot-verilator — the same bench, the same image, the same plusargs, a
+  # different engine. ADDITIVE: it does not replace the `boot` job above.
+  #
+  # WHY. Reaching userspace is on the order of 1e8 clocks and iverilog does
+  # ~25-29k clocks/s on this runner, so the run that answers the one open
+  # question about this machine costs an hour and cannot be a push gate. That
+  # is what forced `full` to be a declared opt-in — an honest split, but a
+  # split that exists only because of simulator speed. test/tb_boot.v was
+  # written as plain Verilog for exactly this reason and says so in its own
+  # header: "so it runs under BOTH iverilog (for a short look) and Verilator
+  # (for a whole kernel boot, which is tens of millions of clocks and out of
+  # iverilog's reach)". The bench was ready; the workflow never used the other
+  # engine.
+  #
+  # WHY IT DOES NOT REPLACE THE IVERILOG JOB, and must not until it has earned
+  # it on the same image:
+  #  - Verilator is 2-STATE. Every x becomes 0, so a defect that shows up as x
+  #    propagation is invisible to it. That is not hypothetical here: the SDRAM
+  #    read-window bug (2026-08-03) was FOUND as an x arriving in the top half
+  #    of a captured word. An engine that cannot represent x cannot find that
+  #    class of bug, however fast it is.
+  #  - The `boot` job is the standing regression test for three CPU defects
+  #    (the AMO/page-walk livelock, the dropped-request arbiter deadlock, the
+  #    skipped second half of a straddling fetch pair). Swapping the engine
+  #    under a gate like that on the strength of a speed number would be a bad
+  #    trade at any speed.
+  # So this job's first purpose is a MEASUREMENT — how many clocks/s, and does
+  # it print the same boot as iverilog does — and it prints both.
+  boot-verilator:
+    needs: kernel
+    if: ${{ inputs.verilator == 'yes' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      # apt's verilator on ubuntu-24.04 is 5.020; the development host has
+      # 5.051 inside oss-cad-suite. Printed rather than pinned, because the
+      # version is the first thing to suspect if this job behaves differently
+      # from a local run — and a --lint-only pass of this exact command on
+      # 5.051 is what established, before any CI time was spent, that the
+      # bench's hierarchical references (uut.core.pc_d, uut.halted) resolve
+      # without --public-flat-rw and that nothing in src/ is unsupported.
+      - name: Install verilator
+        run: |
+          sudo apt-get update && sudo apt-get install -y verilator
+          verilator --version
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: koti-linux-Image
+          path: kimg
+
+      # -Wno-fatal, and it is not laziness: src/*.sv carries width warnings
+      # that predate this job (plic.sv's rdata replicates, vga_text.sv's line
+      # buffer index) and are not what this run is for. They are still PRINTED.
+      # A lint gate on src/ is a separate piece of work with its own commit.
+      #
+      # --timescale, because tb_boot.v carries `timescale 1ns/1ps and the src/
+      # modules do not, which Verilator reports as TIMESCALEMOD on every one of
+      # them. Setting the default for modules without one removes ~20 warnings
+      # that say nothing about this design.
+      - name: Build the boot bench with Verilator
+        run: |
+          verilator --binary --timing -j 0 -Wno-fatal \
+            --timescale 1ns/1ps \
+            -Isrc -DKOTI_FPGA -DKOTI_SIMMEM \
+            --top-module tb_boot -o tb_boot_vl \
+            src/*.sv test/sim_mem.sv test/tb_boot.v
+          ls -l obj_dir/tb_boot_vl
+
+      - name: Boot Linux under Verilator
+        env:
+          FULL: ${{ inputs.full || 'no' }}
+          MAXCLK: ${{ inputs.maxclk }}
+          QUIET: ${{ inputs.quiet }}
+        run: |
+          # pipefail for the same load-bearing reason as the iverilog job: a
+          # `run:` step with no `shell:` key is `bash -e {0}` WITHOUT it, so
+          # `sim | tee log` reports tee's status and every $fatal is discarded.
+          set -o pipefail
+          python3 test/mkhex.py sw/sbi/sbi_test.bin fw.hex
+          python3 test/mkhex.py kimg/arch/riscv/boot/Image kernel.hex
+          if [ "${FULL:-no}" = "yes" ]; then
+            : "${MAXCLK:=250000000}"; : "${QUIET:=240000000}"
+          else
+            : "${MAXCLK:=20000000}"; : "${QUIET:=8000000}"
+          fi
+          echo "full=${FULL:-no} maxclk=$MAXCLK quiet=$QUIET (verilator)"
+          t0=$(date +%s)
+          # `|| rc=$?` rather than letting the step die here, so that a run
+          # which ends in $fatal still REPORTS its speed. The whole point of
+          # this job is a number, and the runs most worth measuring are the
+          # ones that end badly.
+          rc=0
+          ./obj_dir/tb_boot_vl +flash=fw.hex +ram=kernel.hex +ramoff=1048576 \
+            +maxclk=$MAXCLK \
+            +quiet=$QUIET \
+            +trace=${{ inputs.trace || '0' }} \
+            +tfrom=${{ inputs.tfrom || '0' }} \
+            +tlen=${{ inputs.tlen || '0' }} 2>&1 | tee boot-vl.log || rc=$?
+          t1=$(date +%s)
+          # The number this job exists to produce. Printed even on a red run,
+          # because a run that failed for an engine reason still measured the
+          # engine.
+          echo "elapsed=$((t1 - t0))s" | tee -a speed.txt
+          clocks=$(sed -n 's/^--- \([0-9]*\) clocks.*/\1/p' boot-vl.log | tail -1)
+          if [ -n "$clocks" ] && [ "$((t1 - t0))" -gt 0 ]; then
+            echo "clocks=$clocks rate=$((clocks / (t1 - t0))) clocks/s" | tee -a speed.txt
+            echo "::notice::verilator: $clocks clocks in $((t1 - t0))s = \
+          $((clocks / (t1 - t0))) clocks/s. iverilog does ~25-29k clocks/s on \
+          this runner."
+          fi
+          exit $rc
+
+      # The same greps as the iverilog job, for a different reason: there they
+      # ask "did the machine boot", here they ask "does this engine print the
+      # SAME boot". A Verilator run that reaches userspace while dropping a
+      # subsystem's line has not agreed with iverilog, and the speed number
+      # would be worthless.
+      - name: It really booted, under Verilator too
+        if: ${{ (inputs.trace || '0') == '0' && (inputs.tlen || '0') == '0' }}
+        run: |
+          grep -q "Linux version 6.12" boot-vl.log
+          grep -q "Machine model: Koti-1" boot-vl.log
+          grep -q "SBI specification v0.2 detected" boot-vl.log
+          grep -q "Kernel command line: console=hvc0 earlycon=sbi" boot-vl.log
+          grep -q "Calibrating delay loop" boot-vl.log
+          grep -qE "Memory: .*available" boot-vl.log
+          grep -q "devtmpfs: initialized" boot-vl.log
+          grep -q "random: crng init done" boot-vl.log
+          echo "boot log: $(wc -l < boot-vl.log) lines"
+
+      # Same rule as the iverilog job: always print the verdict, only fail on a
+      # declared full run. A partial Verilator run is truncated on purpose and
+      # INCOMPLETE is its correct outcome.
+      - name: The bench's verdict, under Verilator
+        if: ${{ (inputs.trace || '0') == '0' && (inputs.tlen || '0') == '0' }}
+        env:
+          FULL: ${{ inputs.full || 'no' }}
+        run: |
+          verdict=$(grep -E '^--- tb_boot: (PASS|INCOMPLETE|FAIL)' boot-vl.log | tail -1)
+          echo "bench verdict (verilator): ${verdict:-<no verdict line at all>}"
+          case "$verdict" in
+            *PASS*)
+              echo "::notice::verilator: koti reached userspace: $verdict"
+              exit 0 ;;
+          esac
+          if [ "${FULL:-no}" != "yes" ]; then
+            echo "::notice::Partial boot (full=no) under Verilator. INCOMPLETE \
+          is its expected outcome; this run is a speed and agreement \
+          measurement, not a userspace claim."
+            exit 0
+          fi
+          echo "::error::verilator: koti did not reach userspace. \
+          ${verdict:-tb_boot printed no verdict.}"
+          tail -15 boot-vl.log
+          exit 1
+
+      - uses: actions/upload-artifact@v7
+        if: success() || failure()
+        with:
+          name: koti-boot-log-verilator
+          path: |
+            boot-vl.log
+            speed.txt

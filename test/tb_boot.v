@@ -258,9 +258,16 @@ module tb_boot ();
       // and the same address twice running means it is stuck.
       // +tfrom=<n> +tlen=<n>: every clock in a window, which is the only
       // resolution at which a stuck instruction explains itself.
+      // ⚠️ ONE string literal, not a concatenation of two. `$display({"a","b"},
+      // args)` is legal Verilog and iverilog formats it, but Verilator does NOT
+      // treat a concatenation as a format string — it prints the concatenated
+      // BITS as one enormous decimal number and then the arguments positionally,
+      // so the line becomes 190 digits of nothing and ktrace.py matches none of
+      // it. Measured on the local Verilator build: the trace was silently
+      // useless while the boot itself was correct, which is the worst way for a
+      // diagnostic to fail. Keep both trace formats on a single literal.
       if (tlen != 0 && clkcnt >= tfrom && clkcnt < tfrom + tlen)
-        $display({"[%0d] pc_d %h pc_e %h | d %h rq%b we%b ak%b rd %h | rmw%b",
-                  " amo_wr%b astall%b mstall%b pstall%b trap%b valid_m%b"},
+        $display("[%0d] pc_d %h pc_e %h | d %h rq%b we%b ak%b rd %h | rmw%b amo_wr%b astall%b mstall%b pstall%b trap%b valid_m%b",
                  clkcnt, uut.core.pc_d, uut.core.pc_e,
                  {uut.d_addr, 2'b00}, uut.d_req, uut.d_we, uut.d_ack,
                  // The DATA that came back, not just that something did. A
@@ -274,8 +281,8 @@ module tb_boot ();
                  uut.core.valid_m);
 
       if (trace != 0 && clkcnt % trace == 0) begin
-        $display({"[%0d] fetch %h if(rq%b ak%b) d %h (rq%b we%b ak%b) ",
-                  "m %h (rq%b ak%b) satp %h"},
+        // One literal — see the note on the per-clock trace above.
+        $display("[%0d] fetch %h if(rq%b ak%b) d %h (rq%b we%b ak%b) m %h (rq%b ak%b) satp %h",
                  clkcnt, {uut.if_addr, 2'b00}, uut.if_req, uut.if_ack,
                  {uut.d_addr, 2'b00}, uut.d_req, uut.d_we, uut.d_ack,
                  {uut.m_addr, 2'b00}, uut.m_req, uut.m_ack,

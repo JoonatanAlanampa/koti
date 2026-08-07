@@ -136,15 +136,26 @@ on:
         default: 'no'
         type: choice
         options: ['no', 'yes']
-      # The same bench, the same image, a different engine — see the
-      # boot-verilator job. Opt-in and additive: it never replaces the iverilog
-      # `boot` job, which stays the regression gate for the three CPU defects
-      # only a real kernel has ever surfaced.
-      verilator:
-        description: 'boot: ALSO run the bench under Verilator (experimental, fast)'
-        default: 'no'
+      # Which simulator boots the image. A push leaves this null and gets
+      # `iverilog` — the 4-state engine, unchanged, and still the regression
+      # gate for the three CPU defects only a real kernel has ever surfaced.
+      #
+      # `verilator` exists because it is ~55-70x faster (measured: 1.6-2.0M
+      # clocks/s against iverilog's 25-29k on the same runner and the same
+      # image), which is what makes a full boot to userspace a 2-3 minute job
+      # instead of an hour. It is also 2-STATE, so it cannot see an
+      # x-propagation defect — the class the SDRAM read-window bug belonged to.
+      # Hence a choice rather than a swap: `both` runs the two engines on one
+      # image, which is how they get compared.
+      #
+      # ⚠️ `iverilog` + `full=yes` is on the order of 2.4 HOURS. That is the
+      # combination to avoid unless the 4-state answer is specifically what is
+      # wanted; `verilator` + `full=yes` answers the same question in minutes.
+      engine:
+        description: 'boot: which simulator (iverilog = 4-state gate, verilator = ~60x faster)'
+        default: 'iverilog'
         type: choice
-        options: ['no', 'yes']
+        options: ['iverilog', 'verilator', 'both']
 
 env:
   # Pinned, not "latest": the kernel config in sw/linux/koti_defconfig was
@@ -404,6 +415,9 @@ jobs:
   # arbiter3.sv), neither of which any existing suite could reach.
   boot:
     needs: kernel
+    # Null on a push, which is the point: a push always gets the 4-state engine
+    # and this job's behaviour is unchanged by the `engine` input existing.
+    if: ${{ inputs.engine == null || inputs.engine == '' || inputs.engine == 'iverilog' || inputs.engine == 'both' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -620,7 +634,7 @@ jobs:
   # it print the same boot as iverilog does — and it prints both.
   boot-verilator:
     needs: kernel
-    if: ${{ inputs.verilator == 'yes' }}
+    if: ${{ inputs.engine == 'verilator' || inputs.engine == 'both' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6

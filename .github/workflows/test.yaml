@@ -113,7 +113,7 @@ jobs:
       - name: ULX3S harness with the fabric boot flash
         run: |
           mkdir -p fpga/ulx3s/build
-          python3 fpga/ulx3s/mkflashhex.py sw/hello.bin fpga/ulx3s/build/flash.hex
+          python3 fpga/ulx3s/mkflashhex.py sw/bringup.bin fpga/ulx3s/build/flash.hex
           iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_FLASH_BRAM \
             -o tb_fpga_bram.vvp src/*.sv fpga/ulx3s/bram_flash.sv \
             fpga/ulx3s/ulx3s_top.sv test/sdram_model.sv test/tb_fpga_bram.v \

@@ -19,13 +19,25 @@ def run(cmd):
 
 
 def main():
-    run([GCC, "-march=rv32ima_zicsr", "-mabi=ilp32", "-O2",
-         "-nostdlib", "-nostartfiles", "-static",
-         "-T", "link.ld", "-o", "hello.elf",
-         "crt0.S", "console.c", "hello.c"])
-    run([OBJCOPY, "-O", "binary", "hello.elf", "hello.bin"])
-    size = (SW / "hello.bin").stat().st_size
-    print(f"hello.bin: {size} bytes")
+    # Two images, and the second is not a variant of the first.
+    #
+    # hello.bin  the demo: banner, then con_init() -> VGA_EN, which MOVES the
+    #            UART to uo[6] and turns uo[0] into an RGB bit.
+    # bringup.bin  the diagnostic: prints forever, never touches video. The
+    #            banner is 5 ms after reset and programming the FPGA takes 60
+    #            seconds, so hello.bin's banner cannot be read without a human
+    #            pressing BTN0 at the right instant. This one needs no window.
+    #
+    # bringup.c deliberately does NOT link console.c: not needing the video
+    # driver is half of what makes it a diagnostic.
+    for name, srcs in (("hello", ["crt0.S", "console.c", "hello.c"]),
+                       ("bringup", ["crt0.S", "bringup.c"])):
+        run([GCC, "-march=rv32ima_zicsr", "-mabi=ilp32", "-O2",
+             "-nostdlib", "-nostartfiles", "-static",
+             "-T", "link.ld", "-o", f"{name}.elf", *srcs])
+        run([OBJCOPY, "-O", "binary", f"{name}.elf", f"{name}.bin"])
+        size = (SW / f"{name}.bin").stat().st_size
+        print(f"{name}.bin: {size} bytes")
 
 
 if __name__ == "__main__":

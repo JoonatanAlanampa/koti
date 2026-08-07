@@ -97,7 +97,7 @@ jobs:
         if: matrix.variant == 'bram'
         run: |
           mkdir -p fpga/ulx3s/build
-          python3 fpga/ulx3s/mkflashhex.py sw/hello.bin fpga/ulx3s/build/flash.hex
+          python3 fpga/ulx3s/mkflashhex.py sw/bringup.bin fpga/ulx3s/build/flash.hex
           wc -l fpga/ulx3s/build/flash.hex
 
       - name: synthesis (yosys)

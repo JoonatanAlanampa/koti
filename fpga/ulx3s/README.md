@@ -82,6 +82,76 @@ you are really checking here is that the board configures and nothing is stuck.
 outcome later, but at this step it means the fetch path returned garbage that
 decoded to a halt, which is what you would expect with no flash present.
 
+## 2b. Boot with NO Pmod at all — the fabric flash (2026-08-07)
+
+**This is the path that works today, and steps 3-5 below are the Pmod path that
+cannot be walked until the Cartridge Pmod arrives.** J1 is bare holes; koti boots
+by XIP from flash address 0; so without a memory Pmod the CPU cannot fetch one
+instruction and step 2 above is as far as the board can be taken.
+
+`fpga/ulx3s/bram_flash.sv` is a QSPI *device* in fabric on the same eight `uio`
+wires the Pmod would use, backed by the 85F's own block RAM. `qspi_ctrl`,
+`arbiter3` and `icache` are untouched and all still run — and the RAM half of the
+map still goes to the **real SDRAM controller**, so this boot exercises the
+onboard part, `RD_ADV` included.
+
+```
+gh run download <id> -n koti-fpga-bram        # the matrix builds pmod AND bram
+fujprog fpga/ulx3s/build/koti-bram.bit        # SRAM, volatile
+```
+
+⛔ **`fujprog`, not `openFPGALoader`.** fujprog drives the FTDI through its stock
+driver; openFPGALoader wants a WinUSB bind (Zadig), and that bind **destroys the
+COM port koti's console is**. Do not run Zadig on this board.
+
+The image baked in is **`sw/bringup.bin`**, which prints **forever** — and that
+is the point. With **SW3 off** (UART on `uo[0]`), open the port whenever and
+expect:
+
+```
+Koti-1: hello from my own SoC #0 0123456789 abcdefghijklmnopqrstuvwxyz
+Koti-1: hello from my own SoC #1 0123456789 abcdefghijklmnopqrstuvwxyz
+```
+
+about every 0.4 s, with LED0..LED5 counting the lines so there is a liveness
+signal that needs no serial port at all.
+
+⚠️ **Why not `sw/hello.bin` — a trap this cost an evening to learn.** hello.c
+prints its banner ~5.4 ms after reset and then calls `con_init()`, which sets
+VGA_EN, which **moves the UART to `uo[6]` and turns `uo[0]` into an RGB bit**.
+Programming the FPGA takes ~60 s, so no host process can open the port in time
+to read that banner: reading it needs a human pressing **BTN0** at the right
+instant. And what the port *does* see afterwards is the **video raster decoded as
+serial noise** — measured 2026-08-07, **219,995 bytes of mojibake in five
+minutes**, from a machine that was working perfectly. If you see a flood of
+garbage on this board, suspect VGA_EN before suspecting the UART.
+
+`bringup.bin` never touches video, so the three outcomes stay distinguishable:
+silence = the CPU is not running, mojibake = the divisor or the pin is wrong,
+clean lines = the whole path works.
+
+The port must be closed while flashing — the FT231X is one device shared by JTAG
+and the UART. ⚠️ `fujprog -t`'s terminal output does not survive stdout
+redirection, so it is no use to a script.
+
+- **SW1 does nothing in this build.** It is the J1 seating strap and there is no
+  seating to be wrong about. Not broken.
+- **`led[7]` is the flash's `bad_cmd`**, not `uo[7]`, in this variant only. Lit
+  means the model saw an opcode it does not implement (it does 03h; nothing in
+  `sw/` ever enables quad) — that is "the memory refused a command", which is a
+  very different bug from "the SoC is broken".
+- The image is baked in at build time by `fpga/ulx3s/mkflashhex.py`, so changing
+  it is a one-word edit in the builders plus a rebuild. 32 KB of fabric flash, so
+  `sw/hello.bin` (597 B) and `sw/sbi/sbi_test.bin` (26012 B) both fit — the
+  latter is what step 6 wants.
+- ⚠️ **It cannot hold a kernel.** 32 KB against a 3.95 MB `Image`. Linux on
+  hardware needs a real transport — see the note under step 4.
+
+Simulated end to end before it was ever flashed, and it runs on the development
+host in seconds: `test/tb_fpga_bram.v` (plain Verilog, no cocotb) boots this
+exact configuration through `ulx3s_top` with `sdram_model` on the SDRAM pins and
+asserts the banner. CI runs it in `test.yaml`.
+
 ## 3. Memory Pmod on J1, orientation strap
 
 **J1 = gp/gn 0-3.** Either the Cartridge Pmod (`../../../pmod-cartridge`,
@@ -127,6 +197,17 @@ and step 6 uses it.
 > When kernel images outgrow a UART link, console's `sd_loader` is the answer —
 > it copies from microSD into cartridge flash while the SoC is held in reset.
 > That is a port rather than a write, and it is Linux-ladder work, not bring-up.
+
+> **A second candidate, found 2026-08-07: the board's OWN SPI flash.**
+> `fujprog -j flash -f ADDR -T img <file>` writes a raw image at an arbitrary
+> flash offset, so the onboard part could hold both the firmware and a 3.95 MB
+> kernel with no Pmod and no SD controller. It needs two things this repo does
+> not have yet: the flash pins in `ulx3s.lpf` (they are not among the current 79),
+> and something to add the offset to the address `qspi_ctrl` shifts out, since
+> the FPGA bitstream itself occupies the bottom ~2 MB. The address is serial and
+> MSB-first, so "force one bit high as it passes" is a small FSM rather than an
+> adder. Unverified: whether the ECP5 releases the config-flash pins to fabric on
+> this board, and the flash's size.
 
 ## 5. The serial console
 

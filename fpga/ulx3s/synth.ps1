@@ -47,7 +47,7 @@ $extra = ""
 if ($Bram) {
     $src   = "fpga/ulx3s/bram_flash.sv " + $src
     $extra = "-DKOTI_FLASH_BRAM"
-    python fpga\ulx3s\mkflashhex.py sw\hello.bin fpga\ulx3s\build\flash.hex
+    python fpga\ulx3s\mkflashhex.py sw\bringup.bin fpga\ulx3s\build\flash.hex
     if ($LASTEXITCODE -ne 0) { throw "mkflashhex.py failed - the image does not fit" }
 }
 

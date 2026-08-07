@@ -57,6 +57,14 @@ static void half_period(void) {
         ;
 }
 
+// Long enough for a pin to settle through the board's own RC before it is read
+// back — a few microseconds, which is many orders of magnitude more than the
+// pin needs and costs nothing at one reading per pass.
+static void settle(void) {
+    for (volatile int i = 0; i < 200; i++)
+        ;
+}
+
 // Chip select is held across whole commands, so it lives outside the bit loop.
 // Starts deselected: asserting CS at a card before the 74 idle clocks is exactly
 // what the spec says not to do.
@@ -167,6 +175,37 @@ int main(void) {
             send_cmd(8, 0x1AAu, 0x87u);
             g_cs = SD_RAW_CSN;
             spi_byte(0xFF);
+        }
+
+        // ---- pin continuity ----------------------------------------------
+        // Only meaningful when the card did not answer, and only safe with the
+        // slot empty, so it is printed with that caveat attached rather than
+        // silently. An INPUT that reads 0 cannot distinguish a silent card from
+        // a pin that is not the card's MISO; an OUTPUT can.
+        if (r1 != 0x01u) {
+            unsigned base = SD_RAW_EN | SD_RAW_CSN | SD_RAW_MOSI | SD_RAW_MISO_OE;
+            SD_RAW = base | SD_RAW_MISO_HI;
+            settle();
+            unsigned hi = SD_RAW & SD_RAW_MISO;
+            SD_RAW = base;                       // drive low
+            settle();
+            unsigned lo = SD_RAW & SD_RAW_MISO;
+            SD_RAW = SD_RAW_EN | SD_RAW_CSN | SD_RAW_MOSI;   // release
+
+            uart_puts("  pin test (valid only with an EMPTY slot): driven 1 -> ");
+            uart_putc(hi ? '1' : '0');
+            uart_puts(", driven 0 -> ");
+            uart_putc(lo ? '1' : '0');
+            uart_puts("\r\n  verdict: ");
+            if (hi && !lo)
+                uart_puts("the pin FOLLOWS — J3 is real and free, so the fault "
+                          "is contact with the card\r\n");
+            else if (!hi)
+                uart_puts("THE PIN CANNOT REACH 1 — held low by something, or "
+                          "the site is wrong. No card will ever answer here\r\n");
+            else
+                uart_puts("stuck HIGH — the pin is not following the driver "
+                          "either way\r\n");
         }
 
         // Hand the pins back, so a following image or a reset finds the engine in

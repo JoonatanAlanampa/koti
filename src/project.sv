@@ -64,6 +64,12 @@ module tt_um_koti (
     output wire        sd_sck,
     output wire        sd_mosi,
     input  wire        sd_miso,
+    // Bring-up only: let software drive the MISO pin, to tell "the card is
+    // silent" apart from "this pin is not the card's MISO". Both read 0 on a
+    // board whose resting level is low, which is exactly what koti met on
+    // 2026-08-07. See the SD_RAW block in src/sd_ctrl.sv.
+    output wire        sd_miso_drv,
+    output wire        sd_miso_oe,
 `endif
     input  wire       ena,      // always 1 when the design is powered, so you can ignore it
     input  wire       clk,      // clock
@@ -299,7 +305,8 @@ module tt_um_koti (
       .clk(clk), .rst(rst),
       .sel(sd_sel_i && !sd_ack), .we(d_we), .reg_a(d_addr[1:0]),
       .wdata(d_wdata), .rdata(sd_rdata),
-      .sd_cs_n(sd_cs_n), .sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso)
+      .sd_cs_n(sd_cs_n), .sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso),
+      .sd_miso_drv(sd_miso_drv), .sd_miso_oe(sd_miso_oe)
   );
 `else
   // No pins on silicon, so the window reads as zero rather than as x. An x here

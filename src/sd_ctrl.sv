@@ -89,7 +89,13 @@ module sd_ctrl #(
     output logic       sd_cs_n,
     output logic       sd_sck,
     output logic       sd_mosi,
-    input  wire        sd_miso
+    input  wire        sd_miso,
+
+    // Bring-up only: drive the MISO pin from the FPGA, to find out whether it
+    // can be pulled high AT ALL. ⚠️ Contention if a card is driving — the slot
+    // must be empty. See the SD_RAW notes above.
+    output logic       sd_miso_drv,
+    output logic       sd_miso_oe
 );
 
   // ---------------------------------------------------------- the SD engine
@@ -115,6 +121,19 @@ module sd_ctrl #(
   // Idle-SPI reset values (CS high, MOSI high, clock low) so that coming out of
   // reset with raw_en already set cannot assert chip select at a card.
   logic raw_en, raw_cs_n, raw_sck, raw_mosi;
+
+  // The pin-continuity half of the hatch. Needed because an INPUT that reads 0
+  // is ambiguous in a way an output never is: on a board where the resting
+  // level is already low, "the card is silent" and "this pin is not the card's
+  // MISO" produce the identical byte. Driving the pin high and reading it back
+  // separates them — 1 means the pin is real and free, so the fault is contact;
+  // 0 means the pin cannot be pulled up at all, so it is shorted or the site is
+  // wrong and no amount of card-fiddling will ever help.
+  // Gated on `raw_en` so a stray write cannot start driving a pin the engine is
+  // using, and `oe` is cleared by reset.
+  logic raw_miso_oe, raw_miso_drv;
+  assign sd_miso_oe  = raw_en && raw_miso_oe;
+  assign sd_miso_drv = raw_miso_drv;
 
   // TWO flops on MISO before software sees it. The card drives this pin from its
   // own oscillator, so it is asynchronous to `clk` by construction; sampling it
@@ -187,6 +206,8 @@ module sd_ctrl #(
           raw_cs_n   <= 1'b1;          // deselected
           raw_sck    <= 1'b0;
           raw_mosi   <= 1'b1;          // MOSI idles high, as SPI mode 0 wants
+          raw_miso_oe  <= 1'b0;        // never drive an input out of reset
+          raw_miso_drv <= 1'b0;
       end else begin
           // Sticky, and cleared by STARTING work rather than by reading the
           // status: a flag cleared by its own read cannot be polled twice, and
@@ -218,6 +239,8 @@ module sd_ctrl #(
                       raw_cs_n <= wdata[1];
                       raw_sck  <= wdata[2];
                       raw_mosi <= wdata[3];
+                      raw_miso_oe  <= wdata[4];
+                      raw_miso_drv <= wdata[5];
                   end
                   default: ;
               endcase
@@ -243,7 +266,8 @@ module sd_ctrl #(
           // back too: if they read as what was written, the MMIO path is proven
           // in the same breath, and a stuck MISO cannot be blamed on a write
           // that silently went nowhere.
-          2'd3:    rmux = {27'd0, raw_mosi, raw_sck, raw_cs_n, raw_en, miso_sync};
+          2'd3:    rmux = {25'd0, raw_miso_drv, raw_miso_oe,
+                           raw_mosi, raw_sck, raw_cs_n, raw_en, miso_sync};
           default: rmux = 32'd0;
       endcase
 

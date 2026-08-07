@@ -204,6 +204,8 @@ module ulx3s_top (
       .sd_sck     (soc_sd_sck),
       .sd_mosi    (soc_sd_mosi),
       .sd_miso    (sd_d[0]),
+      .sd_miso_drv(soc_sd_miso_drv),
+      .sd_miso_oe (soc_sd_miso_oe),
 `endif
       .ena     (1'b1),
       .clk     (clk_25mhz),
@@ -213,12 +215,17 @@ module ulx3s_top (
   // ------------------------------------------------------- onboard microSD
 `ifdef KOTI_FPGA
   wire soc_sd_cs_n, soc_sd_sck, soc_sd_mosi;
+  wire soc_sd_miso_drv, soc_sd_miso_oe;
   assign sd_clk  = soc_sd_sck;
   assign sd_cmd  = soc_sd_mosi;
   assign sd_d[3] = soc_sd_cs_n;
   assign sd_d[2] = 1'b1;
   assign sd_d[1] = 1'b1;
-  assign sd_d[0] = 1'bz;                  // MISO: the card drives this
+  // MISO: the card drives this, EXCEPT during the bring-up continuity test,
+  // where software drives it to find out whether the pin can reach a 1 at all.
+  // `soc_sd_miso_oe` is 0 unless SD_RAW explicitly asks, and is cleared by
+  // reset, so the normal build is bit-identical in behaviour to `1'bz`.
+  assign sd_d[0] = soc_sd_miso_oe ? soc_sd_miso_drv : 1'bz;
 `else
   // The QSPI build has no SD peripheral, so park the bus rather than leave it
   // floating: CS high means the card ignores the pins entirely.

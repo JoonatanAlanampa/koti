@@ -54,6 +54,12 @@
 #define SD_RAW_SCK   0x4u             // w: clock
 #define SD_RAW_MOSI  0x8u             // w: data out
 #define SD_RAW_MISO  0x1u             // r: the card's data line, live off the pin
+// Pin-continuity test. ⚠️ THE SLOT MUST BE EMPTY — this drives a pin the card
+// also drives. It answers the one question an input cannot: whether the pin can
+// be pulled to 1 at all. On a board whose resting level is low, "the card is
+// silent" and "this is not the card's MISO" are the same reading otherwise.
+#define SD_RAW_MISO_OE 0x10u          // w: drive MISO from the FPGA
+#define SD_RAW_MISO_HI 0x20u          // w: the value to drive
 
 static inline void uart_putc(char c) {
     while (UART & 1)

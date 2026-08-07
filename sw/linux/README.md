@@ -373,17 +373,42 @@ holes let that happen:
 
 Both are fixed. What the badge means now is explicit:
 
-| run | budget | what a green badge claims |
+| job | budget | what a green badge claims |
 |---|---|---|
-| push, or `full=no` | 20M clocks | the kernel starts, times itself, allocates, and brings up `devtmpfs` — and **nothing about userspace**. `INCOMPLETE` is its correct outcome and it says so in a notice. |
-| `full=yes` | 250M clocks, quiet window ~off | koti reached userspace: a shell from `sw/linux/rootfs.cpio` printed the marker `test/tb_boot.v` waits for. |
+| `boot` (iverilog), push or `full=no` | 20M clocks | the kernel starts, times itself, allocates, and brings up `devtmpfs` — and **nothing about userspace**. `INCOMPLETE` is its correct outcome and it says so in a notice. |
+| `boot-verilator`, push (`full` defaults to **yes** here) | 700M clocks, quiet window ~off | **koti reached userspace**: busybox from `sw/linux/rootfs.cpio` printed the marker `test/tb_boot.v` waits for. |
+| `boot` (iverilog) + `full=yes` | 250M clocks | ⚠️ a spot-check of 4-state behaviour, and it **cannot** reach userspace in that budget. The job warns. |
 
-They are separate because reaching a shell is on the order of 1e8 clocks —
-upwards of an hour of iverilog at the ~25k clocks/s a runner manages — and a
-push cannot spend that on every change to `src/`. The push job's real value is
-regression cover for the two CPU defects it found (the AMO/page-walk livelock
-and the dropped-request deadlock), and both show up in the first few million
-clocks.
+The two jobs deliberately disagree about what silence means, and that is the
+design rather than an inconsistency: the iverilog job cannot afford a full boot,
+so no declaration means "partial"; the Verilator job can, so no declaration
+means "full". A push gets both — 4-state regression cover for the three CPU
+defects only a real kernel has surfaced, and a *required* userspace claim.
+
+### ✅ koti reaches userspace — 2026-08-07
+
+```
+[   10.843467] printk: legacy console [hvc0] enabled
+[   12.453167] Run /init as init process
+Starting syslogd: OK ... Starting klogd: OK ... Running sysctl: OK
+Linux buildroot 6.12.0 #1 riscv32 GNU/Linux
+MemTotal:           8868 kB
+koti: userspace is alive
+--- tb_boot: PASS (userspace ran)
+```
+
+**486,454,208 clocks** with the committed rootfs; **164,201,083** with
+`initramfs=init`. In simulation, on the ULX3S machine configuration
+(`KOTI_FPGA`, I-cache, 16 MB window) with `test/sim_mem.sv` in place of the
+memory controllers. Nothing was broken and nothing was fixed to get here: **the
+budget was simply less than half of what the boot needs**, and every run before
+this had stopped between a fifth and a half of the way.
+
+⏱️ 486M clocks at 25 MHz is **~19.5 seconds** to a shell on real hardware — of
+which ~10.8 s is kernel work before the console handover and ~5.6 s of that is
+inflating the initramfs. Two levers if that ever matters: embed the cpio
+uncompressed (`inflate_fast` was 27% of samples), or trim what populates sysfs.
+Neither is a defect; both are work.
 
 ### The silence after the PLIC probe is not a hang
 
@@ -403,6 +428,22 @@ initcall #126, and the next fourteen (`simple_pm_bus`, three clk drivers,
 nothing at all. ⚠️ The real rootfs is roughly forty times the archive that trace
 was taken on, so the silence gets **longer**. Any `quiet` window tuned against
 the one-program initramfs is tuned against the easy case.
+
+**2026-08-07 — the silence was measured end to end, and it ENDS.** A fourth
+"koti is stuck" went the same way as the first three. Traced across the whole
+250M window (Verilator, `+trace=200000`, `ktrace.py`):
+
+| window | what dominates | reading |
+|---|---|---|
+| real rootfs, 27M→250M | `inflate_fast` **27%, 69 distinct addresses**, `_parse_integer_limit`, `memcpy`/`memset` | gunzipping and unpacking the 1.14 MiB initramfs |
+| `initramfs=init`, 27M→164M | `kernfs_name_hash`, `__kernfs_new_node`, `kernfs_add_one`, `idr_get_free`, `vsnprintf`/`number`/`strlen` | **populating sysfs** — thousands of nodes, no hotspot |
+
+Both profiles are flat and spread over many addresses per symbol, which is the
+signature of slow-but-walking. Running the same image to 2e9 clocks ended
+`PASS` at 486M. ⛔ So the honest statement is not "koti hangs after the PLIC
+probe" and never was; it is **"a 25 MHz RV32 machine takes about five simulated
+seconds to build its sysfs tree and another five to inflate its initramfs, and
+prints nothing while it does either"**.
 
 ### The rootfs can burn the whole clock budget without anything looking wrong
 
@@ -433,6 +474,20 @@ Both cost an hour to discover by running, and nothing to check by grepping.
 **1. `Waiting for interface` — the stall above.** Fixed in the fragment, but the
 committed `rootfs.cpio` only carries the fix once the `userspace` workflow has
 been re-run and both files re-committed.
+
+**2. ✅ CLOSED 2026-08-07 — userspace DOES have a console.** The line below is
+in both full boot logs, and the handover with it:
+
+```
+[   10.843467] printk: legacy console [hvc0] enabled
+[   10.849811] printk: legacy bootconsole [sbi0] disabled
+```
+
+`hvc_sbi_init` binds, `/dev/console` works, and userspace output arrives on the
+UART — which is *how* the marker was read. Keep the paragraphs below anyway:
+they say what to look for if this ever regresses, and the reasoning is what
+made it a grep instead of a debugging session. **The original text follows,
+unchanged except for this note.**
 
 **2. `printk: legacy console [hvc0] enabled` — did userspace have a console at
 all?** This is the next most likely failure and it has not been ruled out.
@@ -481,6 +536,59 @@ py -3 tools/ktrace.py img/System.map boot.log --from <clock>
 The reproduction is exact only while `src/`, `sw/sbi/` and `test/sim_mem.sv` are
 unchanged since that run; check with `git diff --stat <sha> HEAD -- src sw/sbi
 test/sim_mem.sv` before trusting a clock number to match.
+
+### Booting under Verilator — 60x, and how to get it on this host
+
+`test/tb_boot.v` is plain Verilog so it runs under both engines. Measured on the
+same runner and the same image: **iverilog 25–29k clocks/s, Verilator 1.6–2.0M**.
+A full boot to userspace is ~7 minutes in CI (`engine=verilator`, the default on
+a push) and **91 seconds on the development host**, against 4.7 hours of
+iverilog. Every diagnosis in this file was found with that loop.
+
+In CI it is `apt install verilator` (5.020 on `ubuntu-24.04`) and:
+
+```sh
+verilator --binary --timing -j 0 -Wno-fatal --timescale 1ns/1ps \
+  -Isrc -DKOTI_FPGA -DKOTI_SIMMEM --top-module tb_boot -o tb_boot_vl \
+  src/*.sv test/sim_mem.sv test/tb_boot.v
+```
+
+**On this Windows host there is no C++ compiler, so the build is split.**
+oss-cad-suite ships Verilator 5.051 in `share/verilator` but no g++; WSL has
+g++ 13 but no Verilator. Generate on one side, compile on the other:
+
+```sh
+# Git Bash. NOT PowerShell: environment.ps1 sets VERILATOR_ROOT to
+# /yosyshq/share/verilator, which does not exist, and a PowerShell $HOME with a
+# space in it reaches verilator as C:\Users\Joonatan\ Alanampa.
+export VERILATOR_ROOT="$HOME/opt/oss-cad-suite/share/verilator"
+"$HOME/opt/oss-cad-suite/bin/verilator_bin.exe" --cc --exe --main --timing \
+  -Wno-fatal --timescale 1ns/1ps -Isrc -DKOTI_FPGA -DKOTI_SIMMEM \
+  --top-module tb_boot -o tb_boot_vl --Mdir <objdir> \
+  src/*.sv test/sim_mem.sv test/tb_boot.v
+
+# WSL. The include/ and bin/ of share/verilator have to be copied somewhere
+# without a space in the path, and *.d MUST go: they contain Windows paths, and
+# make reads the `C:` in one as a target/pattern separator —
+# "multiple target patterns. Stop."
+rm -f *.d && make -f Vtb_boot.mk VERILATOR_ROOT=$HOME/claude-work/vlroot -j4
+./tb_boot_vl +flash=fw.hex +ram=kernel.hex +ramoff=1048576 \
+  +maxclk=700000000 +quiet=690000000
+```
+
+⚠️ **Three things about this bench and Verilator, all paid for:**
+
+1. **A comment whose first word is "verilator" is a pragma**, case
+   insensitively. `// Verilator is 2-state …` is `%Error: Unknown verilator
+   comment` — a hard error in 5.020 that `-Wno-fatal` does not cover.
+2. **A concatenated format string silently stops being a format.**
+   `$display({"a %h", " b %h"}, x, y)` formats under iverilog; Verilator prints
+   the concatenation as one enormous decimal and then the arguments
+   positionally, so `+trace` output becomes unparseable while the boot itself
+   stays correct. Keep every `$display` format on one literal.
+3. **Verilator is 2-state**, so it cannot see an x-propagation defect — the
+   class the SDRAM read-window bug belonged to. It is a fast second opinion,
+   not a replacement for the iverilog job.
 
 ## A simulation limit to remember before trusting a sim boot
 

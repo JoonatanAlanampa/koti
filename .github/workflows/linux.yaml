@@ -131,8 +131,14 @@ on:
       # dropped-request deadlock), which show up in the first few million
       # clocks. So a push runs the cheap partial boot and SAYS SO; the
       # userspace claim is checked by a run that asks for it.
+      # ✅ 2026-08-07: this is no longer the slow, rare, remembered-by-somebody
+      # run it was written as. Under Verilator a full boot to userspace is 700M
+      # clocks in about seven minutes, so `boot-verilator` DEFAULTS to full on a
+      # push and the userspace claim is a standing gate. The input stays for the
+      # cases that want the opposite: a deliberately partial run, or a full run
+      # under the 4-state engine (~4.7 hours — see `engine`).
       full:
-        description: 'boot: run to userspace and require it (slow, ~1h+)'
+        description: 'boot: run to userspace and require it (verilator ~7 min; iverilog ~4.7 h)'
         default: 'no'
         type: choice
         options: ['no', 'yes']
@@ -469,8 +475,20 @@ jobs:
           # Blank inputs resolve here rather than in the `default:` above,
           # because the budget depends on what the run is FOR and a default
           # cannot see that. A push (inputs null) gets the cheap partial boot.
+          # ⚠️ 250M is NOT enough to reach userspace and is deliberately left
+          # here anyway. Measured 2026-08-07: the marker arrives at 486,454,208
+          # clocks with the real rootfs, so a 250M full run under THIS engine
+          # ends INCOMPLETE having done nothing wrong. At ~29k clocks/s a real
+          # 700M full boot is ~6.7 HOURS, past the 6-hour job limit, and even
+          # 486M is ~4.7 hours. There is no honest default that both fits a job
+          # and reaches a shell on iverilog — which is exactly why
+          # boot-verilator exists. Pass +maxclk explicitly if a 4-state run to
+          # userspace is genuinely what is wanted, and expect to wait.
           if [ "${FULL:-no}" = "yes" ]; then
             : "${MAXCLK:=250000000}"; : "${QUIET:=240000000}"
+            echo "::warning::full=yes under iverilog: 250M clocks cannot reach \
+          userspace (the marker is at ~486M) and 486M is ~4.7 hours at this \
+          engine's speed. Use engine=verilator for the userspace claim."
           else
             : "${MAXCLK:=20000000}"; : "${QUIET:=8000000}"
           fi
@@ -634,7 +652,12 @@ jobs:
   # it print the same boot as iverilog does — and it prints both.
   boot-verilator:
     needs: kernel
-    if: ${{ inputs.engine == 'verilator' || inputs.engine == 'both' }}
+    # Runs on a push (inputs null) as well as on an explicit request, and on a
+    # push it runs FULL — see the FULL default in the boot step. That is the
+    # whole point of the speed: "koti reaches userspace" stops being a claim
+    # someone remembers to check and becomes a gate that fails when it stops
+    # being true.
+    if: ${{ inputs.engine == null || inputs.engine == '' || inputs.engine == 'verilator' || inputs.engine == 'both' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -676,7 +699,12 @@ jobs:
 
       - name: Boot Linux under Verilator
         env:
-          FULL: ${{ inputs.full || 'no' }}
+          # 'yes' rather than 'no' when nothing is declared, and it is the one
+          # place these two jobs deliberately DISAGREE. The iverilog job cannot
+          # afford a full boot, so its silence means "partial"; this one can, so
+          # its silence means "full". A push therefore gets both a 4-state
+          # partial regression run and a required userspace claim.
+          FULL: ${{ inputs.full || 'yes' }}
           MAXCLK: ${{ inputs.maxclk }}
           QUIET: ${{ inputs.quiet }}
         run: |
@@ -686,8 +714,25 @@ jobs:
           set -o pipefail
           python3 test/mkhex.py sw/sbi/sbi_test.bin fw.hex
           python3 test/mkhex.py kimg/arch/riscv/boot/Image kernel.hex
+          # 700M, from a measurement rather than a guess: the marker arrives at
+          # 486,454,208 clocks with the committed rootfs (2026-08-07, and the
+          # same boot reached it at 164,201,083 with initramfs=init). 700M is
+          # ~1.4x that, about seven minutes here, and the simulation is
+          # DETERMINISTIC for a given image, so the margin covers a growing
+          # rootfs rather than run-to-run noise.
+          #
+          # "For a given image" is exact, not a hedge: the same rootfs built by
+          # two different kernel builds gave 486,271,575 clocks in CI and
+          # 486,454,208 on the development host — 0.04% apart, because the
+          # kernel stamps its build date into the image and that moves what gets
+          # compressed. Expect the last few digits to differ across builds and
+          # nothing more.
+          #
+          # ⚠️ If this ever reports "clock limit reached", the first question is
+          # whether the rootfs got bigger, not whether the machine broke. Raise
+          # the budget deliberately and say what made it cost more.
           if [ "${FULL:-no}" = "yes" ]; then
-            : "${MAXCLK:=250000000}"; : "${QUIET:=240000000}"
+            : "${MAXCLK:=700000000}"; : "${QUIET:=690000000}"
           else
             : "${MAXCLK:=20000000}"; : "${QUIET:=8000000}"
           fi

@@ -10,9 +10,9 @@ Not a demo that boots once for a photograph. You log in and use it.
 
 ![koti's screen, at a shell](docs/img/koti-shell.png)
 
-> Reconstructed, not photographed — see [About these images](#about-these-images).
-> That is koti's own 40x30 text console: real capture, real font ROM, and yes,
-> the hardware really does render everything in uppercase.
+> koti's 40x30 text console. Rendered from a real session using the hardware's
+> own font ROM rather than photographed — which is also why it is all uppercase:
+> the ROM holds `0x20..0x5F`, so the display has no lowercase glyphs.
 
 ## What works, on real hardware
 
@@ -44,8 +44,6 @@ genuinely read those bytes back off the card.
 
 ## What does not work yet
 
-Kept honest and specific, because a README that only lists wins is not useful:
-
 - **No networking.** The kernel is built without `CONFIG_NET`, so `ip`, `ping`
   and `wget` exist as busybox applets and cannot work.
 - **`root=` is still the initramfs**, deliberately. The block driver is new;
@@ -61,6 +59,8 @@ Kept honest and specific, because a README that only lists wins is not useful:
 ## Boot, end to end
 
 ![koti booting Linux](docs/img/koti-boot.png)
+
+> The tail of a real boot, rendered the same way.
 
 The SBI firmware lives in 32 KB of block RAM inside the FPGA and the kernel is
 3.95 MB, so the kernel had nowhere to live — that gap was the last thing between
@@ -112,27 +112,6 @@ Two that will otherwise waste an evening:
   vendored rather than written
 - `tools/` — card writer, screen renderer, ROM generators
 - `test/` — the benches; `.github/workflows/` runs them all on every push
-
-## About these images
-
-**The screenshots are reconstructions, not photographs.** There is no frame
-grabber on the HDMI link, so nothing here has seen koti's monitor.
-
-What makes them faithful rather than an impression is that every pixel is
-decided by things in this repository, and the text is a real UART capture from
-the machine — which carries exactly the same bytes as the screen, because
-`putc_both()` writes both:
-
-- `src/font_rom.svh` — the actual glyph bitmaps the hardware scans out, parsed
-  by `tools/screenshot.py` rather than redrawn
-- `src/vga_text.sv` — the cell geometry, and the character folding that makes
-  lowercase come out uppercase (the ROM holds only `0x20..0x5F`)
-- `sw/console.c` — the 40x30 wrap and scroll rules
-
-Regenerate with `python tools/screenshot.py <captured text> out.png`.
-
-If you want a photograph, point a camera at the monitor — that is the one thing
-this repository cannot produce for you.
 
 ## Licence
 

@@ -44,6 +44,16 @@ SOURCES = [
     SRC_DIR / "sd_ctrl.sv",
     VENDOR_DIR / "sd_spi.sv",
     VENDOR_DIR / "spi_master.sv",
+    # GPDI/HDMI. sim_prims.v supplies behavioural EHXPLLL and ODDRX1F so this
+    # suite can still elaborate ulx3s_top — it is the only suite covering the
+    # header permutations, the orientation straps and the UART source mux, so
+    # losing it to add HDMI would be a bad trade.
+    # ⛔ sim_prims.v lives in test/ and must NEVER reach yosys: it would shadow
+    # the real ECP5 hard blocks and put soft logic where a PLL belongs.
+    VENDOR_DIR / "tmds_encoder.sv",
+    VENDOR_DIR / "dvi_tx.sv",
+    VENDOR_DIR / "pll_25_125.v",
+    TEST_DIR / "sim_prims.v",
     FPGA_DIR / "ulx3s_top.sv",
     TEST_DIR / "sdram_model.sv",
     TEST_DIR / "tb_fpga.v",

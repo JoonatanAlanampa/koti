@@ -63,6 +63,13 @@ EXPECTED = {
     # onboard microSD, used as SPI (sites from console's validated file)
     "sd_clk": "H2", "sd_cmd": "J1",
     "sd_d[0]": "J3", "sd_d[1]": "H1", "sd_d[2]": "K1", "sd_d[3]": "K2",
+    # GPDI/HDMI, koti's standard video output (user directive 2026-08-07).
+    # Byte-identical between ulx3s_v20.lpf and the v3.1.x prototype file, and
+    # console drove a real monitor through these exact sites on 2026-08-06.
+    # Only the _p pins exist as ports: LVCMOS33D drives each _n automatically,
+    # and declaring the _n would be a second driver on the same pair.
+    "gpdi_dp[0]": "A16", "gpdi_dp[1]": "A14",
+    "gpdi_dp[2]": "A12", "gpdi_dp[3]": "A17",
     # J1 = gp/gn[0..3]
     "pmod_gp[0]": "B11", "pmod_gp[1]": "A10", "pmod_gp[2]": "A9",
     "pmod_gp[3]": "B9",

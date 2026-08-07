@@ -60,5 +60,13 @@ vendor/spi_master.sv
 vendor/sd_spi.sv
 src/sd_ctrl.sv
 
+# GPDI/HDMI, koti's standard video output (user directive 2026-08-07). Vendored
+# VERBATIM from console, which drove this exact board's HDMI on 2026-08-06.
+# tmds_encoder must precede dvi_tx, which instantiates it. pll_25_125 is an
+# ecppll-generated EHXPLLL wrapper and is harness-only, like ulx3s_top.
+vendor/tmds_encoder.sv
+vendor/dvi_tx.sv
+vendor/pll_25_125.v
+
 # ---- harness only: no silicon pin exists for any of this ----
 fpga/ulx3s/ulx3s_top.sv

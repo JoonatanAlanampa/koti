@@ -70,6 +70,17 @@ module tt_um_koti (
     // 2026-08-07. See the SD_RAW block in src/sd_ctrl.sv.
     output wire        sd_miso_drv,
     output wire        sd_miso_oe,
+    // Raw video for the harness's HDMI encoder. FPGA-only for the usual
+    // reason — a TinyTapeout tile has no pin to spare — but ALSO because the
+    // `uo` VGA personality genuinely cannot drive an HDMI link: it packs RGB222
+    // and the two syncs into eight pins and carries **no `de`**, and a TMDS
+    // encoder needs to know where the visible box is. console had to build a
+    // timing replica to re-derive it; koti's vga_timing already produces
+    // `active`, so it is exported here instead and the replica is unnecessary.
+    output wire [5:0]  video_rgb,      // RGB222, {R1,R0,G1,G0,B1,B0}
+    output wire        video_hs,       // active low
+    output wire        video_vs,       // active low
+    output wire        video_de,       // high inside the visible box
 `endif
     input  wire       ena,      // always 1 when the design is powered, so you can ignore it
     input  wire       clk,      // clock
@@ -525,6 +536,18 @@ module tt_um_koti (
   assign uo_vga[7] = vt_hs;                         // HSync
 
   assign uo_out = vga_en ? uo_vga : {led[5:0], halted, uart_txd};
+
+`ifdef KOTI_FPGA
+  // The same pixels the VGA personality packs into `uo`, unpacked. Deliberately
+  // NOT gated on `vga_en`: the HDMI link must keep running whatever the SoC is
+  // doing, so the monitor holds its lock instead of resyncing every time
+  // software touches VGA_CTRL — the blanking interval is still generated, so a
+  // disabled console shows a black raster rather than "no signal".
+  assign video_rgb = rgb;
+  assign video_hs  = vt_hs;
+  assign video_vs  = vt_vs;
+  assign video_de  = vt_act;
+`endif
 
   assign kb_irq = kb_avail;
 

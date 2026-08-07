@@ -49,6 +49,13 @@ module ulx3s_top (
     output logic [7:0] led,
     output logic       ftdi_rxd,
 
+    // ---- GPDI / HDMI, koti's standard video output (user directive 2026-08-07)
+    // Only the _p pin of each pair is a port: IO_TYPE=LVCMOS33D makes the ECP5
+    // drive the paired _n site with the complement, so declaring gpdi_dn too
+    // would be a SECOND DRIVER on the same pair. [0]=Blue [1]=Green [2]=Red
+    // [3]=Clock, which is dvi_tx.sv's order.
+    output wire  [3:0] gpdi_dp,
+
     // ---- onboard microSD, in SPI mode ----
     // The 4-bit SD bus used as SPI, exactly as console drives it on this board:
     // sd_clk = SCK, sd_cmd = MOSI, sd_d[3] = CS, sd_d[0] = MISO (driven by the
@@ -206,6 +213,10 @@ module ulx3s_top (
       .sd_miso    (sd_d[0]),
       .sd_miso_drv(soc_sd_miso_drv),
       .sd_miso_oe (soc_sd_miso_oe),
+      .video_rgb  (video_rgb),
+      .video_hs   (video_hs),
+      .video_vs   (video_vs),
+      .video_de   (video_de),
 `endif
       .ena     (1'b1),
       .clk     (clk_25mhz),
@@ -353,6 +364,51 @@ module ulx3s_top (
     if (!rst_n)                 frames <= '0;
     else if (vsync && !vsync_q) frames <= frames + 8'd1;
   end
+
+  // ------------------------------------------------------------ GPDI / HDMI
+  // koti's standard video output (user directive 2026-08-07). The encoder trio
+  // is vendored VERBATIM from console, which drove this exact board's HDMI on
+  // 2026-08-06 — see vendor/README.md. A TMDS encoder is not where original
+  // work belongs.
+`ifdef KOTI_FPGA
+  wire [5:0] video_rgb;
+  wire       video_hs, video_vs, video_de;
+
+  wire clk_shift, pll_lock;
+  pll_25_125 pll (.clkin(clk_25mhz), .clkout0(clk_shift), .locked(pll_lock));
+
+  // Reset out of a FLOP in the shift domain, never straight off a pad through a
+  // LUT: console measured 5.3 ns on one such hop across this die, against an
+  // 8 ns period at 125 MHz. Deliberately NOT gated on the SoC's reset — the
+  // video link keeps running while the CPU is held in reset, so the monitor
+  // holds its lock rather than resyncing on every BTN0.
+  logic [1:0] rst_sh_q;
+  always_ff @(posedge clk_shift) rst_sh_q <= {rst_sh_q[0], !pll_lock};
+  wire rst_shift = rst_sh_q[1];
+
+  // RGB222 -> 8 bits per channel by REPLICATION, not zero-padding: {2{2'b11}}
+  // is 0xFF so full-scale stays full-scale, whereas 2'b11 << 6 would cap white
+  // at 0xC0 and make the whole picture dim. dvi_tx takes the top bits it needs.
+  wire [1:0] px_r = video_rgb[5:4];
+  wire [1:0] px_g = video_rgb[3:2];
+  wire [1:0] px_b = video_rgb[1:0];
+
+  wire dvi_phase_err;
+  dvi_tx dvi (
+      .clk_pixel (clk_25mhz),
+      .clk_shift (clk_shift),
+      .rst_shift (rst_shift),
+      .r ({4{px_r}}), .g ({4{px_g}}), .b ({4{px_b}}),
+      .hsync (video_hs), .vsync (video_vs), .de (video_de),
+      .gpdi_dp (gpdi_dp), .phase_err (dvi_phase_err)
+  );
+`else
+  // The QSPI/ASIC-shaped build has no video pipeline exported, so park the pairs
+  // rather than leave them floating.
+  assign gpdi_dp = 4'b0000;
+  wire   dvi_phase_err = 1'b0;
+  wire   pll_lock      = 1'b0;
+`endif
 
   // SW4 off = the raw chip personality, which is the view you want at first
   // power: LED0 flickers with UART traffic, LED1 is HALTED (a solid LED1

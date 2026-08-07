@@ -129,6 +129,23 @@ IOBUF PORT "sd_d[1]" PULLMODE=UP   IO_TYPE=LVCMOS33 DRIVE=4;
 IOBUF PORT "sd_d[2]" PULLMODE=UP   IO_TYPE=LVCMOS33 DRIVE=4;
 IOBUF PORT "sd_d[3]" PULLMODE=UP   IO_TYPE=LVCMOS33 DRIVE=4;
 
+# ---- GPDI / HDMI: koti's standard video output (user directive 2026-08-07) ----
+# Sites are byte-identical between upstream ulx3s_v20.lpf and the v3.1.x
+# prototype file (console diffed them 2026-08-06), so they are correct on the
+# v3.1.8 board on the bench — and console drove a real monitor through them.
+#
+# ⚠️ ONLY the _p pin of each pair is declared. IO_TYPE=LVCMOS33D makes the ECP5
+# drive the paired _n site with the complement automatically; declaring
+# gpdi_dn as well would put a SECOND DRIVER on the same differential pair.
+LOCATE COMP "gpdi_dp[0]" SITE "A16";
+LOCATE COMP "gpdi_dp[1]" SITE "A14";
+LOCATE COMP "gpdi_dp[2]" SITE "A12";
+LOCATE COMP "gpdi_dp[3]" SITE "A17";
+IOBUF PORT "gpdi_dp[0]" IO_TYPE=LVCMOS33D DRIVE=4;
+IOBUF PORT "gpdi_dp[1]" IO_TYPE=LVCMOS33D DRIVE=4;
+IOBUF PORT "gpdi_dp[2]" IO_TYPE=LVCMOS33D DRIVE=4;
+IOBUF PORT "gpdi_dp[3]" IO_TYPE=LVCMOS33D DRIVE=4;
+
 # ---- J1: QSPI memory Pmod (bidirectional) ----
 # Carries uio[7:0] = CS0, SD0, SD1, SCK, SD2, SD3, CS1, CS2 in TT order.
 # The Cartridge Pmod fits here: it is a TT QSPI Pmod with CS2 (uio[7])

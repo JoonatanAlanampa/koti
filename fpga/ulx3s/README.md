@@ -98,7 +98,8 @@ listed as unproven:
 | --- | --- |
 | any wire, connector or signal integrity | ✅ the whole flash+SDRAM+UART path, on the board |
 | that this board is a v2.0 | ✅ it is a **PCB v3.1.8**, and it does not matter: the five signals that moved are all `wifi_*` |
-| **`RD_ADV`** (README step 4 of PLAN, and the top bring-up risk in the project) | ✅ **correct as built.** `uart_puts` is a call, so `ra` goes to the SDRAM stack and comes back on every line; a read window off by one clock is *silent on writes and corrupts every read*, so there would have been no second line. ⚠️ Read **timing** is proven; **address coverage is not** — walking the 32 MB is still work |
+| **`RD_ADV`** (the top bring-up risk in the project) | ✅ **correct as built.** `uart_puts` is a call, so `ra` goes to the SDRAM stack and comes back on every line; a read window off by one clock is *silent on writes and corrupts every read*, so there would have been no second line |
+| the SDRAM's **address decode** | ✅ **`sw/memtest.bin`, four consecutive clean passes**: a 16 MB walk with an address-derived pattern, plus a byte/halfword lane test for the `be`/DQM path. All 4M words hold what was written, so nothing in the row/bank/column decode aliases |
 | the font glyphs | ❌ still needs the Tiny VGA Pmod (step 6) |
 
 

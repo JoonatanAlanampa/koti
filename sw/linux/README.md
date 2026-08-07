@@ -611,11 +611,19 @@ rm -f *.d && make -f Vtb_boot.mk VERILATOR_ROOT=$HOME/claude-work/vlroot -j4
 ## A simulation limit to remember before trusting a sim boot
 
 `test/sdram_model.sv` decodes `{ba[1:0], row[6:0], col[8:0]}` — seven of the
-part's thirteen row bits — so it models about 512 KB and **aliases** beyond
-that. No current test notices, because they all work low in RAM. A kernel
-loaded at `0x01400000` would alias catastrophically in that model, so rung 1
-cannot be booted in the existing SDRAM bench without widening it first. The
-real part is fine; the bench is the limit.
+part's thirteen row bits — so its array is 512 KB and it **aliases** beyond that.
+A kernel loaded at `0x01400000` would alias catastrophically in it, so rung 1
+cannot be booted in the existing SDRAM bench without widening the model first.
+The real part is fine; the bench is the limit.
+
+⚠️ **Corrected 2026-08-07: the CONTIGUOUS span is 128 KB, not 512 KB**, and the
+difference matters to anyone choosing a test window. `sdram_ctrl` maps
+`row = addr[20:8]` on a 32-bit-**word** address, so the row[7] the model drops is
+word bit 15 = **byte offset 0x20000**. 512 KB is the array's total size across
+all four banks, and the bank bits only change at byte offset 8 MB — so a
+contiguous walk aliases after 128 KB. Measured, not derived after the fact:
+`sw/memtest.c`'s first run over a 256 KB window reported every word wrong, each
+`got` being the pattern of `address + 0x20000`.
 
 ## The boot handoff, for whoever writes it
 

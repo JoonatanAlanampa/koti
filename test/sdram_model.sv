@@ -13,6 +13,13 @@
 // Reduced address space on purpose: {bank, row[6:0], col} rather than the full
 // 24 bits, so the array is 512 KB instead of 32 MB. Wide enough to exercise all
 // four banks and 128 distinct rows, which is what a mapping bug shows up in.
+//
+// ⚠️ 512 KB is the ARRAY, not the contiguous span. sdram_ctrl maps
+// row = addr[20:8] on a 32-bit-word address, so the row[7] dropped here is word
+// bit 15 = BYTE offset 0x20000: a contiguous walk aliases after 128 KB, and the
+// bank bits that make up the rest of the 512 KB only change at byte offset 8 MB.
+// Choose a test window inside 128 KB or expect every word to come back as the
+// value written 128 KB higher (measured by sw/memtest.c, 2026-08-07).
 
 `default_nettype none
 `timescale 1ns / 1ps

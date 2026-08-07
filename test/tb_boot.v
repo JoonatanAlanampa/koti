@@ -117,8 +117,8 @@ module tb_boot ();
     // Held out of reset, and that is for VERILATOR rather than for iverilog.
     // The === guards below are enough under a 4-state simulator: uart_txd is x
     // until the transmitter's reset branch drives it, and x === 1'b0 is false.
-    // Verilator is 2-STATE — every variable starts at 0 — so at the first
-    // posedge the line reads 0 against uart_prev's initial 1, which is exactly
+    // The other engine is 2-STATE — every variable starts at 0 — so at the
+    // first posedge the line reads 0 against uart_prev's initial 1, which is
     // the falling edge this receiver is looking for. It would then clock in
     // eight bits of the idle line and print one character out of nothing,
     // before the machine has executed an instruction. That costs the

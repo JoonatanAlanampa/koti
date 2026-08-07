@@ -214,5 +214,30 @@
 			interrupts-extended = <&cpu0_intc 9>;
 			riscv,ndev = <4>;
 		};
+
+		/*
+		 * The microSD controller — src/sd_ctrl.sv, four registers over a
+		 * vendored SPI-mode engine. NOT an SDHCI and not an MMC host, so
+		 * mainline has no driver for it; sw/linux/koti_sd.c is the one it
+		 * gets. The same is true of the PS/2 word and the USB core, and was
+		 * planned for rather than discovered.
+		 *
+		 * NO INTERRUPT PROPERTY, because sd_ctrl has no IRQ line. The driver
+		 * polls SD_DONE. Adding `interrupts` here would describe hardware
+		 * that does not exist and the driver would wait forever for it.
+		 *
+		 * `koti,sectors` exists because the engine never reads the card's
+		 * CSD, so nothing on the machine can ask how big the card is — it
+		 * has to be declared. 61071360 sectors = the 29.12 GB card on the
+		 * bench (31.3 GB nominal).
+		 * ⚠️ TOO SMALL only hides the tail of the card; TOO LARGE lets the
+		 * partition scanner read past the end and report IO errors on a
+		 * perfectly healthy card. Shrink rather than guess upward.
+		 */
+		sd0: mmc@50000 {
+			compatible = "koti,sd-1";
+			reg = <0x00050000 0x00010000>;
+			koti,sectors = <61071360>;
+		};
 	};
 };

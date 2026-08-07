@@ -91,6 +91,92 @@ def cmd_build(args):
     print(f"  header at LBA {HDR_LBA}, image at LBA {HDR_LBA + 1}")
 
 
+# The card layout, once it carries a filesystem as well as a kernel.
+#
+#   LBA 0                MBR
+#   LBA 2048   .. 18431   p1, type 0xDA (non-FS data) — the raw kernel area
+#                         that sw/sbi/sdboot.c reads. 8 MiB, against a 3.95 MB
+#                         kernel, so it can grow without moving p2.
+#   LBA 18432  .. end     p2, type 0x83 (Linux) — the filesystem
+#
+# ⚠️ p1 IS NOT A FILESYSTEM AND MUST NEVER BE MOUNTED. Type 0xDA says so, which
+# is what stops a helpful desktop OS from offering to format it. The firmware
+# reads it by absolute LBA and knows nothing about partitions; the table exists
+# so that LINUX can find p2 and so that nothing else claims those sectors.
+KERNEL_PART_LBA = 2048
+KERNEL_PART_SECTORS = 16384          # 8 MiB
+ROOTFS_PART_LBA = KERNEL_PART_LBA + KERNEL_PART_SECTORS
+
+
+def chs_max():
+    """The 'too big for CHS' sentinel, which every modern tool writes."""
+    return bytes([0xFE, 0xFF, 0xFF])
+
+
+def mbr_entry(boot, ptype, start, count):
+    return (bytes([0x80 if boot else 0x00]) + chs_max()
+            + bytes([ptype]) + chs_max()
+            + struct.pack("<II", start, count))
+
+
+def cmd_partition(args):
+    with open_disk(args.disk, write=False) as f:
+        f.seek(0)
+        old = f.read(BLOCK)
+    total = args.sectors
+
+    if not args.yes:
+        raise SystemExit(
+            f"refusing to write a partition table to disk {args.disk} without "
+            "--yes.\nThis REPLACES the partition table; run `inspect` first.")
+
+    # Bootstrap area left as zeros: nothing BIOS-boots this card, and a
+    # nonzero one would be code nobody wrote.
+    mbr = bytearray(BLOCK)
+    mbr[446:462] = mbr_entry(False, 0xDA, KERNEL_PART_LBA, KERNEL_PART_SECTORS)
+    mbr[462:478] = mbr_entry(False, 0x83, ROOTFS_PART_LBA,
+                             total - ROOTFS_PART_LBA)
+    mbr[510:512] = b"\x55\xaa"
+
+    with open_disk(args.disk, write=True) as f:
+        f.seek(0)
+        f.write(bytes(mbr))
+        f.flush()
+        f.seek(0)
+        back = f.read(BLOCK)
+    if back != bytes(mbr):
+        raise SystemExit("READ-BACK MISMATCH writing the MBR — do not trust "
+                         "this card.")
+
+    print(f"disk {args.disk}: partition table written and verified")
+    print(f"  p1 type 0xDA  LBA {KERNEL_PART_LBA} .. "
+          f"{KERNEL_PART_LBA + KERNEL_PART_SECTORS - 1}  (raw kernel, 8 MiB)")
+    print(f"  p2 type 0x83  LBA {ROOTFS_PART_LBA} .. {total - 1}  "
+          f"({(total - ROOTFS_PART_LBA) * BLOCK / 1e9:.2f} GB, filesystem)")
+    if old[510:512] == b"\x55\xaa":
+        print("  (replaced an existing table)")
+
+
+def cmd_writefs(args):
+    """Write a filesystem image into p2."""
+    img = Path(args.image).read_bytes()
+    if len(img) % BLOCK:
+        raise SystemExit(f"{args.image} is not a multiple of {BLOCK} bytes")
+    if not args.yes:
+        raise SystemExit("refusing to write without --yes")
+
+    with open_disk(args.disk, write=True) as f:
+        f.seek(ROOTFS_PART_LBA * BLOCK)
+        f.write(img)
+        f.flush()
+        f.seek(ROOTFS_PART_LBA * BLOCK)
+        back = f.read(len(img))
+    if back != img:
+        raise SystemExit("READ-BACK MISMATCH writing the filesystem.")
+    print(f"wrote and verified {len(img)//BLOCK} blocks at LBA "
+          f"{ROOTFS_PART_LBA} (p2) on disk {args.disk}")
+
+
 def cmd_fake(args):
     """A deterministic stand-in kernel, so CI can exercise the transport.
 
@@ -208,6 +294,20 @@ def main():
     w.add_argument("--disk", type=int, required=True)
     w.add_argument("--yes", action="store_true")
     w.set_defaults(func=cmd_write)
+
+    pt = sub.add_parser("partition", help="write the MBR (NEEDS ADMIN)")
+    pt.add_argument("--disk", type=int, required=True)
+    pt.add_argument("--sectors", type=int, required=True,
+                    help="total sectors on the card; must match koti,sectors "
+                         "in koti.dts")
+    pt.add_argument("--yes", action="store_true")
+    pt.set_defaults(func=cmd_partition)
+
+    wf = sub.add_parser("writefs", help="write a filesystem into p2 (NEEDS ADMIN)")
+    wf.add_argument("image")
+    wf.add_argument("--disk", type=int, required=True)
+    wf.add_argument("--yes", action="store_true")
+    wf.set_defaults(func=cmd_writefs)
 
     fk = sub.add_parser("fake", help="generate a deterministic test kernel")
     fk.add_argument("--blocks", type=int, default=8)

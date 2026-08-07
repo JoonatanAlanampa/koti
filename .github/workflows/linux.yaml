@@ -259,6 +259,30 @@ jobs:
       - name: Unpack
         run: tar xf linux-${KVER}.tar.xz
 
+      # koti's microSD block driver. Mainline has no driver for src/sd_ctrl.sv —
+      # it is not an SDHCI and not an MMC host — and it has to be BUILT IN
+      # rather than a module, because it is the device a root filesystem would
+      # live on.
+      #
+      # Injected by COPY + APPEND rather than as a patch, deliberately: a
+      # context patch breaks on every kernel version bump and fails in a way
+      # that looks like the driver's fault, while appending a Kconfig stanza and
+      # one Makefile line survives. `depends on BLOCK` rather than BLK_DEV
+      # because the append lands after `endif # BLK_DEV`, so the symbol is
+      # outside that block and must state its own dependency.
+      - name: Add koti's microSD block driver
+        working-directory: linux-${{ env.KVER }}
+        run: |
+          cp ../sw/linux/koti_sd.c drivers/block/
+          # printf rather than a heredoc: Kconfig needs column-0 keywords and
+          # tabs, and YAML would force the heredoc body to be indented. The
+          # obvious fix — sed -i to un-indent afterwards — would rewrite the
+          # WHOLE file, not just the part just appended.
+          printf '\nconfig KOTI_SD\n\tbool "Koti-1 microSD block driver"\n\tdepends on BLOCK\n\thelp\n\t  Block driver for koti'"'"'s microSD controller (src/sd_ctrl.sv).\n\t  Read-only: the SPI engine implements CMD17 and has no CMD24,\n\t  so the hardware cannot write a block at all.\n' >> drivers/block/Kconfig
+          printf 'obj-$(CONFIG_KOTI_SD)\t+= koti_sd.o\n' >> drivers/block/Makefile
+          tail -12 drivers/block/Kconfig
+          grep -n koti drivers/block/Makefile
+
       # The initramfs, which since 2026-08-06 is a REAL userspace by default:
       # sw/linux/rootfs.cpio, a 1.14 MiB static-musl busybox built by the
       # `userspace` workflow and committed like sw/linux/koti.dtb and

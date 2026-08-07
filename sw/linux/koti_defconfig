@@ -120,10 +120,33 @@ CONFIG_EXPERT=y
 CONFIG_CRYPTO=y
 CONFIG_CRYPTO_MANAGER_DISABLE_TESTS=y
 
+# ---- the microSD, as a block device -----------------------------------------
+# koti's own driver (sw/linux/koti_sd.c, injected into drivers/block by the
+# workflow). Built IN, not a module: it is the device a root filesystem lives
+# on, and a module cannot be loaded from a filesystem that is not mounted yet.
+#
+# ⛔ READ-ONLY, and that is HARDWARE, not a driver limitation: the SPI engine
+# implements CMD17 and has no CMD24, so no block can be written at all. The
+# disk is marked read-only so a write fails cleanly as EROFS instead of
+# appearing to succeed. Making it writable is a gateware change first.
+CONFIG_KOTI_SD=y
+# ext2 rather than ext4: ext4 is several hundred KB of code on a machine with
+# 8.6 MB of RAM, and its journal is useless on a device that cannot write.
+# ext2 is small, and unlike squashfs it can become writable later WITHOUT
+# reformatting the card — which matters, because that is the plan.
+CONFIG_EXT2_FS=y
+# The partition scanner. The card carries an MBR: one partition for the raw
+# kernel image the firmware loads at LBA 2048, one for the filesystem.
+CONFIG_PARTITION_ADVANCED=y
+CONFIG_MSDOS_PARTITION=y
+
 # ---- what init needs --------------------------------------------------------
-# The rootfs is a built-in initramfs: nothing on this machine can hold a real
-# one yet (ladder item 7, microSD). INITRAMFS_SOURCE is set by the workflow,
-# not here, because it is an absolute path in the build environment.
+# The rootfs is STILL a built-in initramfs, on purpose. The microSD block
+# driver above is new and unproven on hardware, and switching `root=` to it
+# before it has been seen working would turn a driver bug into a machine that
+# does not boot at all. The safe order is: mount it by hand from the shell
+# first, then move root onto it. INITRAMFS_SOURCE is set by the workflow, not
+# here, because it is an absolute path in the build environment.
 CONFIG_BLK_DEV_INITRD=y
 CONFIG_BINFMT_ELF=y
 CONFIG_DEVTMPFS=y

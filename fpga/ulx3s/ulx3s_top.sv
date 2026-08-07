@@ -170,10 +170,57 @@ module ulx3s_top (
     assign pmod_gn[n] = uio_oe[gni] ? uio_out[gni] : 1'bz;
   end endgenerate
 
+  wire [7:0] uio_in_pmod;
   generate for (genvar k = 0; k < 8; k++) begin : g_cart_in
-    assign uio_in[k] = ((k < 4) ^ cart_map_b) ? pmod_gp[3 - (k & 3)]
-                                              : pmod_gn[3 - (k & 3)];
+    assign uio_in_pmod[k] = ((k < 4) ^ cart_map_b) ? pmod_gp[3 - (k & 3)]
+                                                   : pmod_gn[3 - (k & 3)];
   end endgenerate
+
+`ifdef KOTI_FLASH_BRAM
+  // ---------------------------------------- the boot flash, in fabric
+  // With nothing on J1 the CPU cannot fetch, so the board could only ever be
+  // checked as far as "it configures". `bram_flash` is a QSPI device on these
+  // same wires, backed by block RAM — see that file for why it answers on the
+  // negedge. The controller, the arbiter and the I-cache are untouched and all
+  // still run on hardware; only the part on the other end of the bus is ours.
+  //
+  // The J1 OUTPUT drivers above are left exactly as they are, deliberately:
+  // CS, SCK and MOSI keep reaching the header, so the transaction can be put on
+  // a scope, and a real Pmod could even be seated alongside — its MISO would
+  // land on a pin nothing reads. Only the INPUT side is redirected.
+  //
+  // ⚠️ SW1 (the seating strap) therefore does NOTHING in this build. It is not
+  // broken; there is no seating to be wrong about.
+  wire fabric_miso, flash_bad_cmd;
+
+  bram_flash #(
+      .FLASH_BYTES(32768),
+      // Overridable so a bench can point at its own image without editing this
+      // file; the default is what the builders generate.
+`ifdef KOTI_FLASH_HEX
+      .IMAGE_HEX  (`KOTI_FLASH_HEX)
+`else
+      .IMAGE_HEX  ("fpga/ulx3s/build/flash.hex")
+`endif
+  ) flash (
+      .clk     (clk_25mhz),
+      .rst     (!rst_n),
+      .cs_n    (uio_out[0]),
+      .sck     (uio_out[3]),
+      .mosi    (uio_out[1]),
+      .miso    (fabric_miso),
+      .bad_cmd (flash_bad_cmd)
+  );
+
+  // Everything the controller does not read is tied low rather than left to the
+  // header: an unseated Pmod is a floating wire, and x reaching sd_in poisons
+  // the shift register the CPU is about to execute out of.
+  assign uio_in = {5'b0, fabric_miso, 2'b0};   // only uio[2] = sd_in[1] is read
+
+  wire _unused_pmod_in = &{1'b0, uio_in_pmod};
+`else
+  assign uio_in = uio_in_pmod;
+`endif
 
   // ------------------------------------------------------- J2: VGA Pmod
   // Same 2x6 geometry, so the same algebra — outputs only. In VGA mode uo
@@ -212,7 +259,16 @@ module ulx3s_top (
   // power: LED0 flickers with UART traffic, LED1 is HALTED (a solid LED1
   // means the CPU hit EBREAK), LED2-7 are the software-driven LEDs at
   // MMIO 0x10000. SW4 on = the frame counter.
+`ifdef KOTI_FLASH_BRAM
+  // led[7] carries the fabric flash's `bad_cmd` instead of uo[7]. uo[7] is the
+  // top LED bit in headless mode and carries nothing a person watches, whereas
+  // an opcode this model does not implement is the difference between "the SoC
+  // is broken" and "the memory refused a command" — and that is worth a lamp
+  // rather than a waveform. With SW4 on, the frame counter still wins.
+  always_comb led = sw[3] ? frames : {flash_bad_cmd, uo_out[6:0]};
+`else
   always_comb led = sw[3] ? frames : uo_out;
+`endif
 
 endmodule
 

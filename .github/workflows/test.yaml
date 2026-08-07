@@ -99,6 +99,28 @@ jobs:
           python run_fpga.py
           ! grep failure results_fpga.xml
 
+      # The variant that actually goes on the board today, because J1 is bare
+      # holes until the Cartridge Pmod arrives: the boot flash is
+      # fpga/ulx3s/bram_flash.sv, a QSPI device in fabric on the same eight uio
+      # wires. The step above cannot cover it — it drives the header pins, and
+      # in this build nothing is listening to them.
+      #
+      # Plain Verilog rather than cocotb, so it also runs on the development
+      # host in seconds. What it is really guarding is ONE thing: that the model
+      # answers on the edge qspi_ctrl samples. One edge out and every fetched
+      # word is shifted by a bit, which on the bench is a board that configures,
+      # blinks, and never says anything.
+      - name: ULX3S harness with the fabric boot flash
+        run: |
+          mkdir -p fpga/ulx3s/build
+          python3 fpga/ulx3s/mkflashhex.py sw/hello.bin fpga/ulx3s/build/flash.hex
+          iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_FLASH_BRAM \
+            -o tb_fpga_bram.vvp src/*.sv fpga/ulx3s/bram_flash.sv \
+            fpga/ulx3s/ulx3s_top.sv test/sdram_model.sv test/tb_fpga_bram.v \
+            2>&1 | grep -v "sorry:" || true
+          vvp tb_fpga_bram.vvp | tee fpga_bram.log
+          grep -q "tb_fpga_bram: PASS" fpga_bram.log
+
       - name: Test Summary
         uses: test-summary/action@v2.4
         with:

@@ -75,7 +75,28 @@ LOCATE COMP "ftdi_rxd" SITE "L4";
 IOBUF  PORT "ftdi_rxd" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
 
 # keep the ESP32 booted (it can power-cycle the board otherwise)
-LOCATE COMP "wifi_gpio0" SITE "L2";
+#
+# L2 -> F1, 2026-08-07, following console/fpga/ulx3s.lpf, which changed it on
+# the day that repo's design first ran on this board. This is the ONLY site in
+# either file that differs between ULX3S revisions, and check_pins.py's
+# cross-check against console's file is what caught the drift here — koti's copy
+# had been left behind, which would have turned the next fpga-ulx3s run red.
+#
+#       v2.0 / v3.0.x : L2 = wifi_gpio0
+#       v3.1.x        : L2 = wifi_gpio22, and wifi_gpio0 moved to F1
+#
+# Upstream's own v3.1.x file annotates it: `LOCATE COMP "wifi_gpio22" SITE "L2";
+# # wifi_gpio0 on v3.0.x`. Exactly five signals moved between the revisions and
+# all five are wifi_*; the other 58 sites — including every SDRAM pin and the
+# whole of J1/J2 — are byte-identical, which is why the rest of this file is safe
+# on this board whatever revision it turns out to be.
+#
+# ⚠️ Harmless either way, and worth knowing so nobody "fixes" it back: this line
+# only hangs a weak pull-up on a pin, so at the wrong site the PROTECTION is
+# simply absent rather than something being driven wrongly. ⛔ And do not read
+# the board's USB descriptor as the answer — it says "ULX3S FPGA 85K v3.0.8",
+# which is stale factory EEPROM data, not the PCB revision.
+LOCATE COMP "wifi_gpio0" SITE "F1";
 IOBUF  PORT "wifi_gpio0" PULLMODE=UP IO_TYPE=LVCMOS33;
 
 # ---- J1: QSPI memory Pmod (bidirectional) ----

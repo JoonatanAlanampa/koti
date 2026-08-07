@@ -32,6 +32,26 @@ env:
 jobs:
   bitstream:
     runs-on: ubuntu-24.04
+    # TWO bitstreams, built in parallel, because there are two boards' worth of
+    # reality to serve and dropping either one is a silent loss:
+    #
+    #   pmod  the original. Boots by XIP from a memory Pmod on J1. This is what
+    #         the silicon will do, so it must keep building — but J1 is bare
+    #         holes until the Cartridge Pmod arrives, so it CANNOT be tested on
+    #         hardware today.
+    #   bram  the same SoC with fpga/ulx3s/bram_flash.sv answering on the same
+    #         eight uio wires — a QSPI device in fabric. Boots with NOTHING
+    #         plugged in, which makes it the only variant that can be put on the
+    #         board right now.
+    #
+    # A matrix rather than a default plus an opt-in: an opt-in variant is one
+    # nobody builds, and "the flashable build" and "the build that matches the
+    # chip" both need to stay green. They run concurrently, so the wall clock is
+    # one place-and-route, not two.
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [pmod, bram]
     steps:
       - uses: actions/checkout@v4
 
@@ -67,18 +87,41 @@ jobs:
       # Source list comes from fpga/ulx3s/sources.txt — the same file synth.ps1
       # reads, so the two builders cannot drift apart. `-I src` is what makes
       # vga_text.sv's `font_rom.svh` include resolve from the repo root.
+      # Only the `bram` variant needs an image, and it needs it BEFORE yosys:
+      # bram_flash.sv reads it with $readmemh at elaboration, and yosys turns
+      # that into the block RAM's initial contents. A missing file is not a
+      # build error — it is a bitstream full of zeroes, which on the board is a
+      # CPU executing 0x00000000 forever. So generate it, and let the script's
+      # own size check fail the run if the image does not fit.
+      - name: the fabric flash image
+        if: matrix.variant == 'bram'
+        run: |
+          mkdir -p fpga/ulx3s/build
+          python3 fpga/ulx3s/mkflashhex.py sw/hello.bin fpga/ulx3s/build/flash.hex
+          wc -l fpga/ulx3s/build/flash.hex
+
       - name: synthesis (yosys)
         run: |
           mkdir -p fpga/ulx3s/build
           src=$(grep -vE '^[[:space:]]*(#|$)' fpga/ulx3s/sources.txt | tr '\n' ' ')
           echo "sources: $src"
+          # The fabric flash is an extra source AND an extra define, and both
+          # only for the bram variant. Kept in one shell variable so the yosys
+          # line below stays a single command in both cases.
+          if [ "${{ matrix.variant }}" = "bram" ]; then
+            src="fpga/ulx3s/bram_flash.sv $src"
+            extra="-DKOTI_FLASH_BRAM"
+          else
+            extra=""
+          fi
+          echo "variant=${{ matrix.variant }} extra=$extra"
           # -DKOTI_FPGA serves the RAM half of the memory map from the board's
           # onboard 32 MB SDRAM rather than the QSPI Pmod's PSRAM. Must match
           # fpga/ulx3s/synth.ps1 and test/run_fpga.py: if the simulated and the
           # synthesised configurations differ, the suite proves nothing about
           # the bitstream.
           yosys -l fpga/ulx3s/build/yosys.log \
-            -p "read_verilog -sv -DKOTI_FPGA -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
+            -p "read_verilog -sv -DKOTI_FPGA $extra -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
 
       # nextpnr fails by design when the 25 MHz constraint in ulx3s.lpf is not
       # met. Capture its exit code instead of letting the step die, so the
@@ -99,15 +142,15 @@ jobs:
       - name: pack bitstream (ecppack)
         if: steps.pnr.outputs.rc == '0'
         run: |
-          ecppack fpga/ulx3s/build/koti.config fpga/ulx3s/build/koti.bit
-          ls -l fpga/ulx3s/build/koti.bit
+          ecppack fpga/ulx3s/build/koti.config fpga/ulx3s/build/koti-${{ matrix.variant }}.bit
+          ls -l fpga/ulx3s/build/koti-${{ matrix.variant }}.bit
 
       - name: report
         if: always()
         run: |
           set +e
           {
-            echo "## Koti-1 — ULX3S 85F (LFE5U-85F, CABGA381)"
+            echo "## Koti-1 — ULX3S 85F (LFE5U-85F, CABGA381) — ${{ matrix.variant }}"
             echo
             echo "### Logic"
             echo '```'
@@ -132,9 +175,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: koti-fpga
+          name: koti-fpga-${{ matrix.variant }}
           path: |
-            fpga/ulx3s/build/koti.bit
+            fpga/ulx3s/build/koti-${{ matrix.variant }}.bit
             fpga/ulx3s/build/yosys.log
             fpga/ulx3s/build/nextpnr.log
           if-no-files-found: warn

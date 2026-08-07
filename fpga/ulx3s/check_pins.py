@@ -48,7 +48,15 @@ EXPECTED = {
     "led[0]": "B2", "led[1]": "C2", "led[2]": "C1", "led[3]": "D2",
     "led[4]": "D1", "led[5]": "E2", "led[6]": "E1", "led[7]": "H3",
     "ftdi_rxd": "L4",
-    "wifi_gpio0": "L2",
+    # F1, not upstream v2.0's L2 — the ONE deliberate departure from
+    # ulx3s_v20.lpf in this table, and it was L2 here until 2026-08-07. The
+    # bench board is a PCB v3.1.8, and exactly five signals moved between v2.0
+    # and v3.1.x, all wifi_*: on v3.1.x L2 became wifi_gpio22 and wifi_gpio0
+    # moved to F1. Copied from console/fpga/check_pins.py, which learned it on
+    # the day that design first ran on this board. The other 58 entries are
+    # identical on both revisions — including every SDRAM pin and all of J1/J2 —
+    # so this table still checks what it claims to check.
+    "wifi_gpio0": "F1",
     # J1 = gp/gn[0..3]
     "pmod_gp[0]": "B11", "pmod_gp[1]": "A10", "pmod_gp[2]": "A9",
     "pmod_gp[3]": "B9",
@@ -238,8 +246,12 @@ def main() -> int:
     if errors:
         print(f"\n{len(errors)} error(s).")
         return 1
-    print("\nOK: every port is constrained, every site matches ULX3S v2.0.")
-    print("NOT checked (needs the board): that your board IS a v2.0.")
+    print("\nOK: every port is constrained, every site matches ULX3S v2.0 —")
+    print("    except wifi_gpio0, which is deliberately the v3.1.x site (F1).")
+    print("The board on the bench is a PCB v3.1.8, established 2026-08-07, and")
+    print("the revision no longer needs checking: the five signals that moved")
+    print("between v2.0 and v3.1.x are all wifi_*, and wifi_gpio0 is the only")
+    print("one this design uses. Every other site is identical on both.")
     return 0
 
 

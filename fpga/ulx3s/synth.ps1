@@ -18,7 +18,12 @@
 # The bitstream contains the UNCHANGED tt_um_koti plus the harness-only pad
 # logic (header permutation, straps, tristates) that silicon has no pins for.
 # See ulx3s_top.sv for what is harness-only and why.
-param([switch]$SynthOnly)
+# -Bram builds the variant whose boot flash is fpga\ulx3s\bram_flash.sv - a
+# QSPI device in fabric on the same eight uio wires - so the SoC boots with
+# NOTHING plugged into J1. That is the only variant that can go on the board
+# until the Cartridge Pmod arrives. CI builds both (matrix in
+# .github\workflows\fpga-ulx3s.yaml); keep the two in step.
+param([switch]$SynthOnly, [switch]$Bram)
 
 $ErrorActionPreference = "Stop"
 $oss = "$env:USERPROFILE\opt\oss-cad-suite"
@@ -34,6 +39,18 @@ $src = (Get-Content fpga\ulx3s\sources.txt |
         ForEach-Object { $_.Trim() }) -join " "
 if (-not $src) { throw "fpga\ulx3s\sources.txt listed no sources" }
 
+# The fabric flash is deliberately NOT in sources.txt: the pmod variant must not
+# read it at all, because its $readmemh would then look for an image that build
+# has no reason to generate. It is prepended here and in the CI workflow's
+# variant branch - the two places that already know which variant they are.
+$extra = ""
+if ($Bram) {
+    $src   = "fpga/ulx3s/bram_flash.sv " + $src
+    $extra = "-DKOTI_FLASH_BRAM"
+    python fpga\ulx3s\mkflashhex.py sw\hello.bin fpga\ulx3s\build\flash.hex
+    if ($LASTEXITCODE -ne 0) { throw "mkflashhex.py failed - the image does not fit" }
+}
+
 # Constraints and RTL drift apart silently; check before spending any time.
 python fpga\ulx3s\check_pins.py
 if ($LASTEXITCODE -ne 0) { throw "check_pins.py failed - fix the pin plan first" }
@@ -44,7 +61,7 @@ if ($LASTEXITCODE -ne 0) { throw "check_pins.py failed - fix the pin plan first"
 # the bisection base. Keep this in step with the CI workflow and run_fpga.py —
 # all three must define it or the thing you test is not the thing you flash.
 yosys -q -l fpga\ulx3s\build\yosys.log `
-      -p "read_verilog -sv -DKOTI_FPGA -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
+      -p "read_verilog -sv -DKOTI_FPGA $extra -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
 if ($LASTEXITCODE -ne 0) { throw "yosys failed - see fpga\ulx3s\build\yosys.log" }
 Write-Output "OK: fpga\ulx3s\build\koti.json"
 

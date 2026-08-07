@@ -70,6 +70,24 @@ jobs:
           vvp tb_plic.vvp | tee plic.log
           grep -q "tb_plic: PASS" plic.log
 
+      # The SD path, standalone, against a Verilog card model. This is the rung
+      # that turns a booting kernel into a computer — it is both how a 3.95 MB
+      # kernel gets into the machine and where the rootfs will live — so it is
+      # verified before it goes anywhere near the SoC, for the same reason
+      # sdram_ctrl and plic are: wrong-in-a-corner storage is far cheaper to find
+      # here than under a running kernel, where the symptom is a corrupt
+      # filesystem ten million instructions later.
+      #
+      # The payload is DERIVED FROM THE BLOCK NUMBER, and the bench reads two
+      # different blocks. A constant payload would pass even if every read
+      # returned block 0.
+      - name: SD block reads
+        run: |
+          cd test
+          iverilog -g2012 -o tb_sd.vvp ../src/sd_ctrl.sv ../vendor/sd_spi.sv             ../vendor/spi_master.sv sd_card_model.sv tb_sd.v
+          vvp tb_sd.vvp | tee sd.log
+          grep -q "tb_sd: PASS" sd.log
+
       # The machine description has to actually compile. koti.dts went into the
       # repo unvalidated because there is no dtc on the development host, and
       # a devicetree that is quoted as the machine's definition but has never

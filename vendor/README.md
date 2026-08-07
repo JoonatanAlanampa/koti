@@ -13,8 +13,17 @@ fix" is the one that stops being the proven version.
 
 | file | from | upstream commit | proven by |
 | --- | --- | --- | --- |
-| `sd_spi.sv` | `console/fpga/sd_spi.sv` | `b0bb8be` (2026-07-29) | ran on **this** ULX3S: console loaded games off a microSD card, 2026-08-07. Its own cocotb suite (`console/test/test_sdload.py`) covers a card that stays busy through several ACMD41s, a bad-magic image, a checksum mismatch, and no card at all |
+| `sd_spi.sv` | `console/fpga/sd_spi.sv` | `b0bb8be` (2026-07-29) | its own cocotb suite (`console/test/test_sdload.py`): a card that stays busy through several ACMD41s, a bad-magic image, a checksum mismatch, and no card at all. ⚠️ **On hardware, only the NO-CARD path has ever run** — see below |
 | `spi_master.sv` | `console/fpga/spi_master.sv` | `b0bb8be` (2026-07-29) | same |
+
+⚠️ **CORRECTION, 2026-08-07 — do not over-claim this provenance.** An earlier
+version of this file said console "loaded games off a microSD card" on this
+board. It did not. The session board's own words are that on hardware *"the SD
+loader completed its **no-card** path"* — console's game came from `bram_cart.sv`,
+a QSPI device in fabric, not from the card. So the card-READING path is proven in
+simulation only, in both repos, and koti's first hardware attempt (2026-08-07)
+returned `SD_ERR` with what is most likely an empty slot. That is first contact,
+not a regression, and it should be described as such until a card answers.
 
 ## What `sd_spi.sv` gives koti
 

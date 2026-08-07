@@ -101,11 +101,12 @@ Software, in order:
        is about persistence rather than booting. Needs a Linux block driver over
        `sd_ctrl`, and a partition layout that coexists with the raw kernel area
        at LBA 2048.
-7b.[ ] ⭐ **A KEYBOARD IS NOW THE ONLY THING BETWEEN THIS AND A USABLE
-       COMPUTER.** Everything else is done: CPU, MMU, RAM, storage, OS, screen.
-       The login prompt cannot be typed at — `uart_tx.sv` is transmit-only and
-       SBI `console_getchar` reads the PS/2 block, for which there is no
-       keyboard. ⇒ item 8 is no longer a late nicety; it is the last rung.
+7b.[x] 🏆 **DONE 2026-08-07 — THE KEYBOARD WORKS AND GOAL 2 IS ACHIEVED.**
+       `buildroot login: root` / `# uname -a`, typed on a real USB keyboard.
+       ⛔ The old note here ("the login prompt cannot be typed at") is DEAD.
+       USB HID host on US2: core vendored, `src/usb_kbd.sv` does the 12->25 MHz
+       crossing and turns held keys into keystrokes, `sw/usbkbd.c` carries a
+       Finnish keymap. See item 8 for what is still open.
 8. [ ] **USB HID host + its Linux driver and devicetree node** (decision 2
        below). Mainline will not recognise a soft host core any more than it
        recognises koti's PS/2 word, so a small custom driver is required

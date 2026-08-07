@@ -24,6 +24,23 @@ on:
       - 'fpga/ulx3s/**'
       - '.github/workflows/fpga-ulx3s.yaml'
   workflow_dispatch:
+    inputs:
+      # Which software the `bram` variant carries. The image is baked into the
+      # bitstream by $readmemh at synthesis, so changing it is a place-and-route,
+      # not a reflash — this input is what keeps that from also being a commit.
+      #
+      #   bringup  prints forever, never touches video. The default, and the only
+      #            image whose banner can be read without racing 5 ms.
+      #   memtest  walks the 16 MB RAM window with an address-derived pattern.
+      #            The one that proves the SDRAM's address decode rather than
+      #            just its read timing.
+      #   hello    the demo: banner, then VGA. ⚠️ Its banner is unreadable in
+      #            practice and afterwards uo[0] carries the video raster.
+      image:
+        description: 'bram variant: which software to bake into the fabric flash'
+        default: 'bringup'
+        type: choice
+        options: ['bringup', 'memtest', 'hello']
 
 env:
   OSS_TAG: '2026-07-17'
@@ -97,7 +114,9 @@ jobs:
         if: matrix.variant == 'bram'
         run: |
           mkdir -p fpga/ulx3s/build
-          python3 fpga/ulx3s/mkflashhex.py sw/bringup.bin fpga/ulx3s/build/flash.hex
+          img="${{ inputs.image || 'bringup' }}"
+          echo "baking sw/$img.bin into the fabric flash"
+          python3 fpga/ulx3s/mkflashhex.py "sw/$img.bin" fpga/ulx3s/build/flash.hex
           wc -l fpga/ulx3s/build/flash.hex
 
       - name: synthesis (yosys)

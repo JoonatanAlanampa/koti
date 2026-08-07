@@ -30,8 +30,12 @@ def main():
     #
     # bringup.c deliberately does NOT link console.c: not needing the video
     # driver is half of what makes it a diagnostic.
+    # memtest.bin is the third: a full walk of the 16 MB RAM window with an
+    # ADDRESS-DERIVED pattern, which is what catches aliasing. bringup.bin proves
+    # the SDRAM's read timing; only this proves its address decode.
     for name, srcs in (("hello", ["crt0.S", "console.c", "hello.c"]),
-                       ("bringup", ["crt0.S", "bringup.c"])):
+                       ("bringup", ["crt0.S", "bringup.c"]),
+                       ("memtest", ["crt0.S", "memtest.c"])):
         run([GCC, "-march=rv32ima_zicsr", "-mabi=ilp32", "-O2",
              "-nostdlib", "-nostartfiles", "-static",
              "-T", "link.ld", "-o", f"{name}.elf", *srcs])

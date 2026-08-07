@@ -1,9 +1,9 @@
 # Koti-1 on the ULX3S 85F — first power-up
 
-This is the procedure for the day the board arrives. **Nothing in this
-directory has ever been on hardware.** Everything below is simulated and
-place-and-routed in CI, which is exactly why the checklist is ordered the way
-it is: each step is chosen so that the *next* step's failure has only one
+This is the bring-up procedure. **Steps 0-2b HAVE now run on hardware
+(2026-08-07) and koti works**; steps 3-7 still have not, because they need Pmods
+that have not arrived. The checklist keeps its order for the reason it was
+written: each step is chosen so that the *next* step's failure has only one
 plausible cause left.
 
 The wrapper instantiates the *exact* TT top (`tt_um_koti`), so the FPGA runs
@@ -20,9 +20,11 @@ What is already proven, and what is not:
 | The header permutation and the straps | `python test/run_fpga.py` — boots `hello.bin` through the J1 wires in both orientations, and stays silent when the strap is wrong |
 | The UART follows koti's two personalities | same suite: the SBI image's output arrives via the SW3 mux |
 | The flash-writer path | `pmod-cartridge` simulated the whole I/E/P/R chain including read-back, 2026-07-20 |
-| **NOT proven: that this board is a v2.0** | needs the board — see step 1 |
-| **NOT proven: any wire, connector or signal integrity** | needs the board |
-| **NOT proven: the font glyphs look right** | needs a monitor — step 6, and PLAN.md item 9 |
+| ✅ **The board, end to end** | 2026-08-07: `sw/bringup.bin` printed 31 gapless lines over the real UART out of a fabric boot flash — see step 2b |
+| ✅ **The SDRAM, including `RD_ADV` and the address decode** | 2026-08-07: `sw/memtest.bin`, four clean passes over the full 16 MB with an address-derived pattern, plus the byte-lane/DQM path |
+| ✅ **The board revision** | it is a **PCB v3.1.8**, and only `wifi_gpio0` differs from v2.0 — see step 1 |
+| **NOT proven: the font glyphs look right** | needs the Tiny VGA Pmod — step 6, and PLAN.md item 9 |
+| **NOT proven: anything on J1/J2** | both headers are still unpopulated |
 
 ## Straps, all four in one place
 
@@ -45,33 +47,37 @@ gh workflow run fpga-ulx3s.yaml && gh run watch
 `powershell -File fpga\ulx3s\synth.ps1 -SynthOnly` is the local *fast check* —
 it stops after yosys and only tells you the design still elaborates.
 
-## 1. Confirm the board revision BEFORE plugging anything in
+## ✅ 1. The board revision — SETTLED 2026-08-07
 
-Every pin site in `ulx3s.lpf` comes from the **v2.0** constraint file. If this
-board is a different revision, some sites move, and the ones that move are the
-ones nothing has validated.
+**It is a PCB v3.1.8, and it does not matter.** Exactly five signals moved
+between v2.0 and v3.1.x and **all five are `wifi_*`**: on v3.1.x, L2 became
+`wifi_gpio22` and `wifi_gpio0` moved to **F1**. `ulx3s.lpf` and `check_pins.py`
+carry F1 for that one pin and the upstream v2.0 site for the other 58 — every
+SDRAM pin and all of J1/J2 are identical on both revisions.
 
-- Find the revision silkscreen on the PCB.
-- If it is not v2.0, diff `ulx3s.lpf` against the constraint file for that
-  revision before continuing. Do not skip this because the bitstream builds —
-  a wrong site builds perfectly and drives the wrong ball.
+⛔ **Do not read the USB descriptor as the revision.** `fujprog` prints
+`ULX3S FPGA 85K v3.0.8`; that is stale factory EEPROM data, not the PCB.
+
+For a different board, `check_pins.py` fails on the mismatch before yosys runs —
+which is how the L2/F1 drift was caught in the first place.
 
 ## 2. Power the board alone — no Pmods
 
 Load the bitstream with nothing plugged into J1 or J2:
 
 ```
-openFPGALoader -b ulx3s fpga/ulx3s/build/koti.bit        # SRAM, volatile
+fujprog fpga/ulx3s/build/koti-bram.bit        # SRAM, volatile, ~60 s
+fujprog -j flash fpga/ulx3s/build/koti-bram.bit   # persistent
 ```
 
-**This one is gone at power-off.** It configures the FPGA directly and is what
-you want while iterating. To make it survive a power cycle:
+**The volatile load is gone at power-off**, which is what you want while
+iterating. Do the whole checklist with it.
 
-```
-openFPGALoader -b ulx3s -f fpga/ulx3s/build/koti.bit     # persistent
-```
-
-Do the volatile load first and get through this checklist with it.
+⛔ **`fujprog`, NOT `openFPGALoader`, on this board.** fujprog drives the FTDI
+through its stock driver. openFPGALoader wants a WinUSB bind (Zadig), and that
+bind **destroys the COM port koti's console is** — so the tool that flashes the
+design would take away the only way to hear from it. ⚠️ The FT231X is ONE device
+shared by JTAG and the UART, so the serial port must be closed while flashing.
 
 Expected, with SW4 off: the LEDs show the chip's raw `uo` pins, which in the
 headless personality means **LED0 flickering with UART traffic** and **LED1 =

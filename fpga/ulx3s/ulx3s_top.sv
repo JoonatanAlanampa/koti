@@ -104,26 +104,35 @@ module ulx3s_top (
   // An ESP32 that is awake and driving those pins fights the FPGA for the card,
   // and the FPGA loses on whichever line the ESP32 holds.
   //
-  // AND F1 IS THE ESP32's ENABLE ON THIS BOARD. The pin changed meaning across
-  // revisions, and upstream's v3.1.6 file annotates the change itself:
+  // ✅ THE REVISION IS SETTLED: **PCB v3.1.8**, read off the silkscreen by the
+  // user on 2026-08-07. It had been carried as an open question because the pin
+  // changed meaning across revisions, and upstream's v3.1.6 file annotates the
+  // change itself:
   //     v3.0.x : F1 = wifi_en     (L2 = wifi_gpio0)
   //     v3.1.x : F1 = wifi_gpio0  (L2 = wifi_gpio22, wifi_en moved to J5)
-  // The board's USB descriptor says "85K v3.0.8", which had been written off as
-  // stale factory data. On v3.0.x that makes F1 `wifi_en`, so the pull-up this
-  // line used to carry was ENABLING the ESP32 onto the SD bus.
+  // ⛔ The board's USB descriptor says "85K v3.0.8" and it is WRONG — stale
+  // factory EEPROM data, not the PCB revision. The silkscreen is the authority.
   //
-  // LOW is correct on either revision: on v3.0.x it holds the ESP32 in reset; on
-  // v3.1.x it is gpio0, which puts the ESP32 in serial-download mode where it
-  // runs no firmware and drives none of the shared pins. Actively driven rather
-  // than pulled, so there is no ambiguity about who wins the pin.
+  // ⇒ On this board F1 is `wifi_gpio0` and **J5 is the real enable**. Both are
+  // driven low, which is correct here and would also have been correct on a
+  // v3.0.x board, so the ambiguity is closed rather than merely survived:
+  //   J5 = wifi_en  = 0  holds the ESP32 in reset — this is the one that counts
+  //   F1 = gpio0    = 0  a boot-mode strap, read only when the ESP32 leaves
+  //                      reset, so it is inert while J5 holds it there
+  // Actively driven rather than pulled, so there is no ambiguity about who wins.
+  //
+  // ⚠️ THIS DID NOT FIX THE CARD. A bitstream holding both low still returned
+  // SD_ERR (2026-08-07), so the ESP32 is now EXCLUDED as the cause rather than
+  // suspected: it is provably held in reset on the revision the board actually
+  // is. Do not spend another bitstream on ESP32 enables — use sw/sdraw.c.
   //
   // ⚠️ The line this replaces claimed "keep the ESP32 booted (it can power-cycle
   // the board otherwise)". If that is real the symptom is unmistakable — the
   // board dies and the COM port disappears — and it recovers by unplugging,
   // because every bitstream here is loaded to SRAM and gone at power-off. That
   // makes this a safe experiment rather than a gamble.
-  assign wifi_gpio0 = 1'b0;
-  assign wifi_en    = 1'b0;      // the v3.1.x enable; unused on v3.0.x
+  assign wifi_gpio0 = 1'b0;      // F1: a boot strap on this v3.1.8 board
+  assign wifi_en    = 1'b0;      // J5: the actual enable on v3.1.x — this one
 
   // ------------------------------------------------------- reset
   // BTN0 (PWR) is pulled up and reads 0 when pressed. The POR counter holds

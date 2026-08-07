@@ -38,6 +38,28 @@
 //          R  reads it back
 //   +0x08  R  next 32 bits of the block buffer, little-endian, pointer++
 //          W  reset the read pointer to 0 (value ignored)
+//   +0x0C  W  BRING-UP ESCAPE HATCH: bit0 raw_en, bit1 cs_n, bit2 sck, bit3 mosi
+//          R  bit0 = MISO **live off the pin**, bit1 raw_en, bit4:2 = the three
+//             values being driven, read back so a write that never landed is
+//             distinguishable from a card that never answered
+//
+// ⚠️ WHY THE ESCAPE HATCH EXISTS, AND WHY IT USES REGISTER 3. On 2026-08-07 the
+// card returned SD_ERR on real hardware while `tb_sd` and `tb_fpga_bram +mark=1`
+// were both green in simulation. Simulation cannot distinguish "the engine is
+// wrong" from "no card is electrically there", because the Verilog card model
+// answers unconditionally. Driving the four wires from software and reading MISO
+// back splits exactly that: MISO stuck at 1 through a whole hand-clocked CMD0
+// means the card never drives the line at all (seating, power, or a wrong pin),
+// while any 0 bit coming back means the card is alive and the fault is upstream
+// in `sd_spi`. One round trip, one bit, and the two halves of the problem
+// separate.
+//
+// Register 3 is used **because it was the free one**: `reg_a` is `d_addr[1:0]`,
+// so this window already decodes four registers and 3 fell through to `default`.
+// Adding a whole MMIO window would have needed two edits — the decode in
+// project.sv AND the `pa_dev` legalisation in koti_core.sv — and missing the
+// second makes the first write fault, restart the program from mtvec=0, and look
+// exactly like a reset bug. Nothing outside this file changes.
 //
 // ⚠️ FPGA ONLY. `sd_ctrl` is instantiated under `KOTI_FPGA` because a
 // TinyTapeout tile has no pin for an SD card: all 8 `uo` are the VGA Pmod, all
@@ -77,13 +99,38 @@ module sd_ctrl #(
   logic        rvalid, rdone;
   logic [7:0]  rbyte;
 
+  // The engine's pins are internal: the escape hatch below muxes them, so the
+  // module's actual outputs are driven in one place further down.
+  logic eng_cs_n, eng_sck, eng_mosi;
+
   sd_spi #(.CLK_HZ(CLK_HZ)) card (
       .clk(clk), .rst(rst),
       .init(init_pulse), .rd(rd_pulse), .blk(lba),
       .ready(ready), .busy(busy), .err(err),
       .rvalid(rvalid), .rdata(rbyte), .rdone(rdone),
-      .cs_n(sd_cs_n), .sck(sd_sck), .mosi(sd_mosi), .miso(sd_miso)
+      .cs_n(eng_cs_n), .sck(eng_sck), .mosi(eng_mosi), .miso(sd_miso)
   );
+
+  // ------------------------------------------------- bring-up escape hatch
+  // Idle-SPI reset values (CS high, MOSI high, clock low) so that coming out of
+  // reset with raw_en already set cannot assert chip select at a card.
+  logic raw_en, raw_cs_n, raw_sck, raw_mosi;
+
+  // TWO flops on MISO before software sees it. The card drives this pin from its
+  // own oscillator, so it is asynchronous to `clk` by construction; sampling it
+  // straight into a register that feeds the read mux is a metastability path
+  // whose failure mode is an occasional wrong bit — i.e. exactly the kind of
+  // intermittent that would be blamed on the card. `sd_spi` samples it at its own
+  // slow SPI clock, which is a different (and much more forgiving) discipline.
+  logic miso_meta, miso_sync;
+  always_ff @(posedge clk) begin
+      miso_meta <= sd_miso;
+      miso_sync <= miso_meta;
+  end
+
+  assign sd_cs_n = raw_en ? raw_cs_n : eng_cs_n;
+  assign sd_sck  = raw_en ? raw_sck  : eng_sck;
+  assign sd_mosi = raw_en ? raw_mosi : eng_mosi;
 
   // ---------------------------------------------------------- block buffer
   // 512 bytes as 128 words, written a byte at a time as they arrive. Byte lanes
@@ -136,6 +183,10 @@ module sd_ctrl #(
           lba        <= 32'd0;
           rptr       <= 7'd0;
           done_q     <= 1'b0;
+          raw_en     <= 1'b0;
+          raw_cs_n   <= 1'b1;          // deselected
+          raw_sck    <= 1'b0;
+          raw_mosi   <= 1'b1;          // MOSI idles high, as SPI mode 0 wants
       end else begin
           // Sticky, and cleared by STARTING work rather than by reading the
           // status: a flag cleared by its own read cannot be polled twice, and
@@ -162,6 +213,12 @@ module sd_ctrl #(
                   end
                   2'd1: lba  <= wdata;
                   2'd2: rptr <= 7'd0;          // any write rewinds the buffer
+                  2'd3: begin
+                      raw_en   <= wdata[0];
+                      raw_cs_n <= wdata[1];
+                      raw_sck  <= wdata[2];
+                      raw_mosi <= wdata[3];
+                  end
                   default: ;
               endcase
 
@@ -182,6 +239,11 @@ module sd_ctrl #(
           2'd0:    rmux = {28'd0, done_q, err, busy, ready};
           2'd1:    rmux = lba;
           2'd2:    rmux = buf_mem[rptr];
+          // MISO first, so a test is `SD_RAW & 1`. The three driven values come
+          // back too: if they read as what was written, the MMIO path is proven
+          // in the same breath, and a stuck MISO cannot be blamed on a write
+          // that silently went nowhere.
+          2'd3:    rmux = {27'd0, raw_mosi, raw_sck, raw_cs_n, raw_en, miso_sync};
           default: rmux = 32'd0;
       endcase
 

@@ -144,10 +144,18 @@ module tb_fpga_bram ();
   // receiver, the SDRAM model and the harness wiring.
   //   0 (default) sw/bringup.bin — the banner it prints forever
   //   1           sw/sdtest.bin / sw/memtest.bin — their per-pass verdict
+  //   2           sw/sdraw.bin — the bit-banged CMD0 got R1 = 01 back. This
+  //               gate is what keeps the SD_RAW escape hatch honest: it is the
+  //               instrument used to decide whether a silent card is the card's
+  //               fault or koti's, so an instrument that has quietly stopped
+  //               working would send the next bring-up session hunting in the
+  //               wrong half of the problem.
   localparam integer MARKLEN = 29;
   localparam [8*MARKLEN-1:0] MARKER0 = "Koti-1: hello from my own SoC";
   localparam integer MARKLEN1 = 10;
   localparam [8*MARKLEN1-1:0] MARKER1 = "pass CLEAN";
+  localparam integer MARKLEN2 = 17;
+  localparam [8*MARKLEN2-1:0] MARKER2 = "THE CARD ANSWERED";
   integer mark = 0;
   reg [8*MARKLEN-1:0] markbuf = {(8*MARKLEN){1'b0}};
   reg                 saw_marker = 1'b0;
@@ -180,6 +188,7 @@ module tb_fpga_bram ();
       markbuf = {markbuf[8*(MARKLEN-1)-1:0], ush};
       if (mark == 0 && markbuf == MARKER0)                     saw_marker = 1'b1;
       if (mark == 1 && markbuf[8*MARKLEN1-1:0] == MARKER1)     saw_marker = 1'b1;
+      if (mark == 2 && markbuf[8*MARKLEN2-1:0] == MARKER2)     saw_marker = 1'b1;
     end
   end
 

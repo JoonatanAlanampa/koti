@@ -140,6 +140,25 @@ jobs:
           vvp tb_fpga_bram.vvp | tee fpga_bram.log
           grep -q "tb_fpga_bram: PASS" fpga_bram.log
 
+      # The SD_RAW escape hatch, exercised end to end: sdraw.bin hand-clocks
+      # CMD0 through the MMIO register with the sd_spi engine muxed off the
+      # pins, and the card model answers R1 = 01. This is the instrument that
+      # decides, on real hardware, whether a silent card is the card's fault or
+      # koti's — so it needs a gate of its own. It also pins the .data LMA
+      # alignment: sdraw is the only image with a non-empty .data, and a
+      # misaligned load address makes crt0 trap and the program restart forever.
+      - name: the SD bring-up escape hatch
+        run: |
+          mkdir -p fpga/ulx3s/build
+          python3 fpga/ulx3s/mkflashhex.py sw/sdraw.bin fpga/ulx3s/build/flash.hex
+          iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_FLASH_BRAM \
+            -o tb_sdraw.vvp src/*.sv vendor/*.sv \
+            fpga/ulx3s/bram_flash.sv fpga/ulx3s/ulx3s_top.sv \
+            test/sdram_model.sv test/sd_card_model.sv test/tb_fpga_bram.v \
+            2>&1 | grep -v "sorry:" || true
+          vvp tb_sdraw.vvp +mark=2 | tee sdraw.log
+          grep -q "tb_fpga_bram: PASS" sdraw.log
+
       - name: Test Summary
         uses: test-summary/action@v2.4
         with:

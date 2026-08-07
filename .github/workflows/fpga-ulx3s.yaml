@@ -38,13 +38,18 @@ on:
       #            checks the two properties that hold for ANY card: the same
       #            block reads the same twice, and a different block reads
       #            differently.
+      #   sdraw    the layer BELOW sdtest: hand-clocks CMD0 through the SD_RAW
+      #            escape hatch with the sd_spi engine muxed off the pins, and
+      #            prints the raw bytes. Use when sdtest says SD_ERR — it is the
+      #            only image that distinguishes a silent card from a broken
+      #            engine, which simulation structurally cannot do.
       #   hello    the demo: banner, then VGA. ⚠️ Its banner is unreadable in
       #            practice and afterwards uo[0] carries the video raster.
       image:
         description: 'bram variant: which software to bake into the fabric flash'
         default: 'bringup'
         type: choice
-        options: ['bringup', 'memtest', 'sdtest', 'hello']
+        options: ['bringup', 'memtest', 'sdtest', 'sdraw', 'hello']
 
 env:
   OSS_TAG: '2026-07-17'

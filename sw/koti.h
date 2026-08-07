@@ -44,6 +44,17 @@
 #define SD_START_RD   0x2u
 #define SD_BLOCK_WORDS 128u
 
+// Bring-up escape hatch: drive the four wires from software and read MISO back.
+// While SD_RAW_EN is set the `sd_spi` engine is disconnected from the pins, so
+// nothing else may touch the card. WRITE bits and READ bits are NOT the same
+// map — reading gives MISO in bit0, which is the whole point of the register.
+#define SD_RAW      REG32(0x0005000C)
+#define SD_RAW_EN    0x1u             // w: take the pins away from the engine
+#define SD_RAW_CSN   0x2u             // w: chip select, active LOW
+#define SD_RAW_SCK   0x4u             // w: clock
+#define SD_RAW_MOSI  0x8u             // w: data out
+#define SD_RAW_MISO  0x1u             // r: the card's data line, live off the pin
+
 static inline void uart_putc(char c) {
     while (UART & 1)
         ;

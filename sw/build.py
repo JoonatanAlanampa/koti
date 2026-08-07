@@ -36,7 +36,12 @@ def main():
     for name, srcs in (("hello", ["crt0.S", "console.c", "hello.c"]),
                        ("bringup", ["crt0.S", "bringup.c"]),
                        ("memtest", ["crt0.S", "memtest.c"]),
-                       ("sdtest",  ["crt0.S", "sdtest.c"])):
+                       ("sdtest",  ["crt0.S", "sdtest.c"]),
+                       # sdraw.bin is the layer BELOW sdtest: it bypasses the
+                       # sd_spi engine entirely and hand-clocks CMD0 through the
+                       # SD_RAW escape hatch, so a silent card and a broken
+                       # engine stop producing the same message.
+                       ("sdraw",   ["crt0.S", "sdraw.c"])):
         run([GCC, "-march=rv32ima_zicsr", "-mabi=ilp32", "-O2",
              "-nostdlib", "-nostartfiles", "-static",
              "-T", "link.ld", "-o", f"{name}.elf", *srcs])

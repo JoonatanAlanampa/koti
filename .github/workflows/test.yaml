@@ -175,7 +175,7 @@ jobs:
           mkdir -p fpga/ulx3s/build
           python3 tools/sdkernel.py fake --blocks 8 --out fake_kernel.bin
           python3 tools/sdkernel.py build fake_kernel.bin --hex boot.hex
-          python3 fpga/ulx3s/mkflashhex.py sw/sbi/sbi_test.bin \
+          python3 fpga/ulx3s/mkflashhex.py sw/sbi/sbi_sd.bin \
             fpga/ulx3s/build/flash.hex
           iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_FLASH_BRAM \
             -o tb_sdboot.vvp src/*.sv vendor/*.sv \

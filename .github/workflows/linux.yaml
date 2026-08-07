@@ -468,7 +468,7 @@ jobs:
           # has never been able to turn this job red since the day it was
           # added.
           set -o pipefail
-          python3 test/mkhex.py sw/sbi/sbi_test.bin fw.hex
+          python3 test/mkhex.py sw/sbi/sbi_sd.bin fw.hex
           python3 test/mkhex.py kimg/arch/riscv/boot/Image kernel.hex
           # ramoff = (0x0140_0000 - 0x0100_0000) / 4, the kernel's word offset
           # into the RAM window. Getting it wrong loads the kernel somewhere
@@ -717,7 +717,7 @@ jobs:
           # `run:` step with no `shell:` key is `bash -e {0}` WITHOUT it, so
           # `sim | tee log` reports tee's status and every $fatal is discarded.
           set -o pipefail
-          python3 test/mkhex.py sw/sbi/sbi_test.bin fw.hex
+          python3 test/mkhex.py sw/sbi/sbi_sd.bin fw.hex
           python3 test/mkhex.py kimg/arch/riscv/boot/Image kernel.hex
           # 700M, from a measurement rather than a guess: the marker arrives at
           # 486,454,208 clocks with the committed rootfs (2026-08-07, and the

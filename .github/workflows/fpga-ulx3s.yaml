@@ -135,7 +135,7 @@ jobs:
           # `sbi` is the odd one out: it is the SBI FIRMWARE, which lives in
           # sw/sbi/ rather than sw/, and it is the image that actually boots
           # Linux — it loads the kernel off the microSD into RAM and enters it.
-          if [ "$img" = "sbi" ]; then bin="sw/sbi/sbi_test.bin"; else bin="sw/$img.bin"; fi
+          if [ "$img" = "sbi" ]; then bin="sw/sbi/sbi_sd.bin"; else bin="sw/$img.bin"; fi
           echo "baking $bin into the fabric flash"
           python3 fpga/ulx3s/mkflashhex.py "$bin" fpga/ulx3s/build/flash.hex
           wc -l fpga/ulx3s/build/flash.hex

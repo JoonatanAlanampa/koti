@@ -93,11 +93,20 @@ struct boot_target boot_target(void) {
     struct boot_target b = { PAYLOAD_ADDR, 0u };
 
     // Try the microSD first. This is what puts a kernel at KERNEL_ADDR on real
-    // hardware — in simulation the bench preloads that memory instead, so this
-    // returns 0 harmlessly and every existing test is unaffected. It changes
-    // nothing on failure, so a missing or ordinary card costs one bounded
-    // attempt and falls through to the flash payload.
+    // hardware. It changes nothing on failure, so a missing or ordinary card
+    // costs one bounded attempt and falls through to the flash payload.
+    //
+    // ⛔ COMPILE-TIME, not runtime, and there is no way round that. On the
+    // ASIC-shaped machine the microSD window DOES NOT EXIST — koti_core.sv's
+    // `pa_dev` stops at 0x04 without KOTI_FPGA — so 0x0005_0000 is
+    // flash-read-only there. A write takes a store access fault and a read
+    // never acks, which hangs the firmware before it can decide anything. Even
+    // a "probe" would have to touch the address to find out, so the check
+    // cannot be made at runtime; the machine has to be known when the firmware
+    // is built. That is why build.py emits TWO binaries.
+#ifdef KOTI_SD
     (void)sd_load_kernel();
+#endif
 
     const volatile uint32_t *k = (const volatile uint32_t *)KERNEL_ADDR;
     if (k[0x38u / 4u] != RISCV_IMAGE_MAGIC2)

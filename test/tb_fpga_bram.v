@@ -48,7 +48,7 @@ module tb_fpga_bram ();
   reg  [3:0] sw;
   wire [7:0] led;
   wire       ftdi_rxd;
-  wire       wifi_gpio0;
+  wire       wifi_gpio0, wifi_en;
 
   wire [3:0] pmod_gp, pmod_gn;
   wire [3:0] vga_gp, vga_gn;
@@ -103,6 +103,7 @@ module tb_fpga_bram ();
       .led        (led),
       .ftdi_rxd   (ftdi_rxd),
       .wifi_gpio0 (wifi_gpio0),
+      .wifi_en    (wifi_en),
       .pmod_gp    (pmod_gp),
       .pmod_gn    (pmod_gn),
       .vga_gp     (vga_gp),

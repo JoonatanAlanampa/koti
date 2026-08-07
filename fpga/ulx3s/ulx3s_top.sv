@@ -59,6 +59,12 @@ module ulx3s_top (
     output logic       sd_cmd,
     inout  wire  [3:0] sd_d,
     output logic       wifi_gpio0,
+    // wifi_en on a v3.1.x board; NOT ASSIGNED AT ALL in the v2.0/v3.0.x
+    // constraint file, so driving it there costs nothing. Belt and braces with
+    // F1: whichever revision this board is, one of the two pins is the ESP32's
+    // enable and both are held low, so the ESP32 cannot be awake on the microSD
+    // bus it shares with us.
+    output logic       wifi_en,
 
     // J1 header: QSPI memory Pmod (Cartridge Pmod or stock TT QSPI Pmod)
     inout  wire  [3:0] pmod_gp,
@@ -117,6 +123,7 @@ module ulx3s_top (
   // because every bitstream here is loaded to SRAM and gone at power-off. That
   // makes this a safe experiment rather than a gamble.
   assign wifi_gpio0 = 1'b0;
+  assign wifi_en    = 1'b0;      // the v3.1.x enable; unused on v3.0.x
 
   // ------------------------------------------------------- reset
   // BTN0 (PWR) is pulled up and reads 0 when pressed. The POR counter holds

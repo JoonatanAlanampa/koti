@@ -57,6 +57,9 @@ EXPECTED = {
     # identical on both revisions — including every SDRAM pin and all of J1/J2 —
     # so this table still checks what it claims to check.
     "wifi_gpio0": "F1",
+    # v3.1.x's wifi_en. Unassigned in the v2.0/v3.0.x file, so this entry is a
+    # deliberate addition rather than a transcription.
+    "wifi_en": "J5",
     # onboard microSD, used as SPI (sites from console's validated file)
     "sd_clk": "H2", "sd_cmd": "J1",
     "sd_d[0]": "J3", "sd_d[1]": "H1", "sd_d[2]": "K1", "sd_d[3]": "K2",

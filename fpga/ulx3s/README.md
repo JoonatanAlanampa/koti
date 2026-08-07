@@ -82,7 +82,26 @@ you are really checking here is that the board configures and nothing is stuck.
 outcome later, but at this step it means the fetch path returned garbage that
 decoded to a halt, which is what you would expect with no flash present.
 
-## 2b. Boot with NO Pmod at all — the fabric flash (2026-08-07)
+## ✅ 2b. Boot with NO Pmod at all — the fabric flash. **DONE ON HARDWARE 2026-08-07**
+
+```
+Koti-1: hello from my own SoC #4 0123456789 abcdefghijklmnopqrstuvwxyz
+   ... through #34
+```
+
+31 lines, 31 exact matches, 0 malformed, counter monotonic and gapless, 0
+non-printable bytes, 2257 bytes on COM3. **This is the first koti that has run on
+real hardware.** What it settles, in the order the table at the top of this file
+listed as unproven:
+
+| was "NOT proven" | now |
+| --- | --- |
+| any wire, connector or signal integrity | ✅ the whole flash+SDRAM+UART path, on the board |
+| that this board is a v2.0 | ✅ it is a **PCB v3.1.8**, and it does not matter: the five signals that moved are all `wifi_*` |
+| **`RD_ADV`** (README step 4 of PLAN, and the top bring-up risk in the project) | ✅ **correct as built.** `uart_puts` is a call, so `ra` goes to the SDRAM stack and comes back on every line; a read window off by one clock is *silent on writes and corrupts every read*, so there would have been no second line. ⚠️ Read **timing** is proven; **address coverage is not** — walking the 32 MB is still work |
+| the font glyphs | ❌ still needs the Tiny VGA Pmod (step 6) |
+
+
 
 **This is the path that works today, and steps 3-5 below are the Pmod path that
 cannot be walked until the Cartridge Pmod arrives.** J1 is bare holes; koti boots

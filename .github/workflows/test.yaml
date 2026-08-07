@@ -133,8 +133,9 @@ jobs:
           mkdir -p fpga/ulx3s/build
           python3 fpga/ulx3s/mkflashhex.py sw/bringup.bin fpga/ulx3s/build/flash.hex
           iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_FLASH_BRAM \
-            -o tb_fpga_bram.vvp src/*.sv fpga/ulx3s/bram_flash.sv \
-            fpga/ulx3s/ulx3s_top.sv test/sdram_model.sv test/tb_fpga_bram.v \
+            -o tb_fpga_bram.vvp src/*.sv vendor/*.sv \
+            fpga/ulx3s/bram_flash.sv fpga/ulx3s/ulx3s_top.sv \
+            test/sdram_model.sv test/sd_card_model.sv test/tb_fpga_bram.v \
             2>&1 | grep -v "sorry:" || true
           vvp tb_fpga_bram.vvp | tee fpga_bram.log
           grep -q "tb_fpga_bram: PASS" fpga_bram.log

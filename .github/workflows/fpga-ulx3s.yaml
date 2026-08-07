@@ -34,13 +34,17 @@ on:
       #   memtest  walks the 16 MB RAM window with an address-derived pattern.
       #            The one that proves the SDRAM's address decode rather than
       #            just its read timing.
+      #   sdtest   initialises the microSD card and reads blocks from it, then
+      #            checks the two properties that hold for ANY card: the same
+      #            block reads the same twice, and a different block reads
+      #            differently.
       #   hello    the demo: banner, then VGA. ⚠️ Its banner is unreadable in
       #            practice and afterwards uo[0] carries the video raster.
       image:
         description: 'bram variant: which software to bake into the fabric flash'
         default: 'bringup'
         type: choice
-        options: ['bringup', 'memtest', 'hello']
+        options: ['bringup', 'memtest', 'sdtest', 'hello']
 
 env:
   OSS_TAG: '2026-07-17'

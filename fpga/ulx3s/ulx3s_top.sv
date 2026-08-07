@@ -48,6 +48,16 @@ module ulx3s_top (
     input  wire  [3:0] sw,
     output logic [7:0] led,
     output logic       ftdi_rxd,
+
+    // ---- onboard microSD, in SPI mode ----
+    // The 4-bit SD bus used as SPI, exactly as console drives it on this board:
+    // sd_clk = SCK, sd_cmd = MOSI, sd_d[3] = CS, sd_d[0] = MISO (driven by the
+    // card, so the FPGA leaves it alone), and sd_d[2:1] are held HIGH because a
+    // card in SPI mode expects its unused data lines idle-high rather than
+    // floating.
+    output logic       sd_clk,
+    output logic       sd_cmd,
+    inout  wire  [3:0] sd_d,
     output logic       wifi_gpio0,
 
     // J1 header: QSPI memory Pmod (Cartridge Pmod or stock TT QSPI Pmod)
@@ -147,11 +157,32 @@ module ulx3s_top (
       .sdram_dout (sdram_dout),
       .sdram_doe  (sdram_doe),
       .sdram_din  (sdram_d),
+      .sd_cs_n    (soc_sd_cs_n),
+      .sd_sck     (soc_sd_sck),
+      .sd_mosi    (soc_sd_mosi),
+      .sd_miso    (sd_d[0]),
 `endif
       .ena     (1'b1),
       .clk     (clk_25mhz),
       .rst_n   (rst_n)
   );
+
+  // ------------------------------------------------------- onboard microSD
+`ifdef KOTI_FPGA
+  wire soc_sd_cs_n, soc_sd_sck, soc_sd_mosi;
+  assign sd_clk  = soc_sd_sck;
+  assign sd_cmd  = soc_sd_mosi;
+  assign sd_d[3] = soc_sd_cs_n;
+  assign sd_d[2] = 1'b1;
+  assign sd_d[1] = 1'b1;
+  assign sd_d[0] = 1'bz;                  // MISO: the card drives this
+`else
+  // The QSPI build has no SD peripheral, so park the bus rather than leave it
+  // floating: CS high means the card ignores the pins entirely.
+  assign sd_clk  = 1'b0;
+  assign sd_cmd  = 1'b1;
+  assign sd_d    = {1'b1, 1'b1, 1'b1, 1'bz};
+`endif
 
   // ------------------------------------------------------- J1: QSPI Pmod
   // uio numbering (TT QSPI Pmod standard):

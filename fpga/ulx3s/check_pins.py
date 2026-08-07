@@ -57,6 +57,9 @@ EXPECTED = {
     # identical on both revisions — including every SDRAM pin and all of J1/J2 —
     # so this table still checks what it claims to check.
     "wifi_gpio0": "F1",
+    # onboard microSD, used as SPI (sites from console's validated file)
+    "sd_clk": "H2", "sd_cmd": "J1",
+    "sd_d[0]": "J3", "sd_d[1]": "H1", "sd_d[2]": "K1", "sd_d[3]": "K2",
     # J1 = gp/gn[0..3]
     "pmod_gp[0]": "B11", "pmod_gp[1]": "A10", "pmod_gp[2]": "A9",
     "pmod_gp[3]": "B9",

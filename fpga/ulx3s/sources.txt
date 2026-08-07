@@ -53,5 +53,12 @@ src/uart_tx.sv
 src/sdram_ctrl.sv
 src/icache.sv
 
+# microSD, and the vendored engine it wraps. FPGA-only for the same reason: a
+# TinyTapeout tile has no pin for a card. vendor/ files are verbatim copies from
+# console and must not be edited here - see vendor/README.md.
+vendor/spi_master.sv
+vendor/sd_spi.sv
+src/sd_ctrl.sv
+
 # ---- harness only: no silicon pin exists for any of this ----
 fpga/ulx3s/ulx3s_top.sv

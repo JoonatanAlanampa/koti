@@ -529,8 +529,21 @@ module koti_core #(
     // every PLIC write would be rejected as a write to read-only flash — and
     // reads would work, so it would look like a controller that accepts
     // configuration and then ignores it.
+    //
+    // ⚠️ ADDING AN MMIO WINDOW TAKES TWO EDITS, AND THIS IS THE SECOND ONE.
+    // project.sv decodes the window; this decides whether a write to it is
+    // legal. Miss this half and reads work while the first WRITE takes a store
+    // access fault — which, with mtvec still 0 in early bare-metal code, jumps
+    // to 0x00000000 and RESTARTS THE PROGRAM. The symptom is a machine that
+    // prints its banner over and over, which looks like a reset problem and is
+    // not one. The PLIC hit this first (see above); microSD hit it second,
+    // 2026-08-07, and it cost a simulation round trip to recognise.
     wire pa_dev      = !d_pa[24] && ((d_pa[23:16] >= 8'h01
+`ifdef KOTI_FPGA
+                                   && d_pa[23:16] <= 8'h05)   // 0x05 = microSD
+`else
                                    && d_pa[23:16] <= 8'h04)
+`endif
                                   || d_pa[23:22] == 2'b11);
     wire pa_flash_ro = !d_pa[24] && !pa_dev;
 

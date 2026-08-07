@@ -56,6 +56,14 @@ module tt_um_koti (
     output wire [15:0] sdram_dout,
     output wire        sdram_doe,
     input  wire [15:0] sdram_din,
+    // microSD in SPI mode. FPGA-only for the same reason the SDRAM pins are:
+    // a TinyTapeout tile has no pin to spare — all 8 `uo` are the VGA Pmod, all
+    // 8 `uio` the memory Pmod, and `ui` is input-only. On the ULX3S these land
+    // on the onboard card slot.
+    output wire        sd_cs_n,
+    output wire        sd_sck,
+    output wire        sd_mosi,
+    input  wire        sd_miso,
 `endif
     input  wire       ena,      // always 1 when the design is powered, so you can ignore it
     input  wire       clk,      // clock
@@ -129,6 +137,15 @@ module tt_um_koti (
   // aliased flash data past 64 KB into these windows every 512 KB (F1).
   wire clint_range = d_addr[22:14] == 9'h002;
   wire vga_range   = d_addr[22:14] == 9'h004;
+`ifdef KOTI_FPGA
+  // microSD at 0x0005_0000, the next free 64 KB window after VGA/PS2. Decoded
+  // in FULL like the others: a partial compare aliased flash data into these
+  // windows every 512 KB (defect F1), which is the sort of bug that reads as
+  // random memory corruption.
+  wire sd_range    = d_addr[22:14] == 9'h005;
+`else
+  wire sd_range    = 1'b0;
+`endif
   // PLIC: the TOP 4 MB of flash address space, 0x00C0_0000..0x00FF_FFFF.
   //
   // It cannot live in a 64 KB carve-out beside the CLINT: the SiFive layout
@@ -139,11 +156,13 @@ module tt_um_koti (
   wire plic_range  = !d_addr[22] && d_addr[21:20] == 2'b11;
   wire clint_sel   = d_req && clint_range;
   wire vga_sel     = d_req && vga_range;
+  wire sd_sel_i    = d_req && sd_range;
   wire plic_sel    = d_req && plic_range;
-  reg  clint_ack, vga_ack, plic_ack;
+  reg  clint_ack, vga_ack, plic_ack, sd_ack;
   always @(posedge clk) begin
       clint_ack <= rst ? 1'b0 : (clint_sel && !clint_ack);
       vga_ack   <= rst ? 1'b0 : (vga_sel && !vga_ack);
+      sd_ack    <= rst ? 1'b0 : (sd_sel_i && !sd_ack);
       plic_ack  <= rst ? 1'b0 : (plic_sel && !plic_ack);
   end
 
@@ -273,11 +292,27 @@ module tt_um_koti (
   always @(posedge clk)
       if (plic_sel && !plic_ack && !d_we) plic_rdata_q <= plic_rdata;
 
+  // ---- microSD (FPGA only) ----
+  wire [31:0] sd_rdata;
+`ifdef KOTI_FPGA
+  sd_ctrl sd (
+      .clk(clk), .rst(rst),
+      .sel(sd_sel_i && !sd_ack), .we(d_we), .reg_a(d_addr[1:0]),
+      .wdata(d_wdata), .rdata(sd_rdata),
+      .sd_cs_n(sd_cs_n), .sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso)
+  );
+`else
+  // No pins on silicon, so the window reads as zero rather than as x. An x here
+  // would reach the CPU through d_rdata and look like a core defect.
+  assign sd_rdata = 32'd0;
+`endif
+
   wire ad_ack;
-  assign d_ack   = clint_ack || vga_ack || plic_ack || ad_ack;
+  assign d_ack   = clint_ack || vga_ack || plic_ack || sd_ack || ad_ack;
   assign d_rdata = clint_ack ? clint_rdata
                  : vga_ack   ? vga_rdata_q
-                 : plic_ack  ? plic_rdata_q : m_rdata;
+                 : plic_ack  ? plic_rdata_q
+                 : sd_ack    ? sd_rdata     : m_rdata;
 
   // ---- video DMA + text pipeline ----
   wire        v_req, v_ack, vt_hs, vt_vs, vt_act, vt_pix;
@@ -319,7 +354,7 @@ module tt_um_koti (
       .clk(clk), .rst(rst),
       .v_req(v_req), .v_addr(v_addr), .v_ack(v_ack),
       .f_req(fc_req), .f_addr(fc_addr), .f_ack(fc_ack),
-      .d_req(d_req && !clint_range && !vga_range && !plic_range), .d_we(d_we),
+      .d_req(d_req && !clint_range && !vga_range && !plic_range && !sd_range), .d_we(d_we),
       .d_addr(d_addr), .d_wdata(d_wdata), .d_be(d_be), .d_ack(ad_ack),
       .m_req(m_req), .m_we(m_we), .m_burst(m_burst), .m_addr(m_addr),
       .m_wdata(m_wdata), .m_be(m_be), .m_ack(m_ack)

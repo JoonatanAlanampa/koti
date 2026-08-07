@@ -35,7 +35,8 @@ def main():
     # the SDRAM's read timing; only this proves its address decode.
     for name, srcs in (("hello", ["crt0.S", "console.c", "hello.c"]),
                        ("bringup", ["crt0.S", "bringup.c"]),
-                       ("memtest", ["crt0.S", "memtest.c"])):
+                       ("memtest", ["crt0.S", "memtest.c"]),
+                       ("sdtest",  ["crt0.S", "sdtest.c"])):
         run([GCC, "-march=rv32ima_zicsr", "-mabi=ilp32", "-O2",
              "-nostdlib", "-nostartfiles", "-static",
              "-T", "link.ld", "-o", f"{name}.elf", *srcs])

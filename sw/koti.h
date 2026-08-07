@@ -29,6 +29,21 @@
 #define PS2_AVAIL 0x100u
 #define PS2_OVF   0x200u
 
+// microSD (FPGA builds only — a TinyTapeout tile has no pin for a card).
+// See src/sd_ctrl.sv. Poll SD_DONE, never SD_BUSY: sd_spi leaves `ready` high
+// through a read and only toggles `busy`, and `busy` has not risen yet when the
+// start write returns — so waiting on it can pass on a half-filled buffer.
+#define SD_CTRL   REG32(0x00050000)   // w: bit0 init, bit1 read; r: status
+#define SD_LBA    REG32(0x00050004)   // block number for the next read
+#define SD_DATA   REG32(0x00050008)   // r: next word of the block, ptr++; w: rewind
+#define SD_READY  0x1u                // initialised and idle
+#define SD_BUSY   0x2u
+#define SD_ERR    0x4u
+#define SD_DONE   0x8u                // sticky: the buffer holds a full block
+#define SD_START_INIT 0x1u
+#define SD_START_RD   0x2u
+#define SD_BLOCK_WORDS 128u
+
 static inline void uart_putc(char c) {
     while (UART & 1)
         ;

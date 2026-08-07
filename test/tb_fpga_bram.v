@@ -82,6 +82,20 @@ module tb_fpga_bram ();
       .dout(part_dout), .dout_oe(part_oe)
   );
 
+  // ---- onboard microSD -----------------------------------------------------
+  // A card model rather than a tie-off: sd_d[0] is MISO and nothing else drives
+  // it, so without this it is z, and z on a peripheral input is how an x gets
+  // into the CPU and looks like a core defect. This bench does not exercise the
+  // card (bringup.bin never touches it) — tb_sd.v does that — it just makes the
+  // bus defined.
+  wire [3:0] sd_d;
+  wire       sd_clk, sd_cmd;
+  pullup (sd_d[0]);
+
+  sd_card_model card_model (
+      .cs_n(sd_d[3]), .sck(sd_clk), .mosi(sd_cmd), .miso(sd_d[0])
+  );
+
   ulx3s_top uut (
       .clk_25mhz  (clk),
       .btn        (btn),
@@ -94,6 +108,9 @@ module tb_fpga_bram ();
       .vga_gp     (vga_gp),
       .vga_gn     (vga_gn),
       .ps2_gp     (ps2_gp),
+      .sd_clk     (sd_clk),
+      .sd_cmd     (sd_cmd),
+      .sd_d       (sd_d),
       .sdram_clk  (sdram_clk),
       .sdram_cke  (sdram_cke),
       .sdram_csn  (sdram_csn),
@@ -120,11 +137,20 @@ module tb_fpga_bram ();
   integer    nchars = 0;
   reg [63:0] clkcnt = 64'd0;
 
-  // The banner sw/hello.c prints before it touches VGA.
+  // Which string counts as success, chosen with +mark=<n> so ONE bench can
+  // verify every image baked into the fabric flash. Adding a bench per image
+  // would mean each new image arrives with an untested copy of this UART
+  // receiver, the SDRAM model and the harness wiring.
+  //   0 (default) sw/bringup.bin — the banner it prints forever
+  //   1           sw/sdtest.bin / sw/memtest.bin — their per-pass verdict
   localparam integer MARKLEN = 29;
-  localparam [8*MARKLEN-1:0] MARKER = "Koti-1: hello from my own SoC";
+  localparam [8*MARKLEN-1:0] MARKER0 = "Koti-1: hello from my own SoC";
+  localparam integer MARKLEN1 = 10;
+  localparam [8*MARKLEN1-1:0] MARKER1 = "pass CLEAN";
+  integer mark = 0;
   reg [8*MARKLEN-1:0] markbuf = {(8*MARKLEN){1'b0}};
   reg                 saw_marker = 1'b0;
+  initial if (!$value$plusargs("mark=%d", mark)) mark = 0;
 
   wire rst_n = uut.rst_n;
 
@@ -151,7 +177,8 @@ module tb_fpga_bram ();
       $fflush;
       nchars = nchars + 1;
       markbuf = {markbuf[8*(MARKLEN-1)-1:0], ush};
-      if (markbuf == MARKER) saw_marker = 1'b1;
+      if (mark == 0 && markbuf == MARKER0)                     saw_marker = 1'b1;
+      if (mark == 1 && markbuf[8*MARKLEN1-1:0] == MARKER1)     saw_marker = 1'b1;
     end
   end
 

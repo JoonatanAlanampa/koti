@@ -70,6 +70,9 @@ EXPECTED = {
     # and declaring the _n would be a second driver on the same pair.
     "gpdi_dp[0]": "A16", "gpdi_dp[1]": "A14",
     "gpdi_dp[2]": "A12", "gpdi_dp[3]": "A17",
+    # US2, the USB HID keyboard. The BIDIRECTIONAL pair — E16/F16 are the
+    # differential input-only pair and cannot drive a bus.
+    "usb_fpga_bd_dp": "D15", "usb_fpga_bd_dn": "E15",
     # J1 = gp/gn[0..3]
     "pmod_gp[0]": "B11", "pmod_gp[1]": "A10", "pmod_gp[2]": "A9",
     "pmod_gp[3]": "B9",

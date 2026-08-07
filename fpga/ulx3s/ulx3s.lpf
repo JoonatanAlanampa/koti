@@ -129,6 +129,19 @@ IOBUF PORT "sd_d[1]" PULLMODE=UP   IO_TYPE=LVCMOS33 DRIVE=4;
 IOBUF PORT "sd_d[2]" PULLMODE=UP   IO_TYPE=LVCMOS33 DRIVE=4;
 IOBUF PORT "sd_d[3]" PULLMODE=UP   IO_TYPE=LVCMOS33 DRIVE=4;
 
+# ---- US2: USB HID keyboard, straight onto the FPGA ----
+# The BIDIRECTIONAL pair. `usb_fpga_dp/dn` (E16/F16) are the differential
+# input-only pair and cannot drive a bus, so they are the wrong pins for a host.
+# `usb_fpga_pu_dp/dn` (B12/C12) are the pull controls and are deliberately NOT
+# constrained: US2 carries the host-side pull-downs on the board, and the core
+# author's own ULX3S example leaves those two commented out.
+# PULLMODE=NONE matters — an FPGA pull-up on D+ would look to the host logic
+# like a device announcing itself, permanently.
+LOCATE COMP "usb_fpga_bd_dp" SITE "D15";
+LOCATE COMP "usb_fpga_bd_dn" SITE "E15";
+IOBUF PORT "usb_fpga_bd_dp" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "usb_fpga_bd_dn" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+
 # ---- GPDI / HDMI: koti's standard video output (user directive 2026-08-07) ----
 # Sites are byte-identical between upstream ulx3s_v20.lpf and the v3.1.x
 # prototype file (console diffed them 2026-08-06), so they are correct on the

@@ -81,6 +81,15 @@ module tt_um_koti (
     output wire        video_hs,       // active low
     output wire        video_vs,       // active low
     output wire        video_de,       // high inside the visible box
+    // USB HID keyboard, from vendor/usb_hid_host.v in the harness. The core
+    // needs its own 12 MHz domain, so it lives out there and only its results
+    // come in here; src/usb_kbd.sv does the crossing.
+    // ⚠️ `usb_report_tog` is a TOGGLE, not the core's one-clock pulse.
+    input  wire        usb_report_tog,
+    input  wire [1:0]  usb_typ,
+    input  wire        usb_conerr,
+    input  wire [7:0]  usb_key_modifiers,
+    input  wire [7:0]  usb_key1, usb_key2, usb_key3, usb_key4,
 `endif
     input  wire       ena,      // always 1 when the design is powered, so you can ignore it
     input  wire       clk,      // clock
@@ -160,8 +169,12 @@ module tt_um_koti (
   // windows every 512 KB (defect F1), which is the sort of bug that reads as
   // random memory corruption.
   wire sd_range    = d_addr[22:14] == 9'h005;
+  // USB HID keyboard at 0x0006_0000, the next window after the microSD. Same
+  // full compare, same reason.
+  wire usb_range   = d_addr[22:14] == 9'h006;
 `else
   wire sd_range    = 1'b0;
+  wire usb_range   = 1'b0;
 `endif
   // PLIC: the TOP 4 MB of flash address space, 0x00C0_0000..0x00FF_FFFF.
   //
@@ -174,12 +187,14 @@ module tt_um_koti (
   wire clint_sel   = d_req && clint_range;
   wire vga_sel     = d_req && vga_range;
   wire sd_sel_i    = d_req && sd_range;
+  wire usb_sel_i   = d_req && usb_range;
   wire plic_sel    = d_req && plic_range;
-  reg  clint_ack, vga_ack, plic_ack, sd_ack;
+  reg  clint_ack, vga_ack, plic_ack, sd_ack, usb_ack;
   always @(posedge clk) begin
       clint_ack <= rst ? 1'b0 : (clint_sel && !clint_ack);
       vga_ack   <= rst ? 1'b0 : (vga_sel && !vga_ack);
       sd_ack    <= rst ? 1'b0 : (sd_sel_i && !sd_ack);
+      usb_ack   <= rst ? 1'b0 : (usb_sel_i && !usb_ack);
       plic_ack  <= rst ? 1'b0 : (plic_sel && !plic_ack);
   end
 
@@ -325,12 +340,34 @@ module tt_um_koti (
   assign sd_rdata = 32'd0;
 `endif
 
+  // ---- USB HID keyboard (FPGA only) ----
+  // The vendored host core lives in the harness, in its own 12 MHz domain;
+  // usb_kbd does the crossing and turns held keys into keystrokes.
+  wire [31:0] usb_rdata;
+  wire        usb_kb_irq;
+`ifdef KOTI_FPGA
+  usb_kbd ukbd (
+      .clk(clk), .rst(rst),
+      .sel(usb_sel_i && !usb_ack), .we(d_we), .reg_a(d_addr[1:0]),
+      .rdata(usb_rdata),
+      .usb_report_tog(usb_report_tog), .usb_typ(usb_typ),
+      .usb_conerr(usb_conerr), .usb_key_modifiers(usb_key_modifiers),
+      .usb_key1(usb_key1), .usb_key2(usb_key2),
+      .usb_key3(usb_key3), .usb_key4(usb_key4),
+      .kb_avail_irq(usb_kb_irq)
+  );
+`else
+  assign usb_rdata  = 32'd0;
+  assign usb_kb_irq = 1'b0;
+`endif
+
   wire ad_ack;
-  assign d_ack   = clint_ack || vga_ack || plic_ack || sd_ack || ad_ack;
+  assign d_ack   = clint_ack || vga_ack || plic_ack || sd_ack || usb_ack || ad_ack;
   assign d_rdata = clint_ack ? clint_rdata
                  : vga_ack   ? vga_rdata_q
                  : plic_ack  ? plic_rdata_q
-                 : sd_ack    ? sd_rdata     : m_rdata;
+                 : sd_ack    ? sd_rdata
+                 : usb_ack   ? usb_rdata    : m_rdata;
 
   // ---- video DMA + text pipeline ----
   wire        v_req, v_ack, vt_hs, vt_vs, vt_act, vt_pix;
@@ -372,7 +409,8 @@ module tt_um_koti (
       .clk(clk), .rst(rst),
       .v_req(v_req), .v_addr(v_addr), .v_ack(v_ack),
       .f_req(fc_req), .f_addr(fc_addr), .f_ack(fc_ack),
-      .d_req(d_req && !clint_range && !vga_range && !plic_range && !sd_range), .d_we(d_we),
+      .d_req(d_req && !clint_range && !vga_range && !plic_range && !sd_range
+                   && !usb_range), .d_we(d_we),
       .d_addr(d_addr), .d_wdata(d_wdata), .d_be(d_be), .d_ack(ad_ack),
       .m_req(m_req), .m_we(m_we), .m_burst(m_burst), .m_addr(m_addr),
       .m_wdata(m_wdata), .m_be(m_be), .m_ack(m_ack)

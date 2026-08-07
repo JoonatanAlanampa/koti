@@ -59,6 +59,13 @@ module tb_boot ();
       .sdram_rasn(sdram_rasn), .sdram_casn(sdram_casn), .sdram_wen(sdram_wen),
       .sdram_a(sdram_a), .sdram_ba(sdram_ba), .sdram_dqm(sdram_dqm),
       .sdram_dout(sdram_dout), .sdram_doe(sdram_doe), .sdram_din(16'd0),
+      // No keyboard on this bench, and TIED rather than left dangling. An
+      // unconnected input is x, and these feed usb_kbd's report state machine —
+      // x there would propagate into its FIFO pointers, which is precisely the
+      // class of defect that makes a bench lie rather than fail.
+      .usb_report_tog(1'b0), .usb_typ(2'd0), .usb_conerr(1'b0),
+      .usb_key_modifiers(8'd0),
+      .usb_key1(8'd0), .usb_key2(8'd0), .usb_key3(8'd0), .usb_key4(8'd0),
       .ena(ena), .clk(clk), .rst_n(rst_n)
   );
 

@@ -34,18 +34,19 @@ def main():
     # runtime, because probing means touching it. So:
     #
     #   sbi_test.bin  no SD. test/run.py's ASIC bench, and nothing else.
-    #   sbi_sd.bin    -DKOTI_SD. tb_boot, and the `image: sbi` bitstream —
+    #   sbi_sd.bin    -DKOTI_ULX3S. tb_boot, and the `image: sbi` bitstream —
     #                 i.e. everything that is the ULX3S machine.
     #
     # Same sources, same link script; only the one call differs.
-    # sdboot.c is not merely #ifdef'd out of the no-SD build, it is NOT LINKED.
+    # sdboot.c and usbkbd.c are not merely #ifdef'd out of the no-peripheral
+    # build, they are NOT LINKED.
     # Leaving it in as dead code would still move every symbol after it and
     # change the image, and the point of the no-SD binary is that the ASIC bench
     # runs against exactly the firmware it ran against before the microSD
     # existed — provable by comparing bytes, not by reading the source.
     for name, extra, srcs in (
             ("sbi_test", [],            []),
-            ("sbi_sd",   ["-DKOTI_SD"], ["sdboot.c"])):
+            ("sbi_sd",   ["-DKOTI_ULX3S"], ["sdboot.c", "../usbkbd.c"])):
         run([GCC, "-march=rv32ima_zicsr", "-mabi=ilp32", "-O2",
              "-ffreestanding", "-nostdlib", "-nostartfiles", "-static",
              *extra,
@@ -60,7 +61,7 @@ def main():
     # between .payload and .dtb with zeros, so an off-by-one here is invisible
     # in the file size and fatal at boot: the firmware would fail its magic
     # test and hand a kernel a1 = 0.
-    # Checked on BOTH binaries. -DKOTI_SD moves code around, and the one that
+    # Checked on BOTH binaries. -DKOTI_ULX3S moves code around, and the one that
     # boots the board is sbi_sd.bin — checking only the other would be checking
     # the image that never meets a kernel.
     for name in ("sbi_test", "sbi_sd"):

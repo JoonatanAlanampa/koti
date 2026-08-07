@@ -43,6 +43,10 @@ on:
       #            prints the raw bytes. Use when sdtest says SD_ERR — it is the
       #            only image that distinguishes a silent card from a broken
       #            engine, which simulation structurally cannot do.
+      #   usbtest  plug a USB keyboard into US2 and see whether it
+      #            enumerates, then print every keystroke with its raw HID
+      #            usage code. The bring-up instrument for the keyboard
+      #            rung — the layer below any Linux plumbing.
       #   sbi      ⭐ THE ONE THAT BOOTS LINUX. The SBI firmware (sw/sbi/, not
       #            sw/): it loads a kernel off the microSD into RAM at
       #            0x0140_0000, then enters it. Falls back to its built-in
@@ -57,7 +61,7 @@ on:
         description: 'bram variant: which software to bake into the fabric flash'
         default: 'bringup'
         type: choice
-        options: ['bringup', 'memtest', 'sdtest', 'sdraw', 'sbi', 'hello']
+        options: ['bringup', 'memtest', 'sdtest', 'sdraw', 'usbtest', 'sbi', 'hello']
 
 env:
   OSS_TAG: '2026-07-17'

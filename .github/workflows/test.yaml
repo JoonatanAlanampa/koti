@@ -133,10 +133,10 @@ jobs:
           mkdir -p fpga/ulx3s/build
           python3 fpga/ulx3s/mkflashhex.py sw/bringup.bin fpga/ulx3s/build/flash.hex
           iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_FLASH_BRAM \
-            -o tb_fpga_bram.vvp src/*.sv vendor/*.sv \
+            -o tb_fpga_bram.vvp src/*.sv src/usb_hid_host_rom.v vendor/*.sv vendor/*.v \
             fpga/ulx3s/bram_flash.sv fpga/ulx3s/ulx3s_top.sv \
             test/sdram_model.sv test/sd_card_model.sv \
-            test/sim_prims.v vendor/pll_25_125.v test/tb_fpga_bram.v \
+            test/sim_prims.v test/tb_fpga_bram.v \
             2>&1 | grep -v "sorry:" || true
           vvp tb_fpga_bram.vvp | tee fpga_bram.log
           grep -q "tb_fpga_bram: PASS" fpga_bram.log
@@ -153,10 +153,10 @@ jobs:
           mkdir -p fpga/ulx3s/build
           python3 fpga/ulx3s/mkflashhex.py sw/sdraw.bin fpga/ulx3s/build/flash.hex
           iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_FLASH_BRAM \
-            -o tb_sdraw.vvp src/*.sv vendor/*.sv \
+            -o tb_sdraw.vvp src/*.sv src/usb_hid_host_rom.v vendor/*.sv vendor/*.v \
             fpga/ulx3s/bram_flash.sv fpga/ulx3s/ulx3s_top.sv \
             test/sdram_model.sv test/sd_card_model.sv \
-            test/sim_prims.v vendor/pll_25_125.v test/tb_fpga_bram.v \
+            test/sim_prims.v test/tb_fpga_bram.v \
             2>&1 | grep -v "sorry:" || true
           vvp tb_sdraw.vvp +mark=2 | tee sdraw.log
           grep -q "tb_fpga_bram: PASS" sdraw.log
@@ -178,10 +178,10 @@ jobs:
           python3 fpga/ulx3s/mkflashhex.py sw/sbi/sbi_sd.bin \
             fpga/ulx3s/build/flash.hex
           iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_FLASH_BRAM \
-            -o tb_sdboot.vvp src/*.sv vendor/*.sv \
+            -o tb_sdboot.vvp src/*.sv src/usb_hid_host_rom.v vendor/*.sv vendor/*.v \
             fpga/ulx3s/bram_flash.sv fpga/ulx3s/ulx3s_top.sv \
             test/sdram_model.sv test/sd_card_model.sv \
-            test/sim_prims.v vendor/pll_25_125.v test/tb_fpga_bram.v \
+            test/sim_prims.v test/tb_fpga_bram.v \
             2>&1 | grep -v "sorry:" || true
           # +sw3=1 because the firmware enables VGA, which gives uo[0] to the
           # raster and mirrors the UART on uo[6] — a real DIP switch, not a

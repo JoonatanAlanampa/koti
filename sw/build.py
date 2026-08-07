@@ -41,7 +41,12 @@ def main():
                        # sd_spi engine entirely and hand-clocks CMD0 through the
                        # SD_RAW escape hatch, so a silent card and a broken
                        # engine stop producing the same message.
-                       ("sdraw",   ["crt0.S", "sdraw.c"])):
+                       ("sdraw",   ["crt0.S", "sdraw.c"]),
+                       # usbtest.bin: plug a keyboard into US2 and see
+                       # whether it enumerates. The bring-up instrument
+                       # for the keyboard rung, and the layer below any
+                       # Linux plumbing that depends on it.
+                       ("usbtest", ["crt0.S", "usbtest.c"])):
         run([GCC, "-march=rv32ima_zicsr", "-mabi=ilp32", "-O2",
              "-nostdlib", "-nostartfiles", "-static",
              "-T", "link.ld", "-o", f"{name}.elf", *srcs])

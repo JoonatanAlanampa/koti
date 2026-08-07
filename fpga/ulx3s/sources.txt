@@ -68,5 +68,14 @@ vendor/tmds_encoder.sv
 vendor/dvi_tx.sv
 vendor/pll_25_125.v
 
+# USB HID keyboard (US2). The core is vendored; src/usb_hid_host_rom.v is KOTI'S
+# — upstream's ROM wrapper uses a relative $readmemh path that cannot resolve
+# from both the repo root and test/, and fails SILENTLY. See tools/mkusbrom.py.
+# vendor/usb_clock.v declares a module called `clock` (generic, but verbatim).
+vendor/usb_clock.v
+src/usb_hid_host_rom.v
+vendor/usb_hid_host.v
+src/usb_kbd.sv
+
 # ---- harness only: no silicon pin exists for any of this ----
 fpga/ulx3s/ulx3s_top.sv

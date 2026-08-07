@@ -61,6 +61,30 @@
 #define SD_RAW_MISO_OE 0x10u          // w: drive MISO from the FPGA
 #define SD_RAW_MISO_HI 0x20u          // w: the value to drive
 
+// USB HID keyboard on US2 (FPGA builds only). See src/usb_kbd.sv.
+// Deliberately the SAME bit positions as PS2_DATA for `avail` and `ovf`, so the
+// two keyboard paths read alike — but the CODE IS A HID USAGE, not a PS/2
+// scancode, and the two numbering schemes share nothing. sw/usbkbd.c translates.
+// ⚠️ READING USB_KBD POPS the queue when USB_AVAIL is set. Read it once.
+#define USB_KBD   REG32(0x00060000)   // ⚠️ READING POPS when USB_AVAIL is set
+#define USB_STAT  REG32(0x00060004)   // status + live modifiers, NO side effects
+#define USB_AVAIL  0x100u
+#define USB_OVF    0x200u             // sticky; cleared by the read that sees it
+// From USB_STAT only. Status is in the other register on purpose: a "is a
+// keyboard there?" check must not eat the keystroke it was asked about.
+#define USB_MODS(v) ((v) & 0xFFu)
+#define USB_TYP(v)  (((v) >> 8) & 3u) // 0 none, 1 keyboard, 2 mouse, 3 gamepad
+#define USB_CONERR  0x400u
+// HID modifier bits, as the boot protocol defines them.
+#define USB_MOD_LCTRL  0x01u
+#define USB_MOD_LSHIFT 0x02u
+#define USB_MOD_LALT   0x04u
+#define USB_MOD_RCTRL  0x10u
+#define USB_MOD_RSHIFT 0x20u
+#define USB_MOD_RALT   0x40u
+#define USB_MOD_SHIFT  (USB_MOD_LSHIFT | USB_MOD_RSHIFT)
+#define USB_MOD_CTRL   (USB_MOD_LCTRL  | USB_MOD_RCTRL)
+
 static inline void uart_putc(char c) {
     while (UART & 1)
         ;

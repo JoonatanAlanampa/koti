@@ -540,7 +540,7 @@ module koti_core #(
     // 2026-08-07, and it cost a simulation round trip to recognise.
     wire pa_dev      = !d_pa[24] && ((d_pa[23:16] >= 8'h01
 `ifdef KOTI_FPGA
-                                   && d_pa[23:16] <= 8'h05)   // 0x05 = microSD
+                                   && d_pa[23:16] <= 8'h06)   // 05 = SD, 06 = USB
 `else
                                    && d_pa[23:16] <= 8'h04)
 `endif

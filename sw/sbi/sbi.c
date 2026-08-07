@@ -5,6 +5,9 @@
 #include "../console.h"
 #include "../ps2kbd.h"
 #include "sdboot.h"
+#ifdef KOTI_ULX3S
+#include "../usbkbd.h"
+#endif
 
 #define csr_read(c) ({ uint32_t v_; \
     asm volatile("csrr %0, " #c : "=r"(v_)); v_; })
@@ -104,7 +107,7 @@ struct boot_target boot_target(void) {
     // a "probe" would have to touch the address to find out, so the check
     // cannot be made at runtime; the machine has to be known when the firmware
     // is built. That is why build.py emits TWO binaries.
-#ifdef KOTI_SD
+#ifdef KOTI_ULX3S
     (void)sd_load_kernel();
 #endif
 
@@ -191,7 +194,25 @@ void sbi_trap(uint32_t cause, uint32_t *r) {
             // ready. ps2_getchar consumes at most one scancode per call, so
             // prefixes, releases and shift presses also return -1 — the
             // caller polls.
-            r[A0] = (uint32_t)ps2_getchar();
+            // USB FIRST, PS/2 second, and both rather than one: USB is the
+            // keyboard the user actually owns, and PS/2 stays until USB has
+            // typed a character on real hardware (the standing rule in
+            // PLAN.md — a working path is not deleted before its replacement
+            // is proven). They cannot fight: a machine has one or the other
+            // plugged in, and an absent USB keyboard returns -1 forever.
+            //
+            // Order matters for a subtler reason too. usb_getchar() POPS its
+            // queue, so it must not be called after something else has already
+            // returned a character this call — hence `if`, not two statements.
+            {
+                int ch = -1;
+#ifdef KOTI_ULX3S
+                ch = usb_getchar();
+#endif
+                if (ch < 0)
+                    ch = ps2_getchar();
+                r[A0] = (uint32_t)ch;
+            }
             csr_write(mepc, csr_read(mepc) + 4);
             return;
 

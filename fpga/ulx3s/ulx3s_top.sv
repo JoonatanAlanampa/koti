@@ -49,6 +49,15 @@ module ulx3s_top (
     output logic [7:0] led,
     output logic       ftdi_rxd,
 
+    // ---- US2: USB HID keyboard, straight onto the FPGA ----
+    // The bidirectional pair, which is what a soft host needs. `usb_fpga_dp/dn`
+    // (E16/F16) are the differential INPUT-only pair and cannot drive a bus;
+    // `usb_fpga_pu_dp/dn` (B12/C12) are the pull controls and are deliberately
+    // left unconstrained — the ULX3S carries the host-side pull-downs on US2,
+    // and the upstream usb_hid_host ULX3S example leaves them commented out too.
+    inout  wire        usb_fpga_bd_dp,
+    inout  wire        usb_fpga_bd_dn,
+
     // ---- GPDI / HDMI, koti's standard video output (user directive 2026-08-07)
     // Only the _p pin of each pair is a port: IO_TYPE=LVCMOS33D makes the ECP5
     // drive the paired _n site with the complement, so declaring gpdi_dn too
@@ -217,6 +226,12 @@ module ulx3s_top (
       .video_hs   (video_hs),
       .video_vs   (video_vs),
       .video_de   (video_de),
+      .usb_report_tog   (usb_report_tog),
+      .usb_typ          (usb_typ),
+      .usb_conerr       (usb_conerr),
+      .usb_key_modifiers(usb_key_modifiers),
+      .usb_key1(usb_key1), .usb_key2(usb_key2),
+      .usb_key3(usb_key3), .usb_key4(usb_key4),
 `endif
       .ena     (1'b1),
       .clk     (clk_25mhz),
@@ -364,6 +379,50 @@ module ulx3s_top (
     if (!rst_n)                 frames <= '0;
     else if (vsync && !vsync_q) frames <= frames + 8'd1;
   end
+
+  // ------------------------------------------------- USB HID keyboard (US2)
+  // The core is vendored (vendor/usb_hid_host.v, Apache-2.0, and its author
+  // ships a ULX3S example that this wiring follows). It does the whole USB
+  // protocol with no CPU: enumeration, boot protocol, periodic IN transfers.
+  //
+  // ⚠️ IT NEEDS 12 MHz AND KOTI RUNS AT 25. USB low speed is 1.5 Mbps and the
+  // core oversamples 8x, so 12 MHz is not negotiable — it is the bit rate. The
+  // two clocks are unrelated, so a proper crossing is mandatory; src/usb_kbd.sv
+  // does it, and everything crossing is the ONE toggle generated below.
+`ifdef KOTI_FPGA
+  wire clk_usb, usb_pll_lock;
+  // ⚠️ The module really is called `clock` — a regrettably generic name, but it
+  // is vendored verbatim from the core author's own ULX3S example and renaming
+  // it would break the "byte-identical copy" audit that vendor/README rests on.
+  // It burns TWO PLLs (25->100, then 100->12); with the HDMI PLL that is three
+  // of the 85F's four.
+  clock uclk (.clkin(clk_25mhz), .clk12(clk_usb), .clk100(), .locked(usb_pll_lock));
+
+  wire       usb_report;        // one 12 MHz clock wide — do NOT cross this
+  wire [1:0] usb_typ;
+  wire       usb_conerr;
+  wire [7:0] usb_key_modifiers, usb_key1, usb_key2, usb_key3, usb_key4;
+
+  usb_hid_host usbhid (
+      .usbclk(clk_usb), .usbrst_n(usb_pll_lock),
+      .usb_dm(usb_fpga_bd_dn), .usb_dp(usb_fpga_bd_dp),
+      .typ(usb_typ), .report(usb_report), .conerr(usb_conerr),
+      .key_modifiers(usb_key_modifiers),
+      .key1(usb_key1), .key2(usb_key2), .key3(usb_key3), .key4(usb_key4),
+      .mouse_btn(), .mouse_dx(), .mouse_dy(),
+      .game_l(), .game_r(), .game_u(), .game_d(),
+      .game_a(), .game_b(), .game_x(), .game_y(), .game_sel(), .game_sta(),
+      .dbg_hid_report()
+  );
+
+  // THE ONLY SIGNAL THAT CROSSES. A 12 MHz single-clock pulse is 83 ns; a
+  // 25 MHz sampler has no guarantee of catching it, and "usually catches it"
+  // means dropped keystrokes that look like a flaky keyboard. A toggle cannot
+  // be missed however the clocks drift, so the pulse is converted here, in the
+  // domain that owns it, and usb_kbd edge-detects it on the other side.
+  logic usb_report_tog = 1'b0;
+  always_ff @(posedge clk_usb) if (usb_report) usb_report_tog <= ~usb_report_tog;
+`endif
 
   // ------------------------------------------------------------ GPDI / HDMI
   // koti's standard video output (user directive 2026-08-07). The encoder trio

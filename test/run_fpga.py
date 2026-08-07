@@ -54,6 +54,13 @@ SOURCES = [
     VENDOR_DIR / "dvi_tx.sv",
     VENDOR_DIR / "pll_25_125.v",
     TEST_DIR / "sim_prims.v",
+    # USB HID keyboard on US2. src/usb_hid_host_rom.v is koti's, not vendored —
+    # upstream's ROM wrapper reads its microcode with a relative $readmemh path
+    # that cannot resolve from both here and the repo root, and fails silently.
+    SRC_DIR / "usb_kbd.sv",
+    SRC_DIR / "usb_hid_host_rom.v",
+    VENDOR_DIR / "usb_hid_host.v",
+    VENDOR_DIR / "usb_clock.v",
     FPGA_DIR / "ulx3s_top.sv",
     TEST_DIR / "sdram_model.sv",
     TEST_DIR / "tb_fpga.v",

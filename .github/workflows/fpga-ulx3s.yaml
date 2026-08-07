@@ -43,13 +43,21 @@ on:
       #            prints the raw bytes. Use when sdtest says SD_ERR — it is the
       #            only image that distinguishes a silent card from a broken
       #            engine, which simulation structurally cannot do.
+      #   sbi      ⭐ THE ONE THAT BOOTS LINUX. The SBI firmware (sw/sbi/, not
+      #            sw/): it loads a kernel off the microSD into RAM at
+      #            0x0140_0000, then enters it. Falls back to its built-in
+      #            payload if no koti boot header is on the card.
+      #            ⚠️ NEEDS DIP SWITCH 3 ON — this firmware enables VGA, which
+      #            gives uo[0] to the raster and mirrors the UART on uo[6]; SW3
+      #            is what points the FTDI at uo[6]. With SW3 off the console
+      #            is mojibake.
       #   hello    the demo: banner, then VGA. ⚠️ Its banner is unreadable in
       #            practice and afterwards uo[0] carries the video raster.
       image:
         description: 'bram variant: which software to bake into the fabric flash'
         default: 'bringup'
         type: choice
-        options: ['bringup', 'memtest', 'sdtest', 'sdraw', 'hello']
+        options: ['bringup', 'memtest', 'sdtest', 'sdraw', 'sbi', 'hello']
 
 env:
   OSS_TAG: '2026-07-17'
@@ -124,8 +132,12 @@ jobs:
         run: |
           mkdir -p fpga/ulx3s/build
           img="${{ inputs.image || 'bringup' }}"
-          echo "baking sw/$img.bin into the fabric flash"
-          python3 fpga/ulx3s/mkflashhex.py "sw/$img.bin" fpga/ulx3s/build/flash.hex
+          # `sbi` is the odd one out: it is the SBI FIRMWARE, which lives in
+          # sw/sbi/ rather than sw/, and it is the image that actually boots
+          # Linux — it loads the kernel off the microSD into RAM and enters it.
+          if [ "$img" = "sbi" ]; then bin="sw/sbi/sbi_test.bin"; else bin="sw/$img.bin"; fi
+          echo "baking $bin into the fabric flash"
+          python3 fpga/ulx3s/mkflashhex.py "$bin" fpga/ulx3s/build/flash.hex
           wc -l fpga/ulx3s/build/flash.hex
 
       - name: synthesis (yosys)

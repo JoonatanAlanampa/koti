@@ -31,7 +31,7 @@ def main():
          "-ffreestanding", "-nostdlib", "-nostartfiles", "-static",
          "-I", "..", "-T", "link.ld", "-o", "sbi_test.elf",
          "sbi.S", "sbi.c", "payload.c", "../console.c", "../ps2kbd.c",
-         "dtb.S"])
+         "sdboot.c", "dtb.S"])
     run([OBJCOPY, "-O", "binary", "sbi_test.elf", "sbi_test.bin"])
     size = (SBI / "sbi_test.bin").stat().st_size
     print(f"sbi_test.bin: {size} bytes")

@@ -159,6 +159,44 @@ jobs:
           vvp tb_sdraw.vvp +mark=2 | tee sdraw.log
           grep -q "tb_fpga_bram: PASS" sdraw.log
 
+      # THE KERNEL TRANSPORT. koti boots from a 32 KB block RAM and the kernel
+      # is 3.95 MB, so the microSD is the only route that is not measured in
+      # minutes per attempt. This runs the REAL firmware out of the fabric
+      # flash, with a real koti boot header and a real checksum on the modelled
+      # card, and both directions matter:
+      #   with an image  -> it loads and the checksum matches
+      #   without one    -> it changes nothing and the flash payload still runs
+      # The second is the one that keeps a bring-up board bootable when the
+      # card is missing, and it is the easier of the two to break silently.
+      - name: the microSD kernel transport
+        run: |
+          mkdir -p fpga/ulx3s/build
+          python3 tools/sdkernel.py fake --blocks 8 --out fake_kernel.bin
+          python3 tools/sdkernel.py build fake_kernel.bin --hex boot.hex
+          python3 fpga/ulx3s/mkflashhex.py sw/sbi/sbi_test.bin \
+            fpga/ulx3s/build/flash.hex
+          iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_FLASH_BRAM \
+            -o tb_sdboot.vvp src/*.sv vendor/*.sv \
+            fpga/ulx3s/bram_flash.sv fpga/ulx3s/ulx3s_top.sv \
+            test/sdram_model.sv test/sd_card_model.sv test/tb_fpga_bram.v \
+            2>&1 | grep -v "sorry:" || true
+          # +sw3=1 because the firmware enables VGA, which gives uo[0] to the
+          # raster and mirrors the UART on uo[6] — a real DIP switch, not a
+          # bench detail.
+          vvp tb_sdboot.vvp +mark=3 +sw3=1 \
+            +sdimg=boot.hex +sdimg_lba=2048 | tee sdboot.log
+          grep -q "tb_fpga_bram: PASS" sdboot.log
+          grep -q "sd: loading kernel ok" sdboot.log
+
+          # The fallback. The bench has no marker to find here and ends in its
+          # clock-limit FATAL, so `|| true` is expected — the assertions are the
+          # greps: the flash payload ran, and the loader stayed silent.
+          vvp tb_sdboot.vvp +mark=3 +sw3=1 | tee nocard.log || true
+          grep -q "STK" nocard.log
+          if grep -q "sd: loading" nocard.log; then
+            echo "loader announced work with no image on the card"; exit 1
+          fi
+
       - name: Test Summary
         uses: test-summary/action@v2.4
         with:

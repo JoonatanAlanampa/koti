@@ -4,6 +4,7 @@
 #include "../koti.h"
 #include "../console.h"
 #include "../ps2kbd.h"
+#include "sdboot.h"
 
 #define csr_read(c) ({ uint32_t v_; \
     asm volatile("csrr %0, " #c : "=r"(v_)); v_; })
@@ -90,6 +91,13 @@ struct boot_target { uint32_t entry; uint32_t dtb; };
 
 struct boot_target boot_target(void) {
     struct boot_target b = { PAYLOAD_ADDR, 0u };
+
+    // Try the microSD first. This is what puts a kernel at KERNEL_ADDR on real
+    // hardware — in simulation the bench preloads that memory instead, so this
+    // returns 0 harmlessly and every existing test is unaffected. It changes
+    // nothing on failure, so a missing or ordinary card costs one bounded
+    // attempt and falls through to the flash payload.
+    (void)sd_load_kernel();
 
     const volatile uint32_t *k = (const volatile uint32_t *)KERNEL_ADDR;
     if (k[0x38u / 4u] != RISCV_IMAGE_MAGIC2)

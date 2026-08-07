@@ -156,6 +156,19 @@ module tb_fpga_bram ();
   localparam [8*MARKLEN1-1:0] MARKER1 = "pass CLEAN";
   localparam integer MARKLEN2 = 17;
   localparam [8*MARKLEN2-1:0] MARKER2 = "THE CARD ANSWERED";
+  //   3           sw/sbi/sbi_test.bin — the firmware loaded a kernel image off
+  //               the card and its checksum matched. This is the TRANSPORT
+  //               gate: the whole point of the microSD is getting a 3.95 MB
+  //               kernel into a machine whose only other store is 32 KB, and
+  //               that path has to be proven against a real header and a real
+  //               checksum, which the synthetic card pattern can never carry.
+  //               Needs +sdimg/+sdimg_lba, and +sw3=1 because the firmware
+  //               enables VGA and the UART moves to uo[6].
+  localparam integer MARKLEN3 = 21;
+  localparam [8*MARKLEN3-1:0] MARKER3 = "sd: loading kernel ok";
+  integer sw3 = 0;
+  initial if (!$value$plusargs("sw3=%d", sw3)) sw3 = 0;
+
   integer mark = 0;
   reg [8*MARKLEN-1:0] markbuf = {(8*MARKLEN){1'b0}};
   reg                 saw_marker = 1'b0;
@@ -189,13 +202,19 @@ module tb_fpga_bram ();
       if (mark == 0 && markbuf == MARKER0)                     saw_marker = 1'b1;
       if (mark == 1 && markbuf[8*MARKLEN1-1:0] == MARKER1)     saw_marker = 1'b1;
       if (mark == 2 && markbuf[8*MARKLEN2-1:0] == MARKER2)     saw_marker = 1'b1;
+      if (mark == 3 && markbuf[8*MARKLEN3-1:0] == MARKER3)     saw_marker = 1'b1;
     end
   end
 
   // ---- run control -------------------------------------------------------
   initial begin
     btn = 7'b0000000;                 // btn[0] = PWR, active low: held = reset
-    sw  = 4'b0000;                    // SW1 unused here, SW3 off = UART on uo[0]
+    // SW1 unused here. SW3 (sw[2]) picks which pin the FTDI listens to:
+    // off = uo[0], the headless personality's UART. The SBI firmware turns VGA
+    // on, which gives uo[0] to the raster and mirrors the UART on uo[6] — so
+    // any image that enables VGA is unreadable with SW3 off, and that is a real
+    // DIP switch on the real board, not a bench detail. +sw3=1 selects uo[6].
+    sw  = {1'b0, sw3[0], 2'b00};
     repeat (4) @(posedge clk);
     btn[0] = 1'b1;                    // release reset; the POR counter still runs
   end

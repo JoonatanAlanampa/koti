@@ -31,7 +31,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 module sd_card_model #(
-    parameter integer BUSY_TRIES = 3      // ACMD41s answered 0x01 before 0x00
+    parameter integer BUSY_TRIES = 3,     // ACMD41s answered 0x01 before 0x00
+    parameter integer IMG_BLOCKS = 64     // how many blocks the overlay covers
 ) (
     input  wire cs_n,
     input  wire sck,
@@ -39,11 +40,43 @@ module sd_card_model #(
     output wire miso
 );
 
-  // The byte a real card computes for block `lba`, offset `i`. Exposed as a
-  // function so the bench checks against the SAME expression the model serves —
-  // one definition, so a disagreement is impossible.
+  // ---- optional real-image overlay --------------------------------------
+  // +sdimg=<hexfile> +sdimg_lba=<n> makes blocks [n, n+IMG_BLOCKS) come from a
+  // file instead of the synthetic pattern. That is what lets the firmware's
+  // microSD kernel loader be tested against a REAL header and a real checksum:
+  // the synthetic pattern can never carry a valid one, so without this the
+  // loader could only ever be exercised down its reject path.
+  // Off unless BOTH plusargs are given, so every existing bench is untouched.
+  reg  [7:0]      img [0:IMG_BLOCKS*512-1];
+  reg  [8*256-1:0] img_file;
+  reg  [31:0]     img_lba = 32'd0;
+  reg             img_on  = 1'b0;
+  integer         img_lba_i;
+
+  initial begin
+    if ($value$plusargs("sdimg_lba=%d", img_lba_i)
+        && $value$plusargs("sdimg=%s", img_file)) begin
+      // Zero first: $readmemh leaves anything the file does not cover as x,
+      // and x bytes reaching the loader would corrupt its checksum in a way
+      // that looks like a transport bug rather than a short file.
+      for (int k = 0; k < IMG_BLOCKS*512; k = k + 1)
+        img[k] = 8'h00;
+      $readmemh(img_file, img);
+      img_lba = img_lba_i[31:0];
+      img_on  = 1'b1;
+      $display("SD MODEL: overlay %0d blocks from LBA %0d", IMG_BLOCKS, img_lba);
+    end
+  end
+
+  // The byte a real card computes for block `lba`, offset `i`, or the overlay
+  // byte when one is loaded and covers that block. Exposed as a function so the
+  // bench checks against the SAME expression the model serves — one definition,
+  // so a disagreement is impossible.
   function automatic [7:0] payload(input [31:0] lba, input [31:0] i);
-    payload = 8'((lba * 32'd13) + (i * 32'd7));
+    if (img_on && lba >= img_lba && lba < (img_lba + IMG_BLOCKS))
+      payload = img[((lba - img_lba) * 32'd512) + i];
+    else
+      payload = 8'((lba * 32'd13) + (i * 32'd7));
   endfunction
 
   localparam [3:0] S_IDLE = 4'd0, S_RESP = 4'd1, S_WAIT = 4'd2,

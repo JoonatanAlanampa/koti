@@ -228,8 +228,10 @@
 		 *
 		 * `koti,sectors` exists because the engine never reads the card's
 		 * CSD, so nothing on the machine can ask how big the card is — it
-		 * has to be declared. 61071360 sectors = the 29.12 GB card on the
-		 * bench (31.3 GB nominal).
+		 * has to be declared. 61067264 sectors is the MEASURED size of the
+		 * card on the bench (29.12 GiB), read from the host rather than
+		 * assumed — the first value written here was 61071360, a guess from
+		 * the rounded capacity, and it was 4096 sectors TOO LARGE.
 		 * ⚠️ TOO SMALL only hides the tail of the card; TOO LARGE lets the
 		 * partition scanner read past the end and report IO errors on a
 		 * perfectly healthy card. Shrink rather than guess upward.
@@ -237,7 +239,7 @@
 		sd0: mmc@50000 {
 			compatible = "koti,sd-1";
 			reg = <0x00050000 0x00010000>;
-			koti,sectors = <61071360>;
+			koti,sectors = <61067264>;
 		};
 	};
 };

@@ -57,38 +57,59 @@
 // FPGA-only, behind KOTI_FPGA like sdram_ctrl and icache: a TinyTapeout tile
 // has no block RAM to put this in.
 //
-// ⛔ NOT ENABLED. `KOTI_DCACHE` is defined nowhere, so project.sv takes the
-// bypass. Enabling it made tb_boot print NOTHING in 700,000,000 clocks.
+// ⛔ NOT ENABLED — and the reason is NOT in this file. `KOTI_DCACHE` is
+// defined nowhere, so project.sv takes the bypass.
 //
-// WHAT IS ALREADY RULED OUT, measured 2026-08-08 -- do not re-walk these:
-//   * The cache in isolation. tb_dcache passes and its three mutations (never
-//     setting valid, not writing through, caching PTEs) are all caught.
-//   * The SoC integration in general. tb_fpga_bram PASSES with the cache
-//     enabled, through the real sdram_ctrl, at 135215 clocks -- FASTER than
-//     the 135401 without it.
-//   * Timing. 30.88 MHz post-route with it in, PASS at 25, up from 29.98.
-//   * ⭐ THE FIRMWARE. Running tb_boot with only +flash (no kernel) prints
-//     "STK", 3 characters, IDENTICALLY with and without the cache. So crt0's
-//     flash->RAM .data copy, the M-mode trap shim and the UART path are all
-//     fine through it. The machine is not dead.
+// ⭐ DIAGNOSED 2026-08-08. THE CACHE IS CORRECT; THE CORE'S ACK ROUTING IS NOT.
 //
-// ⇒ WHAT IS LEFT, and it is a narrow target: the failure needs a KERNEL. With
-// an Image at 0x01400000 the firmware boots it instead of the payload, and
-// that is the only configuration that fails. The kernel is also the only thing
-// that turns the MMU on -- which points straight at the `c_ptw` bypass and the
-// EX-side walker borrowing the data port mid-stream. The specific suspicion to
-// test first: the cache LATCHES a request into look_* on accept and holds it
-// until completion, so if the core can switch between a normal access and a
-// walker access while a transaction is outstanding, the cache answers the
-// address it latched rather than the one the core is now asking about.
+// koti_core.sv routes the data-port acknowledgement by who is asking AT THE
+// MOMENT THE ACK ARRIVES:
+//     wire dw_ack     = d_ack &&  dw_req;   // the page walker
+//     wire m_ack_here = d_ack && !dw_req;   // the M stage
+// Not by who ISSUED the transaction. With the arbiter answering directly those
+// two coincide often enough to work. This cache adds two cycles between accept
+// and ack, and the EX-side walker "borrows the port while M is quiet" — an M
+// stage stalled waiting for the cache LOOKS quiet. So the walker can take the
+// port while a load's transaction is still outstanding, and the ack is then
+// delivered to the wrong consumer: a load's data handed to the walker, or the
+// walker's PTE handed to a load.
 //
-// Reproduce in ~30 s, no CI needed:
+// ⇒ SYMPTOM, measured: with a kernel, the boot reaches the MMU and then storms
+// traps. At 7.9M clocks the PC is 100% inside `handle_exception` across 66
+// DISTINCT addresses — walking, not spinning — with 61% of samples showing a
+// data request up with no acknowledgement. A walker fed the wrong word builds a
+// wrong translation, which faults, which walks again.
+//
+// ⚠️ THIS MAY BE A LATENT CORE BUG THAT THE CACHE MERELY EXPOSED. The arbiter
+// already gives video absolute priority and can delay a data ack; nothing about
+// the routing above is safe against that either, it has just never been pushed
+// hard enough to show. Fixing it in the CORE — latch `dw_req` when the
+// transaction is issued and route the ack by the latched value — is therefore
+// worth more than making the cache pretend to be zero-latency, and it makes the
+// core correct against ANY memory latency rather than against this one.
+//
+// WHAT IS ALREADY RULED OUT — do not re-walk these:
+//   * The cache in isolation: tb_dcache passes, all three mutations caught.
+//   * The SoC without an MMU: tb_fpga_bram PASSES with the cache, at 135215
+//     clocks, FASTER than the 135401 without it.
+//   * The firmware: tb_boot with +flash and no kernel prints "STK" identically
+//     with and without the cache. bringup.S and the SBI firmware never enable
+//     paging, so the walker never runs — which is exactly why every bench that
+//     passed, passed.
+//   * Timing: 30.88 MHz post-route with it in, PASS at 25, up from 29.98.
+//   * "It is just slow": still 0 characters at 25,000,000 clocks, against a
+//     boot that prints its banner inside 3,000,000 without the cache.
+//
+// REPRODUCE IN ~1 MINUTE (no CI, no board):
+//   gh run download <a green linux run> -n koti-linux-Image -D kimg
 //   python3 test/mkhex.py sw/sbi/sbi_sd.bin fw.hex
+//   python3 test/mkhex.py kimg/arch/riscv/boot/Image kernel.hex
 //   iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_SIMMEM -DKOTI_DCACHE //     -o b.vvp src/*.sv src/usb_hid_host_rom.v vendor/*.sv vendor/*.v //     test/sim_prims.v test/sim_mem.sv test/tb_boot.v
-//   vvp b.vvp +flash=fw.hex +ram=<kernel.hex> +ramoff=1048576 +maxclk=2000000
-// ⚠️ test/mkhex.py, NOT fpga/ulx3s/mkflashhex.py -- the latter emits one BYTE
-// per line for the fabric flash and sim_mem's array is WORDS, which silently
-// loads garbage and looks exactly like this bug.
+//   vvp b.vvp +flash=fw.hex +ram=kernel.hex +ramoff=1048576 +maxclk=3000000
+//   # then: tools/ktrace.py <System.map> <trace> --image <Image>
+// ⚠️ test/mkhex.py, NOT fpga/ulx3s/mkflashhex.py — the latter emits one BYTE
+// per line for the fabric flash while sim_mem's array is WORDS, so it silently
+// loads garbage and produces 0 characters, which looks exactly like this bug.
 //
 // Copyright (c) 2026 Joonatan Alanampa
 // SPDX-License-Identifier: Apache-2.0

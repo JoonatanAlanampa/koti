@@ -517,6 +517,20 @@ async def test_vga_text(dut):
 
     await wait_bit(3, 0, 900_000)          # vsync fall (VGA mode is on)
     await wait_bit(3, 1, 10_000)           # vsync rise: line 492
+
+    # ⚠️ SAMPLE THE SECOND FRAME, NOT THE FIRST. Row 0's charbuf burst is
+    # prefetched during vblank (line 508). If VGA_EN is set after that point in
+    # a frame, row 0's line buffer was never filled and every pixel of it reads
+    # as background — which is exactly what this test then sees, 0x88 all the
+    # way across, with the video timing otherwise perfect.
+    # This did not use to matter: the PS/2 exchange this test performed first
+    # delayed VGA_EN by thousands of clocks and happened to land past the
+    # window. Removing PS/2 on 2026-08-08 removed that accidental delay and the
+    # test failed — on a change that touched no video logic at all. Waiting a
+    # whole frame makes the alignment depend on the raster rather than on how
+    # long the setup code happened to take.
+    await wait_bit(3, 0, 900_000)
+    await wait_bit(3, 1, 10_000)
     for _ in range(33):                    # falls at x=656 of each line
         await wait_bit(7, 0, 2_000)
         await wait_bit(7, 1, 2_000)

@@ -329,11 +329,14 @@ userspace — **with no PC in the loop except as a power supply and a terminal.*
 Two observations from that boot, neither blocking:
 - `Starting network: ip: socket: Function not implemented … FAIL` — **expected**,
   there is no `CONFIG_NET`. Ladder item 11.
-- ⚠️ `koti-sd … read-only` — the card probed **read-only** here, where the
-  rootfs rung wrote and read back files earlier the same day. First suspect is
-  the microSD's own physical lock slider, since the card was removed and
-  reinserted between the two tests. Not diagnosed; do not report the write path
-  as broken on the strength of this one line.
+- ✅ `koti-sd … read-only` — **COSMETIC, and already fixed in git. The card is
+  writable.** The kernel on the card was built **21:04:58 UTC**, which is 2m26s
+  *after* the write half landed (`a235672`, 21:02:32) and 17 min *before* the
+  stale log line was deleted (`3b1dd30`, 21:22:11, "koti can save a file, and
+  the log line should not say otherwise"). So that image has working writes and
+  an obsolete `dev_info`. Re-transport a current kernel and the line goes away.
+  ⛔ **A microSD has NO write-protect slider** — only full-size SD cards do, so
+  never explain this one with card hardware.
 
 ⚠️ **UPSTREAM `jtagpin.py` IS WRONG FOR THIS BOARD.** emard/esp32ecp5 ships the
 v3.0.x block uncommented; this is a **v3.1.8**, where `tms` moves 21 -> 5 and

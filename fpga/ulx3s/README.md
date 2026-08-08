@@ -22,7 +22,7 @@ What is already proven, and what is not:
 | The flash-writer path | `pmod-cartridge` simulated the whole I/E/P/R chain including read-back, 2026-07-20 |
 | ✅ **The board, end to end** | 2026-08-07: `sw/bringup.bin` printed 31 gapless lines over the real UART out of a fabric boot flash — see step 2b |
 | ✅ **`sw/bringup.S`, the ASSEMBLY rewrite** | 2026-08-08: first contact. 296 bytes, **0 non-printable**, counter monotonic #257-260. Proves the SDRAM stack round-trip (so `RD_ADV` still holds), `remu`/`divu`, and — since this bitstream carries it — the **core ack-routing fix** of the same day |
-| ✅ **The SDRAM, including `RD_ADV` and the address decode** | 2026-08-07: `sw/memtest.bin`, four clean passes over the full 16 MB with an address-derived pattern, plus the byte-lane/DQM path |
+| ✅ **The SDRAM, including `RD_ADV` and the address decode** | 2026-08-08: `sw/memtest.bin`, **eight clean passes over the full 32 MB** with an address-derived pattern, plus the byte-lane/DQM path and the `addrbits` walking-1 phase. (2026-08-07's four passes covered 16 MB, which was all the address path could then reach.) |
 | ✅ **The board revision** | it is a **PCB v3.1.8**, and only `wifi_gpio0` differs from v2.0 — see step 1 |
 | **NOT proven: the font glyphs look right** | needs the Tiny VGA Pmod — step 6, and PLAN.md item 9 |
 | **NOT proven: anything on J1/J2** | both headers are still unpopulated |
@@ -73,12 +73,26 @@ fujprog fpga/ulx3s/build/koti-bram.bit        # SRAM, volatile, ~60 s  ✅ WORKS
 **The volatile load is gone at power-off**, which is what you want while
 iterating. Do the whole checklist with it.
 
-## ⛔ `fujprog -j flash` DOES NOT WORK ON THIS BOARD — tried 2026-08-08
+## ~~⛔ `fujprog -j flash` DOES NOT WORK ON THIS BOARD~~ — ✅ **IT DOES. SUPERSEDED SAME DAY.**
+
+⭐ **`fujprog -j flash <bit>` WORKS, ~142 s, one command** — used twice on
+2026-08-08 and again for the 32 MB build. **The only thing ever wrong with it
+was SPI flash BLOCK PROTECTION** (`BP=6`, covering exactly the 2 MB a bitstream
+needs); clear it once and the original command simply succeeds. See the
+write-protect section below for the fix.
+
+⇒ **The ESP32-contention theory below is WRONG and is kept only as history.**
+So are the MicroPython-version and `ecp5.py`-version theories. Do not take the
+ESP32 detour on the strength of this section — it was written before the cause
+was found, and a bring-up document that says a working command does not work
+costs a session.
+
+<details><summary>The original (disproven) diagnosis, kept for the record</summary>
 
 This README used to carry `fujprog -j flash … # persistent` as if it were a
 working alternative. **It was documented and never run.** It was run on
-2026-08-08 and it fails, and the reason is the board's architecture rather than
-anything in koti:
+2026-08-08 and it failed, and the reason was thought to be the board's
+architecture rather than anything in koti:
 
 ⭐ **THE ESP32 OWNS BOTH THE SPI FLASH AND THE UART AT POWER-ON.** Proof, not
 inference: after a power cycle the serial port produced the ESP32's boot ROM log
@@ -105,8 +119,14 @@ the other side: as soon as koti was reloaded over SRAM, the ESP32 released the
 serial line and the banner came back.)
 
 ✅ **Nothing was damaged.** The SRAM path was unaffected throughout — reflashed
-in 58.94 s afterwards and koti printed immediately. The board has never booted
-from its own flash, so a partially-erased flash cost nothing.
+in 58.94 s afterwards and koti printed immediately. The board had never booted
+from its own flash at that point, so a partially-erased flash cost nothing.
+
+⛔ **Every symptom above has a simpler cause: the flash was write-protected.**
+The ESP32 was never the reason. Table and prose kept only so the wrong theory is
+recognisable if it comes back.
+
+</details>
 
 ### ⭐ The ESP32 route is CHEAPER THAN IT LOOKS — prerequisites established 2026-08-08
 

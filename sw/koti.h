@@ -2,13 +2,26 @@
 #ifndef KOTI_H
 #define KOTI_H
 
+// This header is included by sw/*.S as well as sw/*.c, so everything C-only
+// lives behind __ASSEMBLER__ (gcc defines it for .S files, which it runs
+// through the C preprocessor). The point is that the ASSEMBLY instruments read
+// the SAME memory map as the C ones: a second copy of these addresses in a .S
+// file is how the two silently drift apart, and an instrument that pokes the
+// wrong register is worse than no instrument.
+#ifndef __ASSEMBLER__
 #include <stdint.h>
-
 #define REG32(a) (*(volatile uint32_t *)(a))
+#endif
 
-// core MMIO
-#define LED       REG32(0x00010000)
-#define UART      REG32(0x00010004)   // w: tx byte, r: bit0 = busy
+// core MMIO. The _ADDR forms are the ones assembly uses; the REG32 forms below
+// are the C spelling of the same number, so there is only one number.
+#define LED_ADDR  0x00010000
+#define UART_ADDR 0x00010004
+
+#ifndef __ASSEMBLER__
+#define LED       REG32(LED_ADDR)
+#define UART      REG32(UART_ADDR)    // w: tx byte, r: bit0 = busy
+#endif
 #define GPIO_IN   REG32(0x00010008)
 #define QSPI_CFG  REG32(0x0001000C)   // bit0 flash quad, bit1 PSRAM quad
 
@@ -92,6 +105,7 @@
 #define USB_MOD_SHIFT  (USB_MOD_LSHIFT | USB_MOD_RSHIFT)
 #define USB_MOD_CTRL   (USB_MOD_LCTRL  | USB_MOD_RCTRL)
 
+#ifndef __ASSEMBLER__
 static inline void uart_putc(char c) {
     while (UART & 1)
         ;
@@ -102,5 +116,6 @@ static inline void uart_puts(const char *s) {
     while (*s)
         uart_putc(*s++);
 }
+#endif  // __ASSEMBLER__
 
-#endif
+#endif  // KOTI_H

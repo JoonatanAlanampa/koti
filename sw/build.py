@@ -28,13 +28,23 @@ def main():
     #            seconds, so hello.bin's banner cannot be read without a human
     #            pressing BTN0 at the right instant. This one needs no window.
     #
-    # bringup.c deliberately does NOT link console.c: not needing the video
-    # driver is half of what makes it a diagnostic.
+    # ⭐ bringup is the ONE image written in ASSEMBLY (sw/bringup.S, 2026-08-08),
+    #            and it is its own startup — no crt0.S, because it has no .data
+    #            to copy and no .bss to zero. It is the image you flash when you
+    #            do not yet trust the board, so every instruction in it should be
+    #            one you can read; and the SDRAM stack traffic that makes a
+    #            printed line MEAN something is written down there rather than
+    #            left to a register allocator. Its UART output is byte-identical
+    #            to the C version it replaced, so test/tb_fpga_bram.v +mark=0
+    #            still proves it with no new bench. (The C version is one
+    #            `git show <commit>^:sw/bringup.c` away if it is ever wanted.)
+    #            The other instruments stay in C on purpose: they encode
+    #            protocols, and C represents those better.
     # memtest.bin is the third: a full walk of the 16 MB RAM window with an
     # ADDRESS-DERIVED pattern, which is what catches aliasing. bringup.bin proves
     # the SDRAM's read timing; only this proves its address decode.
     for name, srcs in (("hello", ["crt0.S", "console.c", "hello.c"]),
-                       ("bringup", ["crt0.S", "bringup.c"]),
+                       ("bringup", ["bringup.S"]),
                        ("memtest", ["crt0.S", "memtest.c"]),
                        ("sdtest",  ["crt0.S", "sdtest.c"]),
                        # sdraw.bin is the layer BELOW sdtest: it bypasses the

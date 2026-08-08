@@ -156,6 +156,22 @@ garbage on this board, suspect VGA_EN before suspecting the UART.
 silence = the CPU is not running, mojibake = the divisor or the pin is wrong,
 clean lines = the whole path works.
 
+⭐ **It is the one image written in assembly** (`sw/bringup.S`, 2026-08-08), and
+it is its own startup — no `crt0.S`, no `.data`, no `.bss`. This is the image
+you flash when you do not yet trust the board, so every instruction it runs
+should be one you can read:
+
+```sh
+python tools/rvdis.py sw/bringup.bin --base 0 --count 40   # the whole program
+```
+
+⛔ **The stack traffic in it is load-bearing.** A printed line proves the SDRAM
+works because `ra` is pushed to and popped from the SDRAM stack on every call
+and the line counter is stored and reloaded across them — the `RD_ADV` read
+window is silent on writes and corrupts every read, so a wrong window means no
+second line. An "optimisation" that kept the counter in a register would still
+print, still look right, and no longer test the thing this image exists for.
+
 The port must be closed while flashing — the FT231X is one device shared by JTAG
 and the UART. ⚠️ `fujprog -t`'s terminal output does not survive stdout
 redirection, so it is no use to a script.

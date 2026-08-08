@@ -233,8 +233,14 @@ Software, in order:
        |---|---|---|---|
        | 0 | 503,134,412 | 594,781,497 | 18.2% **slower** — model artefact |
        | 4 | 1,017,805,763 | 1,012,172,330 | 0.55% faster — the crossover |
-       | 9 (the real part) | 1,666,686,417 | 1,518,594,747 | **8.9% faster** |
+       | **6** | 1,262,089,595 | 1,205,653,407 | **4.47% — matches the board** |
+       | 9 | 1,666,686,417 | 1,518,594,747 | 8.9% faster — 2x optimistic |
        Read hit rate a steady **73%** at every latency.
+       ⭐ **`+memlat=6` is now CALIBRATED against hardware** (4.47% predicted vs
+       4.49% measured), so the model is usable rather than discredited. ~10
+       clocks is the *worst* case — a random read missing the open row — and as
+       a flat average it overstates memory, and so overstates any cache in
+       front of it. **Use 6 for the next memory decision, not 9.**
        ⚠️ **Do NOT benchmark it at `+memlat=0` and believe the answer.**
        `sim_mem` answers in one clock, which is faster than any cache in front
        of it. That 18% is a property of the model, not of the design, and it is

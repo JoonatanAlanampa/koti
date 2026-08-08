@@ -105,7 +105,8 @@
 //   +memlat   no cache        D-cache         verdict
 //   0        503,134,412     594,781,497     18.2% SLOWER  (model artefact)
 //   4      1,017,805,763   1,012,172,330      0.55% faster  (the crossover)
-//   9      1,666,686,417   1,518,594,747       8.9% FASTER  (the real part)
+//   6      1,262,089,595   1,205,653,407      4.47% faster  ⭐ MATCHES THE BOARD
+//   9      1,666,686,417   1,518,594,747       8.9% FASTER  (2x optimistic)
 //
 // ⇒ THE CACHE IS WORTH EXACTLY WHAT MEMORY COSTS, and it breaks even at about
 // a five-clock memory. Read hit rate is a steady 73% at every latency measured.
@@ -128,11 +129,17 @@
 // 📌 Run-to-run spread inside an arm is ≤0.01 s — 0.02%, so the 2.10 s gap is
 // ~200x the noise.
 //
-// 🔴 **QUOTE 4.5%, NOT 8.9%.** The 8.9% above is what a FLAT 10-clock memory
-// model predicts, and the real sdram_ctrl is cheaper than that on a row hit.
+// 🔴 **QUOTE 4.5%, NOT 8.9%.** The 8.9% is what a FLAT 10-clock memory model
+// predicts, and the real sdram_ctrl is cheaper than that on a row hit.
 // 8.9% is a property of test/sim_mem.sv; 4.5% is what this machine gained.
 // Do not cite the model number as the board's speedup — that is the same class
 // of mistake as the memlat=0 reading, one layer further out.
+//
+// ⭐ AND THE MODEL IS NOW CALIBRATED RATHER THAN DISCREDITED: `+memlat=6`
+// predicts 4.47% against hardware's 4.49%. ~10 clocks is the WORST case (a
+// random read missing the open row); as a flat average it overstates memory,
+// and therefore overstates any cache. **Use +memlat=6 for the next memory
+// decision** — the write buffer and the walker bypass below both need it.
 // ⚠️ Span caveat: simulation counts clocks to `userspace is alive`; the
 // hardware kernel-time figure is kernel entry → last printk and the wall-clock
 // one includes the SBI microSD load (I/O, not memory). Neither flatters it.

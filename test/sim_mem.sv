@@ -32,15 +32,30 @@
 // the conclusion it invited was backwards.
 //
 // So the latency is a knob, and it DEFAULTS TO 0 = the historical behaviour,
-// bit for bit: no existing gate, budget or recorded clock count moves. Pass
-// `+memlat=9` to model sdram_ctrl's measured ~10-clock random read and the
-// comparison becomes meaningful.
+// bit for bit: no existing gate, budget or recorded clock count moves.
 //
-// It is a FLAT latency, and that is a simplification worth naming: the real
-// sdram_ctrl is cheaper on a row hit and dearer on a row miss, and this models
-// neither. It is the right instrument for "what is a memory round trip worth",
-// and the wrong one for "how fast is this board" — for that, run the whole SoC
-// on the real controller (test/test_fpga.py, tb_fpga_bram).
+// ⭐ USE `+memlat=6`. IT IS CALIBRATED AGAINST THE REAL BOARD, not guessed.
+// The obvious choice was 9, because sdram_ctrl's measured random 32-bit read is
+// ~10 clocks — and it was WRONG BY A FACTOR OF TWO on the one question anybody
+// asked it. Predicted D-cache speedups against measured hardware:
+//
+//     +memlat=9   predicts  8.9% faster     hardware: 4.49%   (2x optimistic)
+//     +memlat=6   predicts  4.47% faster    hardware: 4.49%   ✅
+//
+// ⇒ ~10 clocks is the WORST CASE, a random read that misses the open row, and
+// using a worst case as a FLAT average overstates what memory costs — and so
+// overstates what any cache in front of it can win. From the CPU's side this
+// machine behaves like a flat ~6-clock memory.
+//
+// It is still a FLAT latency, and that is the simplification to keep naming:
+// the real sdram_ctrl is cheaper on a row hit and dearer on a row miss, and
+// this models neither, it only matches them on average for THIS workload.
+// ⚠️ The calibration is against a Linux boot. A workload with a different
+// locality mix — a memory bandwidth test, a framebuffer blit — has no reason to
+// land at 6, and `+memlat` should be re-calibrated rather than assumed.
+// It is the right instrument for "what is a memory round trip worth", and the
+// wrong one for "how fast is this board" — for that, run the whole SoC on the
+// real controller (test/test_fpga.py, tb_fpga_bram) or, better, boot the board.
 //
 // Copyright (c) 2026 Joonatan Alanampa
 // SPDX-License-Identifier: Apache-2.0

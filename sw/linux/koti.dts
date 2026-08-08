@@ -147,7 +147,21 @@
 	 */
 	memory@1000000 {
 		device_type = "memory";
-		reg = <0x01000000 0x01000000>;
+		/*
+		 * 32 MB since 2026-08-08 (PLAN.md item 12). It was 0x01000000 —
+		 * and that was CORRECT for the hardware as built, because the
+		 * core's word address was 23 bits with a[22] spent as the
+		 * flash/RAM device select, so half the soldered part could not
+		 * be addressed at all. The bus is 24 bits now and RAM spans
+		 * a[23:22] == 01 and 10, i.e. 0x0100_0000..0x02FF_FFFF.
+		 *
+		 * ⚠️ This length is a PROMISE to the kernel, not a request: make
+		 * it larger than what the select actually reaches and Linux
+		 * will hand out pages that alias onto memory it is already
+		 * using, which corrupts long after the fact and never points
+		 * here. It must move in the same commit as src/project.sv.
+		 */
+		reg = <0x01000000 0x02000000>;
 	};
 
 	reserved-memory {

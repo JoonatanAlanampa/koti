@@ -34,7 +34,7 @@ module koti_core #(
     // instruction fetch port (req held until 1-cycle ack); each fetch
     // returns an instruction PAIR: if_rdata = @addr, if_rdata2 = @addr+4
     output logic        if_req,
-    output logic [22:0] if_addr,
+    output logic [23:0] if_addr,
     input  logic        if_ack,
     input  logic [31:0] if_rdata,
     input  logic [31:0] if_rdata2,
@@ -64,7 +64,7 @@ module koti_core #(
     // data port (same protocol)
     output logic        d_req,
     output logic        d_we,
-    output logic [22:0] d_addr,
+    output logic [23:0] d_addr,
     output logic [31:0] d_wdata,
     output logic [3:0]  d_be,
     input  logic        d_ack,
@@ -146,10 +146,10 @@ module koti_core #(
     // Fills are path-independent, so a redirect mid-walk needs no abort:
     // the walk completes against its latched vpn and simply fills.
     logic [1:0]  iw_state;               // 0 idle, 1 level-1, 2 level-0
-    logic [22:0] iw_addr;
+    logic [23:0] iw_addr;
 
     assign if_req  = fbusy || (iw_state != 2'd0);
-    assign if_addr = (iw_state != 2'd0) ? iw_addr : fpc_pa[24:2];
+    assign if_addr = (iw_state != 2'd0) ? iw_addr : fpc_pa[25:2];
 
     // Stable for the whole of any one transaction: a walk can only be started
     // from `iw_state == 0 && !fbusy`, and iw_state only advances on `if_ack`.
@@ -178,7 +178,7 @@ module koti_core #(
             fbuf  <= 32'd0; fbuf_v <= 1'b0;
             valid_d <= 1'b0; pc_d <= 32'd0; instr_d <= 32'd0;
             ipf_d <= 1'b0;
-            iw_state <= 2'd0; iw_vpn <= 20'd0; iw_addr <= 23'd0;
+            iw_state <= 2'd0; iw_vpn <= 20'd0; iw_addr <= 24'd0;
         end else begin
             if (consume) begin
                 if (fbuf_v) begin       // promote the pair's second word
@@ -193,7 +193,7 @@ module koti_core #(
                 if (ipte_bad || ipte_leaf)
                     iw_state <= 2'd0;   // filled (translation or fault)
                 else begin
-                    iw_addr  <= {ipte[22:10], iw_vpn[9:0]};   // level-0 PTE
+                    iw_addr  <= {ipte[23:10], iw_vpn[9:0]};   // level-0 PTE
                     iw_state <= 2'd2;
                 end
             end else if (iw_l0)
@@ -267,7 +267,7 @@ module koti_core #(
                     ipf_d   <= 1'b1;
                 end else begin
                     iw_vpn   <= i_vpn;
-                    iw_addr  <= {csr_satp[12:0], i_vpn[19:10]};
+                    iw_addr  <= {csr_satp[13:0], i_vpn[19:10]};
                     iw_state <= 2'd1;
                 end
             end
@@ -552,33 +552,46 @@ module koti_core #(
     // prints its banner over and over, which looks like a reset problem and is
     // not one. The PLIC hit this first (see above); microSD hit it second,
     // 2026-08-07, and it cost a simulation round trip to recognise.
-    wire pa_dev      = !d_pa[24] && ((d_pa[23:16] >= 8'h01
+    // ⚠️ THE FLASH/MMIO HALF IS PA[25:24] == 00, NOT `!d_pa[24]`. The physical
+    // map grew a bit on 2026-08-08 so that all 32 MB of the soldered SDRAM is
+    // reachable (PLAN.md item 12): RAM is now PA 0x0100_0000..0x02FF_FFFF,
+    // which spans BOTH PA[25:24] == 01 and == 10. Testing only PA[24] would
+    // put the upper 16 MB of RAM back into the flash half, where every store
+    // takes an access fault — with mtvec still 0 in early bare-metal code that
+    // jumps to 0x00000000 and restarts the program, which is the "prints its
+    // banner over and over" symptom this block's comment already warns about.
+    wire pa_lowmap   = (d_pa[25:24] == 2'b00);
+    wire pa_dev      = pa_lowmap && ((d_pa[23:16] >= 8'h01
 `ifdef KOTI_FPGA
                                    && d_pa[23:16] <= 8'h06)   // 05 = SD, 06 = USB
 `else
                                    && d_pa[23:16] <= 8'h04)
 `endif
                                   || d_pa[23:22] == 2'b11);
-    wire pa_flash_ro = !d_pa[24] && !pa_dev;
+    wire pa_flash_ro = pa_lowmap && !pa_dev;
 
     // The RAM-high check is about a MIRROR, not about a size limit, which is
     // why it is not the same on both builds.
 `ifdef KOTI_FPGA
     // ULX3S: the RAM half of the map is the board's soldered 32 MB SDRAM, and
-    // the whole 16 MB window the core can address (addr[23:0]) is genuinely
-    // there — sdram_ctrl is handed {1'b0, m_addr[21:0]} = d_pa[23:2], so every
-    // one of those addresses reaches a distinct location. Nothing mirrors, so
-    // there is nothing to catch, and faulting the top half would reject real
-    // memory. It would also reject exactly the memory that matters: a kernel
-    // has to load on a 4 MiB boundary, so it lives above this line and spends
-    // essentially its whole life there. See sw/linux/README.md.
-    wire pa_ram_hi = 1'b0;
+    // the whole 32 MB is now genuinely there — project.sv hands sdram_ctrl
+    // {m_addr[23], m_addr[21:0]}, which is a bijection from the two quarters
+    // PA[25:24] ∈ {01,10} onto the part's 8M words, so every address in the
+    // window reaches a distinct location and nothing mirrors.
+    // ⚠️ PA[25:24] == 11 (0x0300_0000+) is NOT memory: it is past the end of
+    // the part, and it is the only quarter left over. Faulting it is what keeps
+    // the change honest — without this, an address one bit too high would alias
+    // silently onto real RAM, which is the exact failure this item existed to
+    // remove rather than to move somewhere else.
+    wire pa_ram_hi = (d_pa[25:24] == 2'b11);
 `else
     // QSPI Pmod: the APS6404 is 8 MiB and its address space MIRRORS above
     // that, so an access with addr[23] set silently lands on a location it was
     // never meant to touch. An access fault is the only way software finds
     // out; silently aliasing is far worse than trapping.
-    wire pa_ram_hi = d_pa[24] && d_pa[23];
+    // The ASIC build keeps an 8 MiB part, so everything above 0x0180_0000 in
+    // the (now larger) RAM window is a mirror, including the whole new quarter.
+    wire pa_ram_hi = !pa_lowmap && (d_pa[25] || d_pa[23]);
 `endif
     wire dacc_fault  = dmem_op_e
                     && ((d_isstore && pa_flash_ro) || pa_ram_hi);
@@ -588,7 +601,7 @@ module koti_core #(
     // Never aborted: irqs are gated on !pstall, and nothing older than
     // EX can flush it.
     logic [1:0]  dw_state;
-    logic [22:0] dw_addr;
+    logic [23:0] dw_addr;
     wire dw_req  = (dw_state != 2'd0) && !m_port_busy;
     // ⛔ THE ACK BELONGS TO WHOEVER ISSUED THE TRANSACTION, not to whoever is
     // asking now. The data port's requester CAN change while a transaction is
@@ -626,18 +639,18 @@ module koti_core #(
 
     always_ff @(posedge clk)
         if (rst) begin
-            dw_state <= 2'd0; dw_vpn <= 20'd0; dw_addr <= 23'd0;
+            dw_state <= 2'd0; dw_vpn <= 20'd0; dw_addr <= 24'd0;
         end else if (dw_state == 2'd0) begin
             if (d_xlate && !dtlb_hit && !halted) begin
                 dw_vpn   <= d_vpn;
-                dw_addr  <= {csr_satp[12:0], d_vpn[19:10]};
+                dw_addr  <= {csr_satp[13:0], d_vpn[19:10]};
                 dw_state <= 2'd1;
             end
         end else if (dw_l1) begin
             if (dpte_bad || dpte_leaf)
                 dw_state <= 2'd0;
             else begin
-                dw_addr  <= {dpte[22:10], dw_vpn[9:0]};
+                dw_addr  <= {dpte[23:10], dw_vpn[9:0]};
                 dw_state <= 2'd2;
             end
         end else if (dw_l0)
@@ -877,7 +890,7 @@ module koti_core #(
     assign d_req   = (d_active && !m_ack_here) || dw_req;
     assign d_ptw   = dw_req;
     assign d_we    = !dw_req && (mem_write_m || amo_wr || (sc_m && sc_ok));
-    assign d_addr  = dw_req ? dw_addr : addr_m[24:2];
+    assign d_addr  = dw_req ? dw_addr : addr_m[25:2];
     assign d_wdata = amo_wr ? amo_new : st_data;
     assign d_be    = be_m;
 

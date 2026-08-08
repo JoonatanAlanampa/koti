@@ -26,14 +26,14 @@ module tb_dcache;
   always #5 clk = ~clk;
 
   reg         c_req = 0, c_we = 0, c_ptw = 0;
-  reg  [22:0] c_addr = 0;
+  reg  [23:0] c_addr = 0;
   reg  [31:0] c_wdata = 0;
   reg  [3:0]  c_be = 4'hF;
   wire        c_ack;
   wire [31:0] c_rdata;
 
   wire        m_req, m_we;
-  wire [22:0] m_addr;
+  wire [23:0] m_addr;
   wire [31:0] m_wdata;
   wire [3:0]  m_be;
   reg         m_ack = 0;
@@ -114,7 +114,7 @@ module tb_dcache;
       end
   endtask
 
-  task do_read(input [22:0] a, input ptw);
+  task do_read(input [23:0] a, input ptw);
       begin
           settle;
           c_addr = a; c_we = 0; c_ptw = ptw; c_be = 4'hF; c_req = 1;
@@ -124,7 +124,7 @@ module tb_dcache;
       end
   endtask
 
-  task do_write(input [22:0] a, input [31:0] d, input [3:0] be);
+  task do_write(input [23:0] a, input [31:0] d, input [3:0] be);
       begin
           settle;
           c_addr = a; c_we = 1; c_ptw = 0; c_wdata = d; c_be = be; c_req = 1;
@@ -137,7 +137,7 @@ module tb_dcache;
   // Two page-table reads back to back, driven the way koti_core's walker
   // drives them — which is the ONLY access pattern in the machine that keeps
   // `c_req` asserted through an acknowledgement. See test 9.
-  task walk_two_levels(input [22:0] a, input [22:0] b);
+  task walk_two_levels(input [23:0] a, input [23:0] b);
       begin
           settle;
           c_addr = a; c_we = 0; c_ptw = 1; c_be = 4'hF; c_req = 1;
@@ -169,7 +169,7 @@ module tb_dcache;
 
     // ---- 1. a read miss goes to memory and returns the right word ---------
     base_reads = reads_seen;
-    do_read(23'h000010, 0);
+    do_read(24'h000010, 0);
     check("read miss: memory reads", reads_seen - base_reads, 1);
     if (c_rdata !== 32'hA0000010) begin
         $display("  FAIL miss data: %08x", c_rdata); fails = fails + 1;
@@ -177,7 +177,7 @@ module tb_dcache;
 
     // ---- 2. THE POINT OF THE WHOLE FILE: the second read must NOT ---------
     base_reads = reads_seen;
-    do_read(23'h000010, 0);
+    do_read(24'h000010, 0);
     check("re-read: memory reads (0 = it hit)", reads_seen - base_reads, 0);
     if (c_rdata !== 32'hA0000010) begin
         $display("  FAIL hit data: %08x", c_rdata); fails = fails + 1;
@@ -185,7 +185,7 @@ module tb_dcache;
 
     // ---- 3. write-through: the write reaches memory ----------------------
     base_writes = writes_seen;
-    do_write(23'h000010, 32'hDEADBEEF, 4'hF);
+    do_write(24'h000010, 32'hDEADBEEF, 4'hF);
     check("write: memory writes (write-through)", writes_seen - base_writes, 1);
     if (mem[10'h010] !== 32'hDEADBEEF) begin
         $display("  FAIL memory not updated: %08x", mem[10'h010]); fails = fails + 1;
@@ -193,7 +193,7 @@ module tb_dcache;
 
     // ---- 4. write-update: the cached line moved with it -------------------
     base_reads = reads_seen;
-    do_read(23'h000010, 0);
+    do_read(24'h000010, 0);
     check("read after write: memory reads (0 = updated in place)",
           reads_seen - base_reads, 0);
     if (c_rdata !== 32'hDEADBEEF) begin
@@ -201,8 +201,8 @@ module tb_dcache;
     end else $display("  ok   line was updated, not left stale");
 
     // ---- 5. a partial store merges bytes, in the cache and in memory ------
-    do_write(23'h000010, 32'h000000AA, 4'b0001);
-    do_read(23'h000010, 0);
+    do_write(24'h000010, 32'h000000AA, 4'b0001);
+    do_read(24'h000010, 0);
     if (c_rdata !== 32'hDEADBEAA) begin
         $display("  FAIL byte merge in cache: %08x", c_rdata); fails = fails + 1;
     end else $display("  ok   byte store merged to %08x", c_rdata);
@@ -212,10 +212,10 @@ module tb_dcache;
 
     // ---- 6. NO-WRITE-ALLOCATE: a store to an uncached line stays uncached --
     base_writes = writes_seen;
-    do_write(23'h000020, 32'h11112222, 4'hF);
+    do_write(24'h000020, 32'h11112222, 4'hF);
     check("store to uncached line: memory writes", writes_seen - base_writes, 1);
     base_reads = reads_seen;
-    do_read(23'h000020, 0);
+    do_read(24'h000020, 0);
     check("read after uncached store: memory reads (1 = not allocated)",
           reads_seen - base_reads, 1);
 
@@ -224,12 +224,12 @@ module tb_dcache;
     // sfence.vma meant to retire it. Two identical walker reads must both
     // reach memory, and neither may leave anything behind.
     base_reads = reads_seen;
-    do_read(23'h000030, 1);
-    do_read(23'h000030, 1);
+    do_read(24'h000030, 1);
+    do_read(24'h000030, 1);
     check("two walker reads: memory reads (2 = neither cached)",
           reads_seen - base_reads, 2);
     base_reads = reads_seen;
-    do_read(23'h000030, 0);
+    do_read(24'h000030, 0);
     check("normal read after walker reads: memory reads (1 = nothing filled)",
           reads_seen - base_reads, 1);
 
@@ -237,9 +237,9 @@ module tb_dcache;
     // 512 lines, so 0x000040 and 0x000240 land on the same index with
     // different tags. A tag comparison that was wrong would return the other
     // one's data, which is the worst possible failure: silently wrong memory.
-    do_read(23'h000040, 0);
+    do_read(24'h000040, 0);
     base_reads = reads_seen;
-    do_read(23'h000240, 0);
+    do_read(24'h000240, 0);
     check("aliasing index, different tag: memory reads (1 = it missed)",
           reads_seen - base_reads, 1);
     if (c_rdata !== mem[10'h040]) begin
@@ -262,7 +262,7 @@ module tb_dcache;
     // accepts during its own ack re-latches the level-1 address and hands back
     // the level-1 PTE a second time — a wrong translation, then a trap storm.
     base_reads = reads_seen;
-    walk_two_levels(23'h000051, 23'h0000A2);
+    walk_two_levels(24'h000051, 24'h0000A2);
     check("two-level walk: memory reads (2 = both levels fetched)",
           reads_seen - base_reads, 2);
     check("two-level walk: level-0 answer is the level-0 word",

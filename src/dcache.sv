@@ -177,7 +177,7 @@
 
 module dcache #(
     parameter integer IDX_BITS = 9,             // 512 lines of one word
-    parameter integer ADDR_BITS = 23            // word address, as the core uses
+    parameter integer ADDR_BITS = 24            // word address, as the core uses
 ) (
     input  wire        clk,
     input  wire        rst,

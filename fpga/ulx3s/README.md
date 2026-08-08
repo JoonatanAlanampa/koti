@@ -329,18 +329,22 @@ userspace — **with no PC in the loop except as a power supply and a terminal.*
 Two observations from that boot, neither blocking:
 - `Starting network: ip: socket: Function not implemented … FAIL` — **expected**,
   there is no `CONFIG_NET`. Ladder item 11.
-- 🔴 **`MemTotal: 8796 kB` on a board with 32 MB — koti uses HALF ITS RAM, and
-  it is architectural, not a devicetree typo.** `d_addr = byte_addr[24:2]` and
-  **`addr[22]` is spent as the flash/RAM device select**, so only `addr[21:0]`
-  — 4M words = **16 MB** — ever reaches the SDRAM. `src/sdram_ctrl.sv` itself
-  takes a full 23-bit word address and can drive all 32 MB; `src/project.sv`
-  drops the top bit on the way in ("addr[22] is dropped on the way in: it was
-  the device select"). `koti.dts`'s `memory@1000000 reg = <0x01000000
-  0x01000000>` is therefore CORRECT for the hardware as built.
-  ⇒ Doubling koti's RAM means changing the device-select scheme in
-  `src/project.sv`, plus the DTS, the linker scripts and SBI's load address.
-  Real, available, and **not a one-line change**. Of the 16 MB, ~8.8 MB is what
-  is left after the kernel and initramfs.
+- ✅ **`MemTotal: 8796 kB` — FIXED 2026-08-08, in simulation. Now 25004 kB.**
+  It was architectural, not a devicetree typo: `d_addr = byte_addr[24:2]` with
+  **`addr[22]` spent as the flash/RAM device select**, so only `addr[21:0]` —
+  4M words = 16 MB — ever reached the SDRAM, and `koti.dts` was CORRECT for the
+  hardware as built.
+  The word address is 24 bits now (PA[25:2]) and the select is `a[23:22] != 00`,
+  so RAM spans 0x0100_0000..0x02FF_FFFF. **RAM's base did not move**: it is
+  exactly half the window size, which makes the offset `a - 0x400000` collapse
+  to `{a[23], a[21:0]}` — a bit selection, no adder — so both linker scripts,
+  `KERNEL_ADDR`, `sdboot.c`, `sdkernel.py`, `ktrace.py` and `tb_boot`'s
+  `+ramoff` were all left alone. Only the DTS length changed.
+  `Memory: 23996K/28672K available`, MemFree 3296 → 19452 kB, userspace still
+  reached; `sw/memtest.bin` walks all 32 MB with 0 errors under Verilator.
+  ⛔ **NOT yet confirmed on the board** — flash `image: memtest` and expect
+  `addrbits: OK` and `upper: OK`. Simulation cannot prove that the upper 16 MB
+  physically decodes on the fitted part.
 - ✅ `koti-sd … read-only` — **COSMETIC, and already fixed in git. The card is
   writable.** The kernel on the card was built **21:04:58 UTC**, which is 2m26s
   *after* the write half landed (`a235672`, 21:02:32) and 17 min *before* the

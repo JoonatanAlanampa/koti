@@ -23,11 +23,11 @@ module vga_text (
     input  logic        clk, rst,
     input  logic        ce,             // pixel enable (1 @ 25 MHz)
     input  logic        en,             // display enable (MMIO)
-    input  logic [22:0] base,           // charbuf word address (PSRAM)
+    input  logic [23:0] base,           // charbuf word address (PSRAM)
 
     // video DMA: pair-read port through the 3-port arbiter
     output logic        v_req,
-    output logic [22:0] v_addr,
+    output logic [23:0] v_addr,
     input  logic        v_ack,
     input  logic [31:0] v_rdata, v_rdata2,
 
@@ -51,16 +51,16 @@ module vga_text (
     logic        f_busy;
     logic [3:0]  f_txn;                 // 0..4
     logic [4:0]  f_row;                 // text row being fetched (0..29)
-    logic [22:0] f_base;                // charbuf base latched at fetch start
+    logic [23:0] f_base;                // charbuf base latched at fetch start
 
     // 10 words per row: base + row*10 + txn*2  (row*10 = row*8 + row*2)
-    wire [22:0] row_off = ({18'd0, f_row} << 3) + ({18'd0, f_row} << 1);
+    wire [23:0] row_off = ({19'd0, f_row} << 3) + ({19'd0, f_row} << 1);
     // Once a refill is accepted for arbitration it must finish even if
     // software clears `en` (or moves `base`) mid-row: withdrawing v_req
     // after a grant but before the ACK parks the arbiter forever (F3).
     // New refills still only START while en is high (fetch_trigger below).
     assign v_req  = f_busy;
-    assign v_addr = f_base + row_off + {18'd0, f_txn, 1'b0};
+    assign v_addr = f_base + row_off + {19'd0, f_txn, 1'b0};
 
     wire fetch_trigger = hblank_start
                       && ((y[3:0] == 4'd0 && y < 10'd464)   // next row
@@ -72,7 +72,7 @@ module vga_text (
     always_ff @(posedge clk)
         if (rst) begin
             f_busy <= 1'b0; f_txn <= 4'd0; f_row <= 5'd0;
-            f_base <= 23'd0; cur <= 1'b0;
+            f_base <= 24'd0; cur <= 1'b0;
         end else begin
             if (fetch_trigger && en && !f_busy) begin
                 f_busy <= 1'b1;

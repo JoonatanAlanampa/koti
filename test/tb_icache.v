@@ -39,12 +39,12 @@ module tb_icache;
   reg         flush = 1'b0;
   reg         req   = 1'b0;
   reg         ptw   = 1'b0;
-  reg  [22:0] addr  = 23'd0;
+  reg  [23:0] addr  = 24'd0;
   wire        ack;
   wire [31:0] rdata, rdata2;
 
   wire        m_req;
-  wire [22:0] m_addr;
+  wire [23:0] m_addr;
   reg         m_ack   = 1'b0;
   reg  [31:0] m_rdata = 32'd0, m_rdata2 = 32'd0;
 
@@ -62,7 +62,7 @@ module tb_icache;
   // is how the flush and bypass tests tell a cached answer from a fresh one
   // without needing a real array.
   integer gen = 0;
-  function [31:0] mem_val(input [22:0] a);
+  function [31:0] mem_val(input [23:0] a);
     mem_val = {a[15:0], 8'hA5, gen[7:0]} ^ 32'h5EED_0000;
   endfunction
 
@@ -80,7 +80,7 @@ module tb_icache;
       if (wait_ct == LATENCY) begin
         m_ack    <= 1'b1;
         m_rdata  <= mem_val(m_addr);
-        m_rdata2 <= mem_val(m_addr + 23'd1);
+        m_rdata2 <= mem_val(m_addr + 24'd1);
         mem_txns <= mem_txns + 1;
         wait_ct  <= 0;
       end else begin
@@ -121,7 +121,7 @@ module tb_icache;
   // did exactly that. The symptom was subtle and worth remembering: every check
   // returned the PREVIOUS transaction's data, because the bench saw the tail of
   // the last ack and called the new transaction done before it had started.
-  task xact(input [22:0] a, input is_ptw);
+  task xact(input [23:0] a, input is_ptw);
     begin
       @(posedge clk);
       addr <= a; ptw <= is_ptw; req <= 1'b1;
@@ -132,7 +132,7 @@ module tb_icache;
     end
   endtask
 
-  task fetch_chk(input [22:0] a, input [31:0] e0, input [31:0] e1,
+  task fetch_chk(input [23:0] a, input [31:0] e0, input [31:0] e1,
                  input [255:0] what);
     begin
       xact(a, 1'b0);
@@ -145,8 +145,8 @@ module tb_icache;
   endtask
 
   // Fetch and check against memory AS IT IS NOW.
-  task fetch_fresh(input [22:0] a, input [255:0] what);
-    begin fetch_chk(a, mem_val(a), mem_val(a + 23'd1), what); end
+  task fetch_fresh(input [23:0] a, input [255:0] what);
+    begin fetch_chk(a, mem_val(a), mem_val(a + 24'd1), what); end
   endtask
 
   task pulse_flush;
@@ -166,11 +166,11 @@ module tb_icache;
 
     // ---- 1. cold miss goes to memory, the repeat does not ----
     mark;
-    fetch_fresh(23'h001000, "1a cold miss");
+    fetch_fresh(24'h001000, "1a cold miss");
     expect_mem(1, "1a cold miss");
 
     mark;
-    fetch_fresh(23'h001000, "1b hit");
+    fetch_fresh(24'h001000, "1b hit");
     expect_mem(0, "1b hit must not reach memory");
 
     // ---- 2. every entry fills, and then the whole set hits ----
@@ -180,61 +180,61 @@ module tb_icache;
     // job, and having test 2 do it by accident cost a debugging round.)
     mark;
     for (i = 0; i < ENTRIES; i = i + 1)
-      fetch_fresh(23'h002000 + i[22:0], "2 fill");
+      fetch_fresh(24'h002000 + i[23:0], "2 fill");
     expect_mem(ENTRIES, "2 each distinct line misses once");
 
     mark;
     for (i = 0; i < ENTRIES; i = i + 1)
-      fetch_fresh(23'h002000 + i[22:0], "2 refetch");
+      fetch_fresh(24'h002000 + i[23:0], "2 refetch");
     expect_mem(0, "2 refetch all hits");
 
     // ---- 3. aliasing: two addresses ENTRIES apart share an entry ----
     // Correctness must survive it even though both cannot be resident.
-    fetch_fresh(23'h003000, "3 seed A");
+    fetch_fresh(24'h003000, "3 seed A");
     mark;
-    fetch_fresh(23'h003000 + ENTRIES[22:0], "3 alias B");
+    fetch_fresh(24'h003000 + ENTRIES[23:0], "3 alias B");
     expect_mem(1, "3 alias B evicts A, so it misses");
     mark;
-    fetch_fresh(23'h003000, "3 A again after eviction");
+    fetch_fresh(24'h003000, "3 A again after eviction");
     expect_mem(1, "3 A was evicted, so it misses again");
 
     // ---- 4. fence.i: the cache DOES hold stale code, and flush drops it ----
-    fetch_fresh(23'h004000, "4 seed");
-    old0 = mem_val(23'h004000);
-    old1 = mem_val(23'h004001);
+    fetch_fresh(24'h004000, "4 seed");
+    old0 = mem_val(24'h004000);
+    old1 = mem_val(24'h004001);
     gen = gen + 1;                    // memory changes under the cache
     mark;
-    fetch_chk(23'h004000, old0, old1, "4 stale hit is expected");
+    fetch_chk(24'h004000, old0, old1, "4 stale hit is expected");
     expect_mem(0, "4 stale hit must not reach memory");
     pulse_flush;
     mark;
-    fetch_fresh(23'h004000, "4 after fence.i");
+    fetch_fresh(24'h004000, "4 after fence.i");
     expect_mem(1, "4 flush forces a refetch");
 
     // ---- 5. page-table walks bypass, and do not pollute ----
     gen = gen + 1;
-    xact(23'h005000, 1'b1);           // a walk read
-    if (rdata !== mem_val(23'h005000)) begin
+    xact(24'h005000, 1'b1);           // a walk read
+    if (rdata !== mem_val(24'h005000)) begin
       $display("FAIL 5a: walk returned %0h expected %0h",
-               rdata, mem_val(23'h005000));
+               rdata, mem_val(24'h005000));
       errors = errors + 1;
     end
     mark;
-    xact(23'h005000, 1'b1);           // a second walk to the same address
+    xact(24'h005000, 1'b1);           // a second walk to the same address
     expect_mem(1, "5b every walk must reach memory, never the cache");
 
     // A walk must not have FILLED the line either: if it had, this fetch would
     // hit and return the pre-change value.
     gen = gen + 1;
     mark;
-    fetch_fresh(23'h005000, "5c walk must not fill");
+    fetch_fresh(24'h005000, "5c walk must not fill");
     expect_mem(1, "5c fetch after walk must still miss");
 
     // ---- 6. flush landing mid-fill must not leave the line resident ----
     gen = gen + 1;
     fork
       begin : drive
-        xact(23'h006000, 1'b0);
+        xact(24'h006000, 1'b0);
       end
       begin : hit_it_mid_flight
         // land the flush while the fill is out at memory
@@ -247,7 +247,7 @@ module tb_icache;
     join
     gen = gen + 1;
     mark;
-    fetch_fresh(23'h006000, "6 after mid-fill flush");
+    fetch_fresh(24'h006000, "6 after mid-fill flush");
     expect_mem(1, "6 a line filled across a flush must not be kept");
 
     // ---- 7. overlapping pairs: the unaligned-key case ----
@@ -255,12 +255,12 @@ module tb_icache;
     // be correct; this is the case a conventional aligned-line cache would have
     // had to split into two lookups.
     mark;
-    fetch_fresh(23'h007000, "7a pair at A");
-    fetch_fresh(23'h007001, "7b pair at A+1");
+    fetch_fresh(24'h007000, "7a pair at A");
+    fetch_fresh(24'h007001, "7b pair at A+1");
     expect_mem(2, "7 two distinct pair keys");
     mark;
-    fetch_fresh(23'h007000, "7c A again");
-    fetch_fresh(23'h007001, "7d A+1 again");
+    fetch_fresh(24'h007000, "7c A again");
+    fetch_fresh(24'h007001, "7d A+1 again");
     expect_mem(0, "7 both resident");
 
     repeat (4) @(posedge clk);

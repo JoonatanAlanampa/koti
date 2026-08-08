@@ -21,7 +21,7 @@ Every line below has been seen on the bench, not only in simulation.
 | | |
 | --- | --- |
 | **CPU** | RV32IMA + Zicsr, M/S/U privilege, **sv32 MMU**, CLINT, PLIC, precise traps |
-| **Memory** | 32 MB onboard SDRAM; full 16 MB window walked with an address-derived pattern, 0 errors |
+| **Memory** | 32 MB onboard SDRAM, all of it addressable since 2026-08-08; full window walked with an address-derived pattern, 0 errors |
 | **Storage** | microSD, **read and write**, ext2 — files survive a reboot |
 | **Screen** | HDMI (GPDI), 640x480, 40x30 text console |
 | **Keyboard** | USB HID on US2, Finnish layout |

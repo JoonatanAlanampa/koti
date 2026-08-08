@@ -35,12 +35,24 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "koti.h"
 
-// The RAM window koti exposes is 16 MB (addr[22] selects flash/RAM, leaving
-// 22 word-address bits). Start above the stack (__stack_top = 0x01008000) and
-// the VGA charbuf that sits just over it — writing our own stack out from under
-// ourselves would look exactly like a memory fault.
+// The RAM window koti exposes is 32 MB, 0x0100_0000..0x02FF_FFFF. Start above
+// the stack (__stack_top = 0x01008000) and the VGA charbuf that sits just over
+// it — writing our own stack out from under ourselves would look exactly like a
+// memory fault.
+//
+// ⚠️ IT WAS 16 MB UNTIL 2026-08-08, and this file is how that was found and how
+// it is now defended. `addr[22]` used to BE the flash/RAM device select, so only
+// 22 word-address bits reached the part and half the soldered SDRAM was
+// unreachable — Linux reported `MemTotal: 8796 kB` on a 32 MB board. The old
+// bound here was 0x0200_0000, which is exactly the boundary the bug sat on, so
+// this test PASSED on the broken map. That is the failure mode the repo keeps
+// meeting: a test whose bound is drawn at the edge of the thing it should be
+// checking cannot fail, and reads as evidence anyway.
 #define RAM_LO   0x01010000u
-#define RAM_HI   0x02000000u
+#define RAM_HI   0x03000000u
+// The old bound, kept as a named phase. A run that passes `16M` and fails
+// `upper` has the device-select bug specifically, rather than bad memory.
+#define RAM_MID  0x02000000u
 // 64 KB, and the bound is exact rather than round. test/sdram_model.sv's
 // idx() is {ba, row[6:0], col}, while sdram_ctrl maps row = addr[20:8] on a
 // 32-bit-WORD address — so the model drops row[7], which is word bit 15, which
@@ -146,6 +158,71 @@ static unsigned lanes(void) {
     return errs;
 }
 
+// Walking-1 over the ADDRESS, which NAMES the broken bit instead of drowning
+// the console in mismatches.
+//
+// A full 32 MB walk reports millions of errors when one address bit is dead and
+// tells you nothing about WHICH — and at 115200 baud you see the first eight and
+// a count. This writes an address-derived pattern to `base` and to
+// `base + (1<<i)` for every word-address bit the window spans, then reads them
+// all back. If bit i does not reach the part, `base + (1<<i)` answers with
+// base's pattern, and the report says "bit 24" rather than "3.9 million errors".
+//
+// ⭐ Bit 24 is the one this exists for: a 16 MB offset is exactly the bit that
+// `addr[22]`-as-device-select used to eat. This phase FAILS on the pre-2026-08-08
+// map and passes after it, which is what makes it a test rather than a comment.
+//
+// ⚠️ In simulation against test/sdram_model.sv this reports several dead bits and
+// is RIGHT to: that model decodes 7 of 13 row bits on purpose. Like the full
+// walk, it is a hardware test. Against test/sim_mem.sv it is meaningful.
+static unsigned addr_bits(void) {
+    volatile unsigned *p;
+    unsigned errs = 0;
+
+    uart_puts("  addrbits: ");
+    p = (volatile unsigned *)RAM_LO;
+    *p = pat(RAM_LO);
+    for (unsigned i = 2; i < 25u; i++) {
+        unsigned a = RAM_LO + (1u << i);
+        if (a >= RAM_HI) continue;
+        p = (volatile unsigned *)a;
+        *p = pat(a);
+    }
+    // Read back only AFTER every write: an alias that is written last would
+    // otherwise be masked by checking each address immediately.
+    p = (volatile unsigned *)RAM_LO;
+    if (*p != pat(RAM_LO)) {
+        uart_puts("\r\n    base @");
+        uart_hex(RAM_LO);
+        uart_puts(" clobbered, got ");
+        uart_hex(*p);
+        errs++;
+    }
+    for (unsigned i = 2; i < 25u; i++) {
+        unsigned a = RAM_LO + (1u << i);
+        if (a >= RAM_HI) continue;
+        p = (volatile unsigned *)a;
+        unsigned got = *p;
+        if (got != pat(a)) {
+            errs++;
+            uart_puts("\r\n    BIT ");
+            uart_udec(i);
+            uart_puts(" dead @");
+            uart_hex(a);
+            uart_puts(" want ");
+            uart_hex(pat(a));
+            uart_puts(" got ");
+            uart_hex(got);
+            // Naming the aliasing partner is most of the diagnosis: if the
+            // value is base's, bit i never reached the part at all.
+            if (got == pat(RAM_LO)) uart_puts("  (= base: bit never arrives)");
+        }
+    }
+    if (errs) { uart_puts("\r\n    errors: "); uart_udec(errs); uart_puts("\r\n"); }
+    else        uart_puts("OK\r\n");
+    return errs;
+}
+
 int main(void) {
     unsigned pass = 0;
 
@@ -158,7 +235,15 @@ int main(void) {
 
         errs += walk(RAM_LO, SMALL_HI, "64K ");
         errs += lanes();
-        errs += walk(RAM_LO, RAM_HI, "16M ");
+        // Before the long walks, because it is seconds rather than minutes and
+        // it names the bit. A failure here makes the walks below predictable
+        // rather than informative.
+        errs += addr_bits();
+        errs += walk(RAM_LO, RAM_MID, "16M ");
+        // The half that did not exist before 2026-08-08. Kept as its own phase
+        // rather than folded into one 32 MB walk, so the log distinguishes
+        // "the memory is bad" from "the upper half is not wired".
+        errs += walk(RAM_MID, RAM_HI, "upper");
 
         uart_puts("  pass ");
         uart_udec(pass);

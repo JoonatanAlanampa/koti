@@ -82,14 +82,14 @@ module icache #(
     // ---- CPU fetch port: the contract koti_core already speaks ----
     input  logic        req,          // held until ack
     input  logic        ptw,          // 1 = page-table walk read, do not cache
-    input  logic [22:0] addr,         // word address, PHYSICAL
+    input  logic [23:0] addr,         // word address, PHYSICAL
     output logic        ack,          // one cycle
     output logic [31:0] rdata,        // word at addr
     output logic [31:0] rdata2,       // word at addr+1
 
     // ---- memory side: the arbiter's fetch port, always a burst pair ----
     output logic        m_req,
-    output logic [22:0] m_addr,
+    output logic [23:0] m_addr,
     input  logic        m_ack,
     input  logic [31:0] m_rdata,
     input  logic [31:0] m_rdata2

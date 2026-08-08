@@ -40,7 +40,7 @@ def main():
     #            `git show <commit>^:sw/bringup.c` away if it is ever wanted.)
     #            The other instruments stay in C on purpose: they encode
     #            protocols, and C represents those better.
-    # memtest.bin is the third: a full walk of the 16 MB RAM window with an
+    # memtest.bin is the third: a full walk of the 32 MB RAM window with an
     # ADDRESS-DERIVED pattern, which is what catches aliasing. bringup.bin proves
     # the SDRAM's read timing; only this proves its address decode.
     for name, srcs in (("hello", ["crt0.S", "console.c", "hello.c"]),

@@ -69,7 +69,7 @@ module sim_mem #(
     // the firmware's own .bss. An undersized memory model does not fail, it
     // silently answers with somebody else's data.
     parameter FLASH_WORDS = 16 * 1024,
-    parameter RAM_WORDS   = 4 * 1024 * 1024
+    parameter RAM_WORDS   = 8 * 1024 * 1024
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -77,7 +77,7 @@ module sim_mem #(
     input  wire        req,
     input  wire        we,
     input  wire        burst,
-    input  wire [22:0] addr,     // word address; bit 22: 0 = flash, 1 = RAM
+    input  wire [23:0] addr,     // word address; a[23:22]: 00 = flash, else RAM
     input  wire [31:0] wdata,    // bytes already in lane position
     input  wire [3:0]  be,
     output reg         ack,
@@ -94,10 +94,21 @@ module sim_mem #(
   // reason, and nothing in the log mentions memory.
   reg warned;
 
-  function [31:0] rd(input [22:0] a);
+  // ⚠️ THIS DECODE MUST MATCH src/project.sv's, because that is the whole point
+  // of the model: it stands in for the two real controllers AND for the select
+  // in front of them. RAM is a[23:22] == 01 or 10, and the offset within it is
+  // {a[23], a[21:0]} — which is exactly `a - 0x400000`, the base being half the
+  // size. Getting this wrong here does not fail loudly; it silently answers
+  // from the wrong place, which is the failure mode a memory model exists to
+  // avoid rather than to introduce.
+  function [22:0] ram_idx(input [23:0] a);
+    ram_idx = {a[23], a[21:0]};
+  endfunction
+
+  function [31:0] rd(input [23:0] a);
     begin
-      if (a[22]) begin
-        rd = (a[21:0] < RAM_WORDS) ? ram[a[21:0]] : 32'hFFFF_FFFF;
+      if (a[23:22] != 2'b00) begin
+        rd = (ram_idx(a) < RAM_WORDS) ? ram[ram_idx(a)] : 32'hFFFF_FFFF;
       end else begin
         rd = (a[21:0] < FLASH_WORDS) ? flash[a[21:0]] : 32'hFFFF_FFFF;
       end
@@ -167,12 +178,12 @@ module sim_mem #(
         rdata2 <= burst ? rd(addr + 23'd1) : 32'h0000_0000;
 
         if (we) begin
-          if (addr[22]) begin
-            if (addr[21:0] < RAM_WORDS) begin
-              if (be[0]) ram[addr[21:0]][7:0]   <= wdata[7:0];
-              if (be[1]) ram[addr[21:0]][15:8]  <= wdata[15:8];
-              if (be[2]) ram[addr[21:0]][23:16] <= wdata[23:16];
-              if (be[3]) ram[addr[21:0]][31:24] <= wdata[31:24];
+          if (addr[23:22] != 2'b00) begin
+            if (ram_idx(addr) < RAM_WORDS) begin
+              if (be[0]) ram[ram_idx(addr)][7:0]   <= wdata[7:0];
+              if (be[1]) ram[ram_idx(addr)][15:8]  <= wdata[15:8];
+              if (be[2]) ram[ram_idx(addr)][23:16] <= wdata[23:16];
+              if (be[3]) ram[ram_idx(addr)][31:24] <= wdata[31:24];
             end else if (!warned) begin
               warned <= 1'b1;
               $display("sim_mem: WRITE above %0d words at %h — dropped",

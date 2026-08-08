@@ -19,18 +19,18 @@ module mem_arbiter3 (
 
     // video port (read-only, burst)
     input  logic        v_req,
-    input  logic [22:0] v_addr,
+    input  logic [23:0] v_addr,
     output logic        v_ack,
 
     // instruction fetch port (burst)
     input  logic        f_req,
-    input  logic [22:0] f_addr,
+    input  logic [23:0] f_addr,
     output logic        f_ack,
 
     // data port
     input  logic        d_req,
     input  logic        d_we,
-    input  logic [22:0] d_addr,
+    input  logic [23:0] d_addr,
     input  logic [31:0] d_wdata,
     input  logic [3:0]  d_be,
     output logic        d_ack,
@@ -39,7 +39,7 @@ module mem_arbiter3 (
     output logic        m_req,
     output logic        m_we,
     output logic        m_burst,
-    output logic [22:0] m_addr,
+    output logic [23:0] m_addr,
     output logic [31:0] m_wdata,
     output logic [3:0]  m_be,
     input  logic        m_ack
@@ -80,7 +80,7 @@ module mem_arbiter3 (
             G_VID:   begin m_req = v_req; m_addr = v_addr; end
             G_DATA:  begin m_req = d_req; m_addr = d_addr; end
             G_FETCH: begin m_req = f_req; m_addr = f_addr; end
-            default: begin m_req = 1'b0;  m_addr = 23'd0;  end
+            default: begin m_req = 1'b0;  m_addr = 24'd0;  end
         endcase
 
     assign m_we    = (grant == G_DATA) && d_we;

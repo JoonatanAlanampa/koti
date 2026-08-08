@@ -31,13 +31,23 @@
 // define rather than a parameter: the SDRAM needs about forty pins, and a
 // module's port list is not parameterisable.
 //
-// The memory MAP is deliberately unchanged — addr[22] still picks flash from
-// RAM and RAM still starts at 0x01000000 — so the linker scripts, the SBI
-// firmware, the charbuf address and every existing test carry over untouched.
-// Only the thing on the other end of the request port changes. The cost is that
-// the 16 MB window reaches half of the 32 MB part; widening it would mean a
-// wider address bus through the core and the arbiter, for memory that mainline
-// sv32 Linux does not need.
+// THE MEMORY MAP, on the 24-bit WORD address the core drives (PA[25:2]):
+//     a[23:22] == 00   flash + MMIO   PA 0x0000_0000..0x00FF_FFFF (16 MB)
+//     a[23:22] == 01   RAM low        PA 0x0100_0000..0x01FF_FFFF
+//     a[23:22] == 10   RAM high       PA 0x0200_0000..0x02FF_FFFF
+//     a[23:22] == 11   nothing        faulted by koti_core's pa_ram_hi
+//
+// ⚠️ IT WAS 23 BITS UNTIL 2026-08-08, with `addr[22]` doing double duty as the
+// device select — which meant only 16 MB of the soldered 32 MB was reachable
+// and Linux reported `MemTotal: 8796 kB`. Widening by one bit is what PLAN.md
+// item 12 was; the old note here said that memory "mainline sv32 Linux does not
+// need", which was true of booting and false of using the machine.
+//
+// ⭐ RAM'S BASE ADDRESS DID NOT MOVE, and that was the design goal. 0x0100_0000
+// is baked into both linker scripts, koti.dts, sbi.c's KERNEL_ADDR, sdboot.c,
+// tools/sdkernel.py, tools/ktrace.py and tb_boot's `+ramoff`. Only the DTS
+// length changed. See the select in the ULX3S block below for why the offset
+// costs no adder.
 module tt_um_koti (
     input  wire [7:0] ui_in,    // Dedicated inputs
     output wire [7:0] uo_out,   // Dedicated outputs
@@ -111,21 +121,21 @@ module tt_um_koti (
   wire        plic_eip;    // PLIC -> the core's S-level external interrupt
 
   wire        if_req, if_ack;
-  wire [22:0] if_addr;
+  wire [23:0] if_addr;
   // What the CORE sees on its fetch port. Without a cache these are just the
   // memory bus; with one they are the cache's answer.
   wire [31:0] if_rdata, if_rdata2;
   wire        if_ptw, icache_flush;
   // What the ARBITER sees on its fetch port. Same signals one level out.
   wire        fc_req, fc_ack;
-  wire [22:0] fc_addr;
+  wire [23:0] fc_addr;
   wire        d_req, d_we, d_ack;
-  wire [22:0] d_addr;
+  wire [23:0] d_addr;
   wire [31:0] d_wdata, d_rdata;
   wire [3:0]  d_be;
 
   wire        m_req, m_we, m_burst, m_ack;
-  wire [22:0] m_addr;
+  wire [23:0] m_addr;
   wire [31:0] m_wdata, m_rdata, m_rdata2;
   wire [3:0]  m_be;
 
@@ -161,22 +171,22 @@ module tt_um_koti (
       .d_be(d_be), .d_ack(d_ack), .d_rdata(d_rdata), .d_ptw(d_ptw)
   );
 
-  // SoC MMIO intercepts on the data port. d_addr = byte_addr[24:2], so
+  // SoC MMIO intercepts on the data port. d_addr = byte_addr[25:2], so
   // d_addr[22:14] == byte_addr[24:16]. Decode the FULL 64 KB windows:
   // CLINT at 0x0002_0000 (byte[24:16]==0x002), VGA/PS2 at 0x0004_0000
   // (0x004). 1-cycle ack, never reaches the arbiter. A partial compare
   // aliased flash data past 64 KB into these windows every 512 KB (F1).
-  wire clint_range = d_addr[22:14] == 9'h002;
-  wire vga_range   = d_addr[22:14] == 9'h004;
+  wire clint_range = d_addr[23:14] == 10'h002;
+  wire vga_range   = d_addr[23:14] == 10'h004;
 `ifdef KOTI_FPGA
   // microSD at 0x0005_0000, the next free 64 KB window after VGA/PS2. Decoded
   // in FULL like the others: a partial compare aliased flash data into these
   // windows every 512 KB (defect F1), which is the sort of bug that reads as
   // random memory corruption.
-  wire sd_range    = d_addr[22:14] == 9'h005;
+  wire sd_range    = d_addr[23:14] == 10'h005;
   // USB HID keyboard at 0x0006_0000, the next window after the microSD. Same
   // full compare, same reason.
-  wire usb_range   = d_addr[22:14] == 9'h006;
+  wire usb_range   = d_addr[23:14] == 10'h006;
 `else
   wire sd_range    = 1'b0;
   wire usb_range   = 1'b0;
@@ -188,7 +198,7 @@ module tt_um_koti (
   // hard-codes that, so a register-compatible PLIC needs megabytes of window.
   // Taking it off the TOP of flash space rather than punching a hole in the
   // low addresses keeps software's run from zero contiguous.
-  wire plic_range  = !d_addr[22] && d_addr[21:20] == 2'b11;
+  wire plic_range  = d_addr[23:22] == 2'b00 && d_addr[21:20] == 2'b11;
   wire clint_sel   = d_req && clint_range;
   wire vga_sel     = d_req && vga_range;
   wire sd_sel_i    = d_req && sd_range;
@@ -221,7 +231,7 @@ module tt_um_koti (
   // that says "no key", which is the harmless answer, whereas handing the
   // offset to something else would make that stale software do damage.
   reg        vga_en, uart_b0;
-  reg [22:0] vga_base;
+  reg [23:0] vga_base;
   reg [5:0]  col_fg, col_bg;
 
   wire vga_wr = vga_sel && !vga_ack && d_we;
@@ -229,11 +239,11 @@ module tt_um_koti (
   always @(posedge clk)
       if (rst) begin
           vga_en <= 1'b0; uart_b0 <= 1'b0;
-          vga_base <= 23'd0; col_fg <= 6'h3F; col_bg <= 6'h00;
+          vga_base <= 24'd0; col_fg <= 6'h3F; col_bg <= 6'h00;
       end else if (vga_wr)
           case (d_addr[1:0])
               2'd0: {uart_b0, vga_en} <= d_wdata[1:0];
-              2'd1: vga_base <= d_wdata[24:2];
+              2'd1: vga_base <= d_wdata[25:2];
               2'd2: {col_bg, col_fg} <= {d_wdata[13:8], d_wdata[5:0]};
               default: ;
           endcase
@@ -243,7 +253,7 @@ module tt_um_koti (
   always @(*)
       case (d_addr[1:0])
           2'd0: vga_rmux = {30'd0, uart_b0, vga_en};
-          2'd1: vga_rmux = {7'd0, vga_base, 2'b00};
+          2'd1: vga_rmux = {6'd0, vga_base, 2'b00};
           2'd2: vga_rmux = {18'd0, col_bg, 2'd0, col_fg};
           // +C was the PS/2 scancode word, removed 2026-08-08. It reads zero,
           // which to any surviving PS/2 driver means "no key waiting" — the
@@ -336,7 +346,7 @@ module tt_um_koti (
 
   // ---- video DMA + text pipeline ----
   wire        v_req, v_ack, vt_hs, vt_vs, vt_act, vt_pix;
-  wire [22:0] v_addr;
+  wire [23:0] v_addr;
   vga_text vt (
       .clk(clk), .rst(rst), .ce(1'b1),
       .en(vga_en), .base(vga_base),
@@ -380,7 +390,7 @@ module tt_um_koti (
   wire dc_req = d_req && !clint_range && !vga_range && !plic_range
                       && !sd_range && !usb_range;
   wire        am_req, am_we;
-  wire [22:0] am_addr;
+  wire [23:0] am_addr;
   wire [31:0] am_wdata;
   wire [3:0]  am_be;
   wire        am_ack;
@@ -476,8 +486,31 @@ module tt_um_koti (
   wire _unused_sim  = &{1'b0, sdram_din, sd_in, qspi_cfg};
 `else
   // ---- ULX3S: flash stays on QSPI, RAM moves to the onboard SDRAM ----
-  // addr[22] is the same select the QSPI controller uses internally, so the
-  // split costs one wire and no change to any address anywhere.
+  //
+  // ⭐ THE SELECT IS `m_addr[23:22] != 00`, AND IT COSTS NO ADDRESS BIT.
+  // Until 2026-08-08 it was `m_addr[22]` — a single bit doing double duty as
+  // device select AND top address bit, which left the part's upper 16 MB
+  // unreachable and Linux reporting `MemTotal: 8796 kB` on a 32 MB board.
+  //
+  // The map is now, on a 24-bit WORD address:
+  //     a[23:22] == 00   flash + MMIO   PA 0x0000_0000..0x00FF_FFFF (16 MB)
+  //     a[23:22] == 01   RAM, low half  PA 0x0100_0000..0x01FF_FFFF
+  //     a[23:22] == 10   RAM, high half PA 0x0200_0000..0x02FF_FFFF
+  //     a[23:22] == 11   nothing — koti_core faults it (pa_ram_hi)
+  //
+  // ⭐ AND THE OFFSET IS A BIT SELECTION, NOT A SUBTRACTION. RAM starts at word
+  // 0x400000 and is 0x800000 words long — the base is exactly half the size —
+  // so `a - 0x400000` collapses to `{a[23], a[21:0]}`. Verified exhaustively
+  // over all 8,388,608 addresses before this was written, because "obviously
+  // equivalent" address arithmetic is how memory maps go quietly wrong.
+  //
+  // ⇒ RAM'S BASE ADDRESS DID NOT MOVE. That was the point: 0x0100_0000 is
+  // baked into both linker scripts, koti.dts, sbi.c's KERNEL_ADDR, sdboot.c,
+  // sdkernel.py, ktrace.py and tb_boot's `+ramoff`. Doubling the window by
+  // moving the base would have touched every one of them, and each is a place
+  // where a wrong constant produces a machine that does not boot with no clue
+  // as to why. Only the DTS `reg` length changes.
+  //
   // Which device serves the transaction IN FLIGHT — latched, not combinational.
   //
   // The obvious version, `wire sel_ram = m_addr[22]`, is a trap. It makes each
@@ -497,7 +530,7 @@ module tt_um_koti (
           sel_q    <= 1'b0;
       end else if (!inflight && m_req) begin
           inflight <= 1'b1;
-          sel_q    <= m_addr[22];      // capture once, at the start
+          sel_q    <= (m_addr[23:22] != 2'b00);   // capture once, at the start
       end else if (m_ack || !m_req) begin
           // Release on a DROPPED request as well as on an ack. A requester may
           // walk away before it is served — the fetch port does exactly that on
@@ -510,27 +543,35 @@ module tt_um_koti (
           inflight <= 1'b0;
       end
 
-  wire sel_ram = inflight ? sel_q : m_addr[22];
+  wire sel_ram = inflight ? sel_q : (m_addr[23:22] != 2'b00);
 
   wire        q_ack, s_ack;
   wire [31:0] q_rdata, q_rdata2, s_rdata, s_rdata2;
 
+  // Flash only on this build, so a[23:22] is 00 by construction and the
+  // controller's own internal select (its addr[22]) must be 0. Spelled out
+  // rather than left to width truncation: relying on a pruned high bit is how
+  // a map change silently reaches the wrong device.
   qspi_ctrl qspi (
       .clk(clk), .rst(rst), .cfg(qspi_cfg),
-      .req(m_req && !sel_ram), .we(m_we), .burst(m_burst), .addr(m_addr),
+      .req(m_req && !sel_ram), .we(m_we), .burst(m_burst),
+      .addr({1'b0, m_addr[21:0]}),
       .wdata(m_wdata), .be(m_be),
       .ack(q_ack), .rdata(q_rdata), .rdata2(q_rdata2),
       .sck(sck), .sd_out(sd_out), .sd_oe(sd_oe), .sd_in(sd_in),
       .cs_flash_n(cs_flash_n), .cs_ram_n(cs_ram_n)
   );
 
-  // addr[22] is dropped on the way in: it was the device select, and inside the
-  // part it would be a bank bit. Passing it through would fold the 16 MB window
-  // onto banks 2-3 and leave 0-1 dead.
+  // {a[23], a[21:0]} IS `a - 0x400000`, exactly, over the whole window — see
+  // the map above. a[22] is not dropped any more; it is the low half of the
+  // window and a[23] is the high half, and swapping them into this order is
+  // what makes the subtraction free. Getting this wrong folds the window onto
+  // the wrong banks and leaves half the part dead, which is the bug this whole
+  // change exists to remove.
   sdram_ctrl sdram (
       .clk(clk), .rst(rst),
       .req(m_req && sel_ram), .we(m_we), .burst(m_burst),
-      .addr({1'b0, m_addr[21:0]}),
+      .addr({m_addr[23], m_addr[21:0]}),
       .wdata(m_wdata), .be(m_be),
       .ack(s_ack), .rdata(s_rdata), .rdata2(s_rdata2),
       .sdram_cke(sdram_cke), .sdram_csn(sdram_csn), .sdram_rasn(sdram_rasn),
@@ -560,9 +601,16 @@ module tt_um_koti (
   assign m_rdata2 = s_ack ? s_rdata2 : q_ack ? q_rdata2 : 32'd0;
 `endif
 `else
+  // ASIC: one controller serves both devices, and ITS select is its addr[22].
+  // The core's map now spends TWO bits on the device (a[23:22]), so translate
+  // rather than pass through: anything outside the flash quarter is RAM, and
+  // the within-device offset is a[21:0]. The 8 MiB part cannot cover the whole
+  // 32 MB window, so koti_core's pa_ram_hi faults a[23] and a[21] on this
+  // build — which is what keeps the addresses that DO arrive here unambiguous.
   qspi_ctrl qspi (
       .clk(clk), .rst(rst), .cfg(qspi_cfg),
-      .req(m_req), .we(m_we), .burst(m_burst), .addr(m_addr),
+      .req(m_req), .we(m_we), .burst(m_burst),
+      .addr({(m_addr[23:22] != 2'b00), m_addr[21:0]}),
       .wdata(m_wdata), .be(m_be),
       .ack(m_ack), .rdata(m_rdata), .rdata2(m_rdata2),
       .sck(sck), .sd_out(sd_out), .sd_oe(sd_oe), .sd_in(sd_in),

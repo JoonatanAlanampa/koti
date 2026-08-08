@@ -12,11 +12,17 @@ a half minutes into a UART upload:
      payload instead. A kernel that fails this test does not report an error,
      it just does not boot, and the log looks like the firmware's normal one.
 
-  2. The kernel does not fit. koti has a 16 MB RAM window and the kernel loads
+  2. The kernel does not fit. koti has a 32 MB RAM window and the kernel loads
      4 MB into it, so `image_size` — text + data + bss + the built-in
-     initramfs — has 12 MB to live in, and it has to unpack the initramfs
+     initramfs — has 28 MB to live in, and it has to unpack the initramfs
      inside that too. Image is uncompressed and nothing on this machine
      decompresses anything.
+
+     ⚠️ It was 16 MB until 2026-08-08 (PLAN.md item 12). This number is a
+     PROMISE about what the address path reaches, so it moves with
+     src/project.sv's select and koti.dts's `reg`, never on its own — a
+     headroom check that is larger than the real window passes an image that
+     then overwrites nothing in particular, very quietly.
 
 Both are cheap to check against the file and expensive to discover later.
 """
@@ -27,9 +33,9 @@ from pathlib import Path
 RISCV_IMAGE_MAGIC2 = b"RSC\x05"
 
 RAM_BASE = 0x0100_0000
-RAM_SIZE = 0x0100_0000          # the 16 MB window koti_core can address
+RAM_SIZE = 0x0200_0000          # the 32 MB window koti_core can address
 KERNEL_ADDR = 0x0140_0000       # sw/sbi/sbi.c KERNEL_ADDR
-HEADROOM = RAM_BASE + RAM_SIZE - KERNEL_ADDR      # 12 MB
+HEADROOM = RAM_BASE + RAM_SIZE - KERNEL_ADDR      # 28 MB
 
 
 def main():

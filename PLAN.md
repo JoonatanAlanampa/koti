@@ -271,9 +271,39 @@ Software, in order:
        Pmod plus a MAC in fabric, or USB Ethernet through the soft host — by
        far the largest lift.
 
-12. [ ] 🧠 **Double the RAM: koti uses 16 MB of the 32 MB soldered on the board.**
-       Found in the standalone boot log — `MemTotal: 8796 kB` — and it is
-       **architectural, not a devicetree typo, so `koti.dts` is currently
+12. [x] 🧠 **Double the RAM — DONE 2026-08-08 in simulation, `MemTotal: 8780 →
+       25004 kB`** (`Memory: 23996K/28672K available`, MemFree 3296 → 19452 kB),
+       userspace still reached. **NOT yet run on hardware** — see the end of
+       this item.
+       **What changed:** the core's word address went from 23 bits to 24
+       (PA[25:2]) so the device select stops eating an address bit. New map:
+       `a[23:22]` = 00 flash+MMIO, 01 RAM low, 10 RAM high, 11 faults.
+       ⭐ **RAM's base did NOT move, deliberately.** RAM is 0x0100_0000 ..
+       0x02FF_FFFF, so the base is exactly half the size, which makes the
+       offset `a - 0x400000` collapse to **`{a[23], a[21:0]}` — a bit
+       selection, no adder** (verified exhaustively over all 8,388,608
+       addresses before it was written). That is what kept both linker scripts,
+       `sbi.c`'s `KERNEL_ADDR`, `sdboot.c`, `sdkernel.py`, `ktrace.py` and
+       `tb_boot`'s `+ramoff` untouched; only the DTS length moved.
+       ⭐ **`sw/memtest.c` was extended FIRST, as this item demanded**, and it
+       earned it: a new `addrbits` phase walks a 1 across the address and NAMES
+       the dead bit instead of printing millions of mismatches. On the old RTL
+       it reported `BIT 24 dead @02010000 want dbb0b762 got ffffffff` — the read
+       came back from flash — and on the new RTL it reports OK. The old 16 MB
+       bound stopped exactly at the boundary of the bug, so the previous test
+       **could not have failed**.
+       🪤 **The trap that cost a boot run:** `dtc -o koti.dtb` at the repo root
+       is NOT what ships. `sw/sbi/dtb.S` embeds **`sw/linux/koti.dtb`**, so the
+       firmware carried the old 16 MB blob and the kernel dutifully reported the
+       old number while every RTL check passed.
+       ⛔ **STILL TO DO: run it on the board.** Simulation proves the arithmetic
+       and the map; only the ULX3S proves the upper 16 MB physically decodes on
+       the fitted part. `sim_mem` will happily answer from wherever it is told.
+       Flash `image: memtest` and expect `addrbits: OK` + `upper: OK`.
+
+       ~~(the original entry)~~ Found in the standalone boot log —
+       `MemTotal: 8796 kB` — and it was
+       **architectural, not a devicetree typo, so `koti.dts` was then
        CORRECT for the hardware as built.**
        **The cause is one bit.** `d_addr = byte_addr[24:2]`, and **`addr[22]` is
        spent as the flash/RAM device select**, so only `addr[21:0]` — 4M words,

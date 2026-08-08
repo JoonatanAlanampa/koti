@@ -108,13 +108,39 @@
 //   9      1,666,686,417   1,518,594,747       8.9% FASTER  (the real part)
 //
 // ⇒ THE CACHE IS WORTH EXACTLY WHAT MEMORY COSTS, and it breaks even at about
-// a five-clock memory. sdram_ctrl measures ~10 clocks for a random word, which
-// is comfortably the far side of that — but it is not an enormous margin, and
-// anything that makes memory cheaper (the open-row policy and 4-word burst
+// a five-clock memory. Read hit rate is a steady 73% at every latency measured.
+// ⚠️ Never benchmark this cache at memlat=0 and conclude anything.
+//
+// ══════════════════════════════════════════════════════════════════════════
+// 🏆 MEASURED ON THE REAL BOARD 2026-08-08 — AND THE MODEL WAS 2x OPTIMISTIC.
+// Controlled A/B on the ULX3S: same commit, same `image: sbi`, same `bram`
+// variant, one variable (`-DKOTI_NO_DCACHE`), two runs per arm, SRAM loads.
+//
+//   kernel time, run 1 / run 2      no cache 46.8252 / 46.8350 s
+//                                   D-cache  44.7331 / 44.7233 s   -4.49%
+//   host wall-clock to the prompt   no cache 83.41 / 83.50 s
+//                                   D-cache  80.09 / 79.80 s       -4.21%
+//
+// ✅ CORRECT ON REAL SDRAM: both arms reach `buildroot login:`, all four boots
+// print 4230 characters / 52 printks / 0 non-printable, and the logs are
+// textually IDENTICAL once timestamps are stripped (bar one page of MemFree).
+// Real refresh, real RD_ADV and the real row policy do not upset it.
+// 📌 Run-to-run spread inside an arm is ≤0.01 s — 0.02%, so the 2.10 s gap is
+// ~200x the noise.
+//
+// 🔴 **QUOTE 4.5%, NOT 8.9%.** The 8.9% above is what a FLAT 10-clock memory
+// model predicts, and the real sdram_ctrl is cheaper than that on a row hit.
+// 8.9% is a property of test/sim_mem.sv; 4.5% is what this machine gained.
+// Do not cite the model number as the board's speedup — that is the same class
+// of mistake as the memlat=0 reading, one layer further out.
+// ⚠️ Span caveat: simulation counts clocks to `userspace is alive`; the
+// hardware kernel-time figure is kernel entry → last printk and the wall-clock
+// one includes the SBI microSD load (I/O, not memory). Neither flatters it.
+// ══════════════════════════════════════════════════════════════════════════
+//
+// ⇒ Anything that makes memory cheaper (the open-row policy and 4-word burst
 // PLAN.md still lists) moves the machine back TOWARD the crossover rather than
 // away from it. Re-measure both together; do not assume they add up.
-// ⚠️ Never benchmark this cache at memlat=0 and conclude anything.
-// Read hit rate is a steady 73% across every latency measured.
 //
 // WHAT LIMITS THE WIN, measured in the same run: 21.5M writes against 27.6M
 // cacheable reads, and write-through means every one of those writes is a full

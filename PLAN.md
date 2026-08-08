@@ -213,7 +213,22 @@ Software, in order:
        screen. The DMA only ever READS — there is no DMA-writes / CPU-reads
        direction — so write-through eliminates the problem instead of managing
        it. BRAM was never the constraint: 19 of 208 used.
-       📌 **Measured — clocks to userspace, same image, identical output:**
+       🏆 **MEASURED ON THE REAL BOARD 2026-08-08 — 4.5%, and that is the
+       number to quote.** Controlled A/B on the ULX3S: same commit, same
+       `image: sbi`, same `bram` variant, one variable (`-DKOTI_NO_DCACHE`),
+       two runs per arm, SRAM loads so the config flash was untouched.
+       | | no cache | D-cache | |
+       |---|---|---|---|
+       | kernel time (run 1 / 2) | 46.8252 / 46.8350 s | 44.7331 / 44.7233 s | **−4.49%** |
+       | wall-clock to the prompt | 83.41 / 83.50 s | 80.09 / 79.80 s | −4.21% |
+       ✅ **Correct on real SDRAM** — both reach `buildroot login:`, all four
+       boots print 4230 chars / 52 printks / 0 non-printable, and the logs are
+       textually identical once timestamps are stripped. Run-to-run spread
+       ≤0.01 s, so the 2.10 s gap is ~200x the noise.
+       🔴 **The simulation predicted 8.9% and was 2x optimistic** — a flat
+       10-clock memory model is dearer than the real `sdram_ctrl` on a row hit.
+       **8.9% is a property of `test/sim_mem.sv`, not of this machine.**
+       📌 **The model's own numbers — clocks to userspace, identical output:**
        | `+memlat` | no cache | D-cache | |
        |---|---|---|---|
        | 0 | 503,134,412 | 594,781,497 | 18.2% **slower** — model artefact |

@@ -198,13 +198,53 @@ write-enabled** when fujprog gives up. Two candidates, both untested:
 2. the flash is **write-protected** — upstream ships a whole module for this,
    `ecp5wp.py`, "ECP5 JTAG FLASH protection tool".
 
-⭐ **This is a positive reason to expect the ESP32 route to succeed where fujprog
-cannot**: `ecp5.py`'s `flash_wait_status()` **polls** the status register with a
-retry budget instead of waiting a fixed 0.55 s. A slow erase defeats fujprog by
-construction and does not defeat `ecp5.py`.
-
 ⚠️ `fujprog -z` "completing in 141 s" is consistent with this and means nothing —
 it forces past exactly these status checks.
+
+### 🔴 THE ANSWER: THE CONFIG FLASH IS WRITE-PROTECTED (measured 2026-08-08)
+
+```
+status_reg = 0x18      func_reg = 0x03
+BP=6  QE=0  WEL=0  WIP=0  TBS=1  IRL=0
+PROTECTED RANGE: 0x000000 - 0x1FFFFF   (2097152 bytes, bottom)
+```
+
+**The low 2 MB of the SPI flash is block-protected, and that is exactly where the
+FPGA bitstream lives** — koti's is 1,976,403 bytes, entirely inside the range.
+Chip confirmed by JEDEC ID `9D 60 18` = **ISSI IS25LP128**.
+
+⇒ This single fact explains every failure in this file, and they were never
+separate problems:
+- `fujprog -j flash` dying on the post-erase status check — the erase is refused
+- `ecp5.flash()` returning **False** after its 3 retries
+- both tools failing at the same wall with the ESP32 asleep
+- **and why this board has never once booted from its own flash**
+
+⛔ **STOP DIAGNOSING THE TOOLS.** It was not fujprog, not `ecp5.py`, not the
+MicroPython version, not JTAG contention and not the ESP32. Three of those were
+actively investigated and all three were wrong.
+
+**Unprotect = write status register 1 with BP=0** (`0x06` WREN, then `0x01 0x00`).
+**Reversible**: send `0x01 0x18` to restore BP=6.
+
+⛔ **DO NOT CALL `ecp5wp.is25lp128_protect()`, INCLUDING AS `protect(0)`.** It
+also writes the function register (`0x42 0x02`), and upstream's own comment on
+that line is *"OTP warning: once set, can't be reset!"*. On this chip **TBS is
+already 1**, so that write buys nothing and risks a one-way change. Touch status
+register 1 only.
+
+⭐ **AND THE ESP32 NEVER CRASHED.** `/flashlog.txt` on its filesystem shows the
+script running to completion — `idcode`, `flash() returned False`, `--- done` —
+while the UART was dead the whole time. **The FTDI serial line is shared with the
+FPGA, so it goes dark the instant `common_open()` erases the FPGA's
+configuration.** One stray `0x00` byte, then silence, recoverable only by a power
+cycle. Upstream never sees this because upstream drives esp32ecp5 over
+WiFi/WebREPL, not over the wired UART.
+
+⇒ **When driving JTAG from the ESP32, LOG TO A FILE ON THE ESP32.** Reading the
+UART during the operation is not merely useless, it destroys the evidence and
+costs a power cycle per attempt. This is the instrument that ended the
+investigation after several hours of dead-line guessing.
 
 ⚠️ **UPSTREAM `jtagpin.py` IS WRONG FOR THIS BOARD.** emard/esp32ecp5 ships the
 v3.0.x block uncommented; this is a **v3.1.8**, where `tms` moves 21 -> 5 and

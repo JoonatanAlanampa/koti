@@ -310,9 +310,30 @@ ESP32 is *running but inaudible*. Reaching the MicroPython REPL again needs a
 **passthru bitstream**, not console.bit. Budget for that before planning any
 future ESP32 work.
 
-⚠️ The image written here is **`bringup`**, so a standalone board prints its
-banner forever. Standalone *Linux* needs the `bram` variant built with
-`image: sbi` (green dispatch run **31259899529**) and **DIP SW3 ON**.
+### 🏆🐧🔌 STANDALONE LINUX — cold boot to a login prompt (2026-08-08)
+
+`image: sbi` bitstream in the config flash (written by `fujprog -j flash`), DIP
+**SW3 ON**, microSD in, power pulled and restored, **nothing loaded**:
+```
+[  41.392758] koti-sd 50000.mmc: 61067264 sectors (29818 MiB), read-only
+[  44.773161] Run /init as init process
+Linux buildroot 6.12.0 #1 Fri Aug  7 21:04:58 UTC 2026 riscv32 GNU/Linux
+koti: userspace is alive
+Welcome to Buildroot
+buildroot login:
+```
+⇒ The board configures itself from its own flash, the SBI firmware transports
+the kernel off the microSD, sv32 Linux comes up on the 32 MB SDRAM and reaches
+userspace — **with no PC in the loop except as a power supply and a terminal.**
+
+Two observations from that boot, neither blocking:
+- `Starting network: ip: socket: Function not implemented … FAIL` — **expected**,
+  there is no `CONFIG_NET`. Ladder item 11.
+- ⚠️ `koti-sd … read-only` — the card probed **read-only** here, where the
+  rootfs rung wrote and read back files earlier the same day. First suspect is
+  the microSD's own physical lock slider, since the card was removed and
+  reinserted between the two tests. Not diagnosed; do not report the write path
+  as broken on the strength of this one line.
 
 ⚠️ **UPSTREAM `jtagpin.py` IS WRONG FOR THIS BOARD.** emard/esp32ecp5 ships the
 v3.0.x block uncommented; this is a **v3.1.8**, where `tms` moves 21 -> 5 and

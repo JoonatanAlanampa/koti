@@ -28,12 +28,27 @@ dropped half its output is not a faster boot, and that is exactly what a memory
 bug looks like from a distance. Compare `chars` across arms before believing any
 timing: they should match closely, and `bad` should be 0 on both.
 
-    python fpga/ulx3s/boottime.py --port COM3 --out cached.log
-    python fpga/ulx3s/boottime.py --port COM3 --out plain.log --compare cached.log
+    py -3.12 fpga/ulx3s/boottime.py --port COM3 --out cached.log
+    py -3.12 fpga/ulx3s/boottime.py --port COM3 --out plain.log --compare cached.log
+
+⚠️ `py -3.12`, not a bare `python`: the `python` first on PATH on this machine
+is an agent venv with no pip and no pyserial, and it fails with a bare
+ModuleNotFoundError that looks like pyserial was never installed. It is
+installed — for 3.12.
 
 ⚠️ The board must be power-cycled (or reconfigured) AFTER this starts listening,
 or the boot it is timing has already happened. It waits for the first byte, so
-starting it first and then applying power is the correct order.
+starting it first and then applying power is the correct order. `--flash` does
+the reconfiguring itself and is the repeatable way to run an A/B:
+
+    py -3.12 fpga/ulx3s/boottime.py --port COM3 --flash cached/koti-bram.bit \
+        --out cached.log --label "D-cache"
+    py -3.12 fpga/ulx3s/boottime.py --port COM3 --flash plain/koti-bram.bit \
+        --out plain.log --label "no cache" --compare cached.log
+
+⚠️ ONE VARIABLE ONLY. Both .bit files must come from the same commit with the
+same `image:`, differing solely in `-DKOTI_NO_DCACHE`. The BUILDINFO.txt inside
+each fpga-ulx3s artifact is there to be read before trusting a comparison.
 
 Copyright (c) 2026 Joonatan Alanampa
 SPDX-License-Identifier: Apache-2.0
@@ -48,6 +63,29 @@ PROMPT = b"login:"
 # The kernel stamps every printk with seconds since boot. The LAST one before
 # the prompt is the kernel's own answer to "how long did this take".
 TS = re.compile(rb"\[\s*(\d+\.\d+)\]")
+
+
+def sram_load(bitfile, fujprog):
+    """Configure the FPGA volatilely, then get out of the way of the UART.
+
+    SRAM, deliberately, NOT `-j flash`: the config flash keeps the known-good
+    standalone image, so a power cycle is the undo for anything this loads. It
+    also costs ~10 s instead of ~142 s per arm.
+
+    ⚠️ The FT231X is ONE device shared by JTAG and the UART, so the serial port
+    cannot already be open here — which is why this runs before the capture
+    rather than alongside it, and why the first few hundred ms of the SBI banner
+    are always lost. That is what the kernel-timestamp metric is for.
+    """
+    import subprocess
+    print(f"fujprog SRAM load: {bitfile}", flush=True)
+    r = subprocess.run([fujprog, bitfile], capture_output=True, text=True)
+    tail = (r.stdout + r.stderr).strip().splitlines()
+    for line in tail[-4:]:
+        print(f"  | {line}")
+    if r.returncode != 0:
+        sys.exit(f"fujprog failed ({r.returncode}) — is the board on and is the "
+                 f"serial port closed?")
 
 
 def capture(port, baud, timeout, out):
@@ -116,7 +154,14 @@ def main():
     ap.add_argument("--out", help="write the raw boot log here")
     ap.add_argument("--label", default="this boot")
     ap.add_argument("--compare", help="a previous --out log to compare against")
+    ap.add_argument("--flash", help="SRAM-load this .bit with fujprog first, "
+                                    "then time the boot it starts")
+    ap.add_argument("--fujprog",
+                    default=r"C:\Users\Joonatan Alanampa\opt\oss-cad-suite\bin\fujprog.exe")
     args = ap.parse_args()
+
+    if args.flash:
+        sram_load(args.flash, args.fujprog)
 
     buf, elapsed = capture(args.port, args.baud, args.timeout, args.out)
     now = report(buf, elapsed, args.label)

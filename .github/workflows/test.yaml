@@ -23,6 +23,15 @@ jobs:
         shell: bash
         run: pip install -r test/requirements.txt
 
+      # The disassembler behind tools/ktrace.py --image. Needs no iverilog, no
+      # cocotb and no RISC-V toolchain, so it runs first and fails in a second.
+      # Its expected strings all came out of GNU binutils rather than out of
+      # anyone's head, and it carries a POSITIVE control for the straddle audit:
+      # an audit that cannot fire prints "0 sites" and reads exactly like a
+      # clean bill of health.
+      - name: disassembler and the straddle audit
+        run: python3 test/test_rvdis.py
+
       - name: Run tests
         run: |
           cd test

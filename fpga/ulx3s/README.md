@@ -246,6 +246,38 @@ UART during the operation is not merely useless, it destroys the evidence and
 costs a power cycle per attempt. This is the instrument that ended the
 investigation after several hours of dead-line guessing.
 
+⚠️ **`import ecp5wp` RUNS `detect()`.** Upstream's file ends with a bare
+`detect()` call at module level, so importing it does a full JTAG flash probe as
+a side effect — which kills the shared UART and killed one attempt before it
+reached its own `open()`. Strip that last line (`ecp5wpq.py`) and **open the log
+before any import that can touch JTAG**.
+
+### 🏆 THE FLASH WRITE SUCCEEDED — koti runs from its own flash (2026-08-08)
+
+Sequence that worked, all from the ESP32:
+1. `flash_open()`; `0x06` (WREN); `0x01 0x00` (status register = 0, BP=0)
+2. confirm `BP == 0` by re-reading `0x05` **before** writing anything
+3. `ecp5.flash("koti-bram.bit.gz", close=False)`, then `ecp5.flash_close()`
+
+Result on COM3, unprompted, with nothing driving the board:
+```
+Koti-1: hello from my own SoC #507 0123456789 abcdefghijklmnopqrstuvwxyz
+   ... 62 banner lines in a 45 s listen, counter at #580 and climbing
+```
+⭐ The counter was already at **507** when the listen began — koti had been
+running since `LSC_REFRESH`, unattended. And the follow-up REPL read **failed**,
+which is the confirming detail rather than a problem: **koti holds the ESP32 in
+reset via `wifi_en = 0`**, so the ESP32 goes quiet exactly when the FPGA is
+alive. The two are mutually exclusive on this board, by design.
+
+⚠️ **This is a commanded reconfigure (`LSC_REFRESH`), which reads the same flash
+by the same path a cold power-on does — but it is not itself a cold boot.**
+Standalone is only proven by pulling the power. Record that result separately.
+
+⚠️ The image written here is **`bringup`**, so a standalone board prints its
+banner forever. Standalone *Linux* needs the `bram` variant built with
+`image: sbi` (green dispatch run **31259899529**) and **DIP SW3 ON**.
+
 ⚠️ **UPSTREAM `jtagpin.py` IS WRONG FOR THIS BOARD.** emard/esp32ecp5 ships the
 v3.0.x block uncommented; this is a **v3.1.8**, where `tms` moves 21 -> 5 and
 `tdo` moves 19 -> 34. Wrong pins give a garbage IDCODE, which reads exactly like

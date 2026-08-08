@@ -571,7 +571,14 @@ jobs:
           grep -q "Linux version 6.12" boot.log
           grep -q "Machine model: Koti-1" boot.log
           grep -q "SBI specification v0.2 detected" boot.log
-          grep -q "Kernel command line: console=hvc0 earlycon=sbi" boot.log
+          # ⚠️ BOTH consoles, IN THIS ORDER, and the order is the assertion.
+          # printk goes to every console= listed, so tty1 is what puts the log
+          # on the monitor through koticon; the LAST one becomes /dev/console
+          # and therefore where the login prompt lives, so hvc0 must stay last
+          # or the serial login silently moves to the screen.
+          # This grep was anchored to the old single-console line and caught the
+          # change on run 31278075387 -- which is what it is for.
+          grep -q "Kernel command line: console=tty1 console=hvc0 earlycon=sbi" boot.log
 
           # Ratcheted forward 2026-08-05. The four above all print at kernel
           # time 0.000000, so together they proved only that the kernel STARTED
@@ -838,7 +845,14 @@ jobs:
           grep -q "Linux version 6.12" boot-vl.log
           grep -q "Machine model: Koti-1" boot-vl.log
           grep -q "SBI specification v0.2 detected" boot-vl.log
-          grep -q "Kernel command line: console=hvc0 earlycon=sbi" boot-vl.log
+          # ⚠️ BOTH consoles, IN THIS ORDER, and the order is the assertion.
+          # printk goes to every console= listed, so tty1 is what puts the log
+          # on the monitor through koticon; the LAST one becomes /dev/console
+          # and therefore where the login prompt lives, so hvc0 must stay last
+          # or the serial login silently moves to the screen.
+          # This grep was anchored to the old single-console line and caught the
+          # change on run 31278075387 -- which is what it is for.
+          grep -q "Kernel command line: console=tty1 console=hvc0 earlycon=sbi" boot-vl.log
           grep -q "Calibrating delay loop" boot-vl.log
           grep -qE "Memory: .*available" boot-vl.log
           grep -q "devtmpfs: initialized" boot-vl.log

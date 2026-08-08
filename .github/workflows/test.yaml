@@ -32,6 +32,15 @@ jobs:
       - name: disassembler and the straddle audit
         run: python3 test/test_rvdis.py
 
+      # The four source lists and src/ must agree. Cheap, needs nothing, and it
+      # runs FIRST because it catches the failure that has cost this repo two
+      # red runs in one day: a file added to src/ that a list was never told
+      # about ("Unknown module type"), and a file deleted from src/ that a list
+      # still names ("File not found"). Both stop the build before any test
+      # runs, so finding them here saves the whole job.
+      - name: The source lists agree with src/
+        run: python3 test/check_sources.py
+
       - name: Run tests
         run: |
           cd test

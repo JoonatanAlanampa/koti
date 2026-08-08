@@ -20,6 +20,7 @@ SOURCES = [
     SRC_DIR / "qspi_ctrl.sv",
     SRC_DIR / "sdram_ctrl.sv",
     SRC_DIR / "icache.sv",
+    SRC_DIR / "dcache.sv",
     SRC_DIR / "clint.sv",
     SRC_DIR / "plic.sv",
     SRC_DIR / "vga_text.sv",

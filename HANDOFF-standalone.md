@@ -1,93 +1,62 @@
-# Make koti standalone — resume here
+# Make koti standalone — ✅ DONE 2026-08-08
 
-**On "proceed", execute this file.** Everything below is established fact,
-measured on 2026-08-08, not plan.
+**This work order is COMPLETE. Nothing here is a task any more.** Kept only so
+that a session arriving from a stale pointer stops rather than re-runs it.
 
-## The goal
+## What was achieved
 
-koti boots from 5 V alone: plug in USB power, no PC, no `fujprog`. Today it
-needs a ~60 s SRAM flash on every power-up.
+**koti boots from 5 V alone.** Phone charger, HDMI monitor, USB keyboard in US2,
+microSD in the slot — power on, ~45 s, log in as root. No PC in the loop.
 
-## ⭐ THE PLAN CHANGED — DO NOT FLASH THE ESP32's FIRMWARE
+| | proof |
+| --- | --- |
+| standalone boot | cold power-cycle, nothing loaded, banner counter `#51 -> #66` |
+| standalone **Linux** | `Run /init` / `koti: userspace is alive` / `buildroot login:` |
+| HDMI | full boot log on a real monitor, 40x30, no framebuffer driver |
+| USB keyboard | typed `root` and logged in, on charger power |
 
-The earlier plan was "replace the factory MicroPython with EMARD's ULX3S build,
-which ships `ecp5.py`". **That is more risk than the job needs.**
+## The one fact that mattered
 
-`ecp5.py` is **pure MicroPython** — it bit-bangs the ECP5 config protocol over
-`machine.Pin`/`SPI`. It does not need a special firmware; it needs to be a file
-on the filesystem. So:
+🔴 **The ECP5's config flash was WRITE-PROTECTED.** `status_reg = 0x18` ⇒
+**BP=6, TBS=1**, protecting `0x000000-0x1FFFFF` on the ISSI **IS25LP128** — and
+koti's bitstream is 1.88 MB, entirely inside it. Clearing `BP` was the whole
+fix.
 
-1. Upload **`ecp5.py`** (a few KB) to the ESP32's filesystem.
-2. Upload **`koti-bram.bit.gz`** (308,806 bytes — the bitstream gzips to 16%).
-   `uzlib` is already on the stock image.
-3. Write **`main.py`** that imports `ecp5` and configures the FPGA at boot.
-4. Power-cycle. koti should come up on its own.
+⛔ **Four tool-level theories were investigated and ALL FOUR WERE WRONG**: that
+fujprog was at fault, that the ESP32 contended for JTAG (refuted by measurement
+— identical failure with the ESP32 in `deepsleep`), that MicroPython 1.14 was
+too old (upstream *recommends* 1.14), and that `ecp5.py` needed a different
+version. When two independent tools fail identically at the same operation, the
+thing they share is the hardware. **Ask the chip why it is refusing before
+blaming the tools** — `ecp5wp.py` reads that register and took ninety seconds.
 
-⇒ **No firmware overwrite, so nothing irreversible.** If it does not work, delete
-three files. The factory backup (below) stays the safety net but should not be
-needed.
+## How to update koti now — one command
 
-## Established facts — do not re-derive
+```
+~/opt/oss-cad-suite/bin/fujprog.exe -j flash <bitstream>.bit    # ~142 s
+```
+Works because `BP=0` now. ⛔ `fujprog`, never `openFPGALoader`.
+The whole ESP32 / `ecp5.py` / MicroPython apparatus was scaffolding to find one
+status-register bit. Keep it **only** as the tool that can read and change flash
+protection; it is not needed for routine work.
 
-- **esptool reaches the ESP32 directly. NO passthru bitstream is needed.**
-  Measured: `esptool --port COM3 chip-id` -> `ESP32-D0WD-V3 (rev v3.1)`,
-  MAC `c8:85:41:c9:ce:f0`, stub flasher uploaded and ran. This was the
-  blocker that made the ESP32 route look expensive; it is not real.
-- ⚠️ **The FPGA must be UNCONFIGURED to reach the ESP32.** koti drives
-  `wifi_en` low, which disables it. Power-cycle and load NO bitstream. That is
-  also why the serial port shows MicroPython after a power cycle and koti after
-  an SRAM load — the two take turns on one FT231X.
-- The ESP32's flash is **16 MB** (`a1`/`4018`). Filesystem holds only
-  `boot.py`, **2,084,864 bytes free**. Stock **MicroPython 1.14**, and
-  `import ecp5` -> ImportError, so the module must be supplied.
-- Bitstream: **1,976,403 bytes raw, 308,806 gzipped (16%)**, ~25 s to upload at
-  115200. Source: `koti-fpga-bram` artifact of a green `fpga-ulx3s` run
-  (31253084532 at `2bd7183` is known good).
-- ⭐ **Factory backup exists**: `Documents/ulx3s-backup/` —
-  `esp32-factory-16MB-2026-08-08.bin`, 16,777,216 bytes, sha256
-  `8e8df9bc3e3bf4f4564271964db0952f9ede91a59f05afe9f8e587eee03ee323`, `0xE9`
-  magic verified, with a README carrying the restore command.
-- Tools: `esptool.exe` at
-  `C:/Users/JOONAT~1/AppData/Local/Temp/esptool/esptool-windows-amd64/esptool.exe`
-  (v5.3.1; re-download if temp was swept). `fujprog.exe` at
-  `~/opt/oss-cad-suite/bin/`.
+## Traps this left behind
 
-## Steps
+- ⚠️ **The ESP32 is LOCKED OUT at power-on** — koti self-configures in ~1 s and
+  drives `wifi_en = 0`. `console.bit` releases it but **drives the FTDI line
+  itself**, so the ESP32 comes up *running but inaudible*. Reaching the
+  MicroPython REPL again needs a **passthru bitstream**.
+- ⚠️ **Connect HDMI BEFORE applying power** — there is no hotplug detect.
+- ⚠️ The `sbi` image needs **DIP SW3 ON**.
+- ⛔ **Never call `ecp5wp.is25lp128_protect()`, not even as `protect(0)`** — it
+  writes the function register, whose upstream comment is *"OTP warning: once
+  set, can't be reset!"*. Unprotect via status register 1 only (`0x06`, then
+  `0x01 0x00`); reversible with `0x01 0x18`.
+- ⚠️ **`import ecp5wp` runs `detect()`** as a module-level side effect, which
+  kills the shared UART. Strip that last line before importing it.
+- ⭐ **When driving JTAG from the ESP32, LOG TO A FILE ON THE ESP32.** The FTDI
+  line is shared with the FPGA and goes dark the instant `common_open()` erases
+  the FPGA's configuration. Listening on the UART destroys the evidence and
+  costs a power cycle per attempt. The ESP32 never once crashed.
 
-1. **Get `ecp5.py`.** It lives in EMARD's ULX3S MicroPython work (search
-   `emard ulx3s micropython ecp5.py`). ⚠️ Verify the PIN NUMBERS in it match
-   this board — a v3.1.8 — before trusting it. If no usable copy is findable,
-   say so rather than writing an ECP5 config protocol from scratch unasked.
-2. **Talk to MicroPython**: power-cycle (ask the user — only they can), then
-   COM3 at 115200. Ctrl-C twice first; the REPL auto-indents and a mangled
-   multi-line paste leaves it stuck at `...`.
-3. **Upload.** Do NOT paste 300 KB through the REPL line by line. Use
-   MicroPython's **raw-paste mode** or write a small chunked base64 uploader.
-   Verify by size and hash on the device, not by "it seemed to work".
-4. **`main.py`** -> configure the FPGA from the gzipped bitstream.
-5. **Power-cycle and prove it.** ⚠️ The ESP32 owns the UART until the FPGA is
-   configured, so the serial port may show MicroPython first and koti after.
-   **The LEDs are the honest check** and the user must read them: with SW4 off
-   they show raw `uo`, so LED0 = UART idling high, LED1 = HALTED (dark is good),
-   LED2..LED7 = the line counter advancing. In the FLASH_BRAM variant `led[7]`
-   is the fabric flash's `bad_cmd`, so a dark LED7 is a PASS.
-   Then read COM3 for `Koti-1: hello from my own SoC #<n>`.
-
-## Rules for this work
-
-- ⛔ **NEVER `git add -A` in this repo.** Another session is working the D-cache
-  in `src/dcache.sv`; on 2026-08-08 an `add -A` swept its in-progress `DCDBG`
-  debug block into an unrelated commit (`877f833`). Stage explicit paths only.
-- Claim **the physical ULX3S** on the session board. The repo itself does not
-  need claiming for this work — it is ESP32-side.
-- The user must do every power cycle and every LED reading. Ask, do not guess.
-- If `ecp5.py` cannot be obtained or its pins do not match, STOP and report.
-  koti needing a 60 s flash is a perfectly acceptable state; a half-programmed
-  ESP32 is not.
-
-## Board state as of 2026-08-08
-
-COM3, SW3 **off**, SW4 off, **FPGA unconfigured**, ESP32 running factory
-MicroPython. Reload koti any time:
-`~/opt/oss-cad-suite/bin/fujprog.exe <koti-bram.bit>` (~60 s).
-⛔ `fujprog -j flash` does NOT work on this board — see `fpga/ulx3s/README.md`.
+Full detail, with the measurements: `fpga/ulx3s/README.md`.

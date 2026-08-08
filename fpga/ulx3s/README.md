@@ -329,6 +329,18 @@ userspace — **with no PC in the loop except as a power supply and a terminal.*
 Two observations from that boot, neither blocking:
 - `Starting network: ip: socket: Function not implemented … FAIL` — **expected**,
   there is no `CONFIG_NET`. Ladder item 11.
+- 🔴 **`MemTotal: 8796 kB` on a board with 32 MB — koti uses HALF ITS RAM, and
+  it is architectural, not a devicetree typo.** `d_addr = byte_addr[24:2]` and
+  **`addr[22]` is spent as the flash/RAM device select**, so only `addr[21:0]`
+  — 4M words = **16 MB** — ever reaches the SDRAM. `src/sdram_ctrl.sv` itself
+  takes a full 23-bit word address and can drive all 32 MB; `src/project.sv`
+  drops the top bit on the way in ("addr[22] is dropped on the way in: it was
+  the device select"). `koti.dts`'s `memory@1000000 reg = <0x01000000
+  0x01000000>` is therefore CORRECT for the hardware as built.
+  ⇒ Doubling koti's RAM means changing the device-select scheme in
+  `src/project.sv`, plus the DTS, the linker scripts and SBI's load address.
+  Real, available, and **not a one-line change**. Of the 16 MB, ~8.8 MB is what
+  is left after the kernel and initramfs.
 - ✅ `koti-sd … read-only` — **COSMETIC, and already fixed in git. The card is
   writable.** The kernel on the card was built **21:04:58 UTC**, which is 2m26s
   *after* the write half landed (`a235672`, 21:02:32) and 17 min *before* the

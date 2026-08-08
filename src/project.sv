@@ -385,14 +385,27 @@ module tt_um_koti (
   wire [3:0]  am_be;
   wire        am_ack;
   wire [31:0] ad_rdata;
-// ⛔ THE CACHE IS OUT OF THE PATH. Enabling it made tb_boot print NOTHING in
-// 700,000,000 clocks -- a completely dead machine -- while tb_fpga_bram passed
-// with it, so it fails only in the KOTI_SIMMEM boot configuration. Until that
-// is understood, `KOTI_DCACHE` is not defined anywhere and every build takes
-// the bypass below, which is the behaviour that has booted Linux on real
-// hardware. src/dcache.sv and test/tb_dcache.v stay and stay gated: the module
-// passes its own bench, and the bug is in how it meets the SoC, not in the
-// cache in isolation.
+// ---- is the cache in the path? -----------------------------------------
+// ON for every FPGA build, exactly the way `icache` above is, and deliberately
+// NOT behind a switch of its own. This repo has already been bitten twice by a
+// list that had to be told about a new file (see test/check_sources.py), and a
+// build flag that must be added to seven workflow steps to take effect is that
+// same mistake wearing a different hat — a cache nobody compiles is not a
+// cache. The ASIC build takes the bypass because a TinyTapeout tile has no
+// block RAM to put one in.
+//
+// `KOTI_NO_DCACHE` turns it off again, for one purpose: A/B-ing the cache on
+// the real board without editing RTL. What that selects is not an untested
+// special case — it is the same bypass every ASIC build compiles and every
+// ASIC test exercises, and it is what booted Linux on hardware before this.
+`ifdef KOTI_FPGA
+`ifndef KOTI_NO_DCACHE
+`ifndef KOTI_DCACHE
+`define KOTI_DCACHE
+`endif
+`endif
+`endif
+
 `ifdef KOTI_DCACHE
   dcache dc (
       .clk(clk), .rst(rst),

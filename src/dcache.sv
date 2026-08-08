@@ -55,72 +55,87 @@
 // which is a property worth having by construction rather than by argument.
 //
 // FPGA-only, behind KOTI_FPGA like sdram_ctrl and icache: a TinyTapeout tile
-// has no block RAM to put this in.
+// has no block RAM to put this in. ✅ ENABLED on every FPGA build since
+// 2026-08-08 — project.sv derives KOTI_DCACHE from KOTI_FPGA, and
+// `KOTI_NO_DCACHE` is the bring-up switch that puts the bypass back.
 //
-// ⛔ NOT ENABLED — and the reason is NOT in this file. `KOTI_DCACHE` is
-// defined nowhere, so project.sv takes the bypass.
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐ THE ACK CYCLE IS NOT AN ACCEPT CYCLE. That single rule — the `!ack_q` term
+// in the accept condition below — is what took this cache from "0 characters
+// with a kernel" to a full Linux boot, and it is the one thing to preserve.
 //
-// ⚠️ STATUS 2026-08-08: one real defect found and FIXED in the core, and it was
-// NOT ENOUGH. The cache still produces 0 characters with a kernel. So there is
-// at least one more problem; do not assume the remaining one is the same shape.
+// `pending` clears on the SAME edge that sets `ack_q`, so without that term the
+// cache is idle-looking during the very cycle it is presenting an
+// acknowledgement, and it accepts whatever the request port still shows. What
+// the port still shows is the transaction that just finished: a requester has
+// not seen the ack yet and is still asking for it. So the cache re-latched a
+// STALE ADDRESS and did the whole transaction again.
 //
-// ⭐ WHAT WAS FIXED (koti_core.sv, and it stands on its own merits): the data
-// ack was routed by who is asking NOW rather than by who ISSUED. `dw_req` is
-// `(dw_state != 0) && !m_port_busy`, so an M-stage memory op appearing mid-walk
-// WITHDRAWS the walker's request — the same dropped-requester shape as the
-// arbiter deadlock. It is now routed by a latched owner.
-// ✅ Verified neutral: Linux still boots without the cache, and tb_fpga_bram is
-// bit-for-bit 135401 clocks, unchanged.
-// ❌ Verified insufficient: with the cache, still 0 characters.
+// ⇒ arbiter3.sv NEVER DOES THIS, which is why nothing had ever needed the rule.
+// Its grant returns to G_NONE on the ack and it re-arbitrates the cycle AFTER,
+// by which time the requester has moved on. It also passes `d_addr` through
+// combinationally, so the address always belongs to whoever is asking now.
+// Anything that LATCHES an address — a cache — needs the missing cycle back.
 //
-// koti_core.sv routes the data-port acknowledgement by who is asking AT THE
-// MOMENT THE ACK ARRIVES:
-//     wire dw_ack     = d_ack &&  dw_req;   // the page walker
-//     wire m_ack_here = d_ack && !dw_req;   // the M stage
-// Not by who ISSUED the transaction. With the arbiter answering directly those
-// two coincide often enough to work. This cache adds two cycles between accept
-// and ack, and the EX-side walker "borrows the port while M is quiet" — an M
-// stage stalled waiting for the cache LOOKS quiet. So the walker can take the
-// port while a load's transaction is still outstanding, and the ack is then
-// delivered to the wrong consumer: a load's data handed to the walker, or the
-// walker's PTE handed to a load.
+// ⚠️ WHY ONLY THE PAGE WALKER DIED OF IT. koti_core's M stage withdraws on its
+// own ack (`d_req = (d_active && !m_ack_here) || dw_req`), so an M-stage
+// request is already gone during the ack cycle and cannot be re-latched. The
+// walker has no such term: `dw_req` is just `(dw_state != 0) && !m_port_busy`,
+// and `dw_state` does not advance until the edge at the END of the ack cycle.
+// So the walker's level-1 PTE read was re-issued, and its answer arrived while
+// dw_state had moved to 2 — the level-1 PTE delivered as the level-0 PTE.
+// A wrong translation faults, which walks again, which storms traps: 100% of
+// samples inside handle_exception across 66 distinct addresses.
 //
-// ⇒ SYMPTOM, measured: with a kernel, the boot reaches the MMU and then storms
-// traps. At 7.9M clocks the PC is 100% inside `handle_exception` across 66
-// DISTINCT addresses — walking, not spinning — with 61% of samples showing a
-// data request up with no acknowledgement. A walker fed the wrong word builds a
-// wrong translation, which faults, which walks again.
+// ⇒ MMU-ONLY, which is exactly why every bench that passed, passed. bringup.S
+// and the SBI firmware never enable paging, so the walker never runs.
+// MEASURED, not deduced: an instrumented run printed 30 re-accepts, every one
+// of them with ptw=1 and the same address as the transaction that had just
+// completed.
+// ══════════════════════════════════════════════════════════════════════════
 //
-// ⚠️ THIS MAY BE A LATENT CORE BUG THAT THE CACHE MERELY EXPOSED. The arbiter
-// already gives video absolute priority and can delay a data ack; nothing about
-// the routing above is safe against that either, it has just never been pushed
-// hard enough to show. Fixing it in the CORE — latch `dw_req` when the
-// transaction is issued and route the ack by the latched value — is therefore
-// worth more than making the cache pretend to be zero-latency, and it makes the
-// core correct against ANY memory latency rather than against this one.
+// ⭐ AND A MEASUREMENT THAT INVITED THE OPPOSITE CONCLUSION. With the fix in,
+// the first whole-boot benchmark said the cache made the machine 18% SLOWER.
+// That number was real and it meant nothing: test/sim_mem.sv answers in ONE
+// clock, so it is faster than any cache in front of it, and the boot bench had
+// been scoring memory as free. Clocks to userspace, same kernel image, same
+// 4392 characters of identical console output, `+memlat` = extra clocks per
+// memory transaction:
 //
-// WHAT IS ALREADY RULED OUT — do not re-walk these:
-//   * The cache in isolation: tb_dcache passes, all three mutations caught.
-//   * The SoC without an MMU: tb_fpga_bram PASSES with the cache, at 135215
-//     clocks, FASTER than the 135401 without it.
-//   * The firmware: tb_boot with +flash and no kernel prints "STK" identically
-//     with and without the cache. bringup.S and the SBI firmware never enable
-//     paging, so the walker never runs — which is exactly why every bench that
-//     passed, passed.
-//   * Timing: 30.88 MHz post-route with it in, PASS at 25, up from 29.98.
-//   * "It is just slow": still 0 characters at 25,000,000 clocks, against a
-//     boot that prints its banner inside 3,000,000 without the cache.
+//   +memlat   no cache        D-cache         verdict
+//   0        503,134,412     594,781,497     18.2% SLOWER  (model artefact)
+//   4      1,017,805,763   1,012,172,330      0.55% faster  (the crossover)
+//   9      1,666,686,417   1,518,594,747       8.9% FASTER  (the real part)
+//
+// ⇒ THE CACHE IS WORTH EXACTLY WHAT MEMORY COSTS, and it breaks even at about
+// a five-clock memory. sdram_ctrl measures ~10 clocks for a random word, which
+// is comfortably the far side of that — but it is not an enormous margin, and
+// anything that makes memory cheaper (the open-row policy and 4-word burst
+// PLAN.md still lists) moves the machine back TOWARD the crossover rather than
+// away from it. Re-measure both together; do not assume they add up.
+// ⚠️ Never benchmark this cache at memlat=0 and conclude anything.
+// Read hit rate is a steady 73% across every latency measured.
+//
+// WHAT LIMITS THE WIN, measured in the same run: 21.5M writes against 27.6M
+// cacheable reads, and write-through means every one of those writes is a full
+// memory round trip PLUS this cache's two cycles. A further 13.2M walker reads
+// are bypassed and still pay the two cycles. Both are known, both are worth
+// something, and neither was worth adding to the change that made it correct.
 //
 // REPRODUCE IN ~1 MINUTE (no CI, no board):
 //   gh run download <a green linux run> -n koti-linux-Image -D kimg
 //   python3 test/mkhex.py sw/sbi/sbi_sd.bin fw.hex
 //   python3 test/mkhex.py kimg/arch/riscv/boot/Image kernel.hex
-//   iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_SIMMEM -DKOTI_DCACHE //     -o b.vvp src/*.sv src/usb_hid_host_rom.v vendor/*.sv vendor/*.v //     test/sim_prims.v test/sim_mem.sv test/tb_boot.v
-//   vvp b.vvp +flash=fw.hex +ram=kernel.hex +ramoff=1048576 +maxclk=3000000
+//   iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_SIMMEM //     -o b.vvp src/*.sv src/usb_hid_host_rom.v vendor/*.sv vendor/*.v //     test/sim_prims.v test/sim_mem.sv test/tb_boot.v
+//   vvp b.vvp +flash=fw.hex +ram=kernel.hex +ramoff=1048576 +maxclk=4000000
+//   # the banner appears inside 3M clocks; add +memlat=9 for a real memory,
+//   # -DKOTI_DCACHE_STATS for the hit rate, -DKOTI_NO_DCACHE to take it out.
 //   # then: tools/ktrace.py <System.map> <trace> --image <Image>
 // ⚠️ test/mkhex.py, NOT fpga/ulx3s/mkflashhex.py — the latter emits one BYTE
 // per line for the fabric flash while sim_mem's array is WORDS, so it silently
-// loads garbage and produces 0 characters, which looks exactly like this bug.
+// loads garbage and produces 0 characters, which looks exactly like a hang.
+// ⚠️ A whole boot to userspace is ~4.7 HOURS under iverilog and ~3 MINUTES
+// under Verilator. Use the Verilator recipe in .github/workflows/linux.yaml.
 //
 // Copyright (c) 2026 Joonatan Alanampa
 // SPDX-License-Identifier: Apache-2.0
@@ -228,16 +243,26 @@ module dcache #(
                be[0] ? neu[7:0]   : old[7:0]};
   endfunction
 
-`ifdef DCDBG
-  integer dbg_n = 0;
+  // ---- statistics, simulation only ---------------------------------------
+  // Not decoration: the decision to enable this cache at all was made on the
+  // hit rate, and a hit rate nobody can print is a hit rate nobody can check
+  // when the workload changes. `KOTI_DCACHE_STATS` is defined by no synthesis
+  // build and no CI job; pass it to a boot run to get the numbers back.
+`ifdef KOTI_DCACHE_STATS
+  integer n_rd, n_hit, n_wr, n_ptw;
+  initial begin n_rd = 0; n_hit = 0; n_wr = 0; n_ptw = 0; end
   always_ff @(posedge clk)
-      if (!rst && !initing && c_req && !look && !pending && ack_q
-          && dbg_n < 30) begin
-          $display("DCDBG re-accept ON ACK CYCLE: addr=%h ptw=%b we=%b | prev {%h,%h} ptw=%b same=%b",
-                   c_addr, c_ptw, c_we, look_tag, look_idx, look_ptw,
-                   (c_addr == {look_tag, look_idx}));
-          dbg_n = dbg_n + 1;
+      if (!rst && look) begin
+          if (look_ptw)      n_ptw <= n_ptw + 1;
+          else if (look_we)  n_wr  <= n_wr  + 1;
+          else begin
+              n_rd <= n_rd + 1;
+              if (hit) n_hit <= n_hit + 1;
+          end
       end
+  final
+      $display("dcache: %0d cacheable reads, %0d hits (%0d%%), %0d writes, %0d walker reads",
+               n_rd, n_hit, (n_rd == 0) ? 0 : (100 * n_hit) / n_rd, n_wr, n_ptw);
 `endif
 
   always_ff @(posedge clk) begin

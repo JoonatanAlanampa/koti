@@ -202,22 +202,41 @@ Software, in order:
        - Payoff: `loadkeys` works, the Finnish keymap moves out of firmware and
          into the OS, key repeat becomes meaningful, Ctrl+Alt+Fn works.
 
-10. [ ] ⚡ **D-cache.** The I-cache took fetch from ~8 clocks/instruction to 1
-       on a hit, which made DATA the dominant cost: a random 32-bit SDRAM read
-       is 10 clocks (measured) and ~a third of instructions are loads/stores,
-       so ~3 clocks/instruction on the data side against ~1 on fetch. Boot to
-       userspace is ~49 s on hardware; this is where it goes.
-       ⭐ **The coherence objection has a cheap answer: make it WRITE-THROUGH.**
-       The worry was that the video DMA reads the charbuf out of the same SDRAM
-       the CPU writes, so a write-back cache could hold text that never reaches
-       the screen. But the DMA only ever READS — there is no DMA-writes /
-       CPU-reads direction — so write-through eliminates the problem instead of
-       managing it. BRAM is not a constraint: 19 of 208 used.
-       ⚠️ **Measure the cheaper thing first.** `sdram_ctrl`'s own header names
-       an open-row policy and a real 4-word burst as the performance left on
-       the table. Those roughly halve EVERY line fill — I-cache today, D-cache
-       later — and they change one FSM rather than adding a cache with a new
-       coherence story.
+10. [x] ⚡ **D-cache. BUILT, CORRECT AND ENABLED 2026-08-08** (`src/dcache.sv`,
+       write-through, 512 lines of one word, no-write-allocate). Every FPGA
+       build has it: project.sv derives `KOTI_DCACHE` from `KOTI_FPGA`, so
+       there is no flag to remember and no fifth source list to forget.
+       `KOTI_NO_DCACHE` puts the bypass back for a bring-up A/B.
+       ⭐ **The coherence objection had a cheap answer: WRITE-THROUGH.** The
+       worry was that the video DMA reads the charbuf out of the same SDRAM the
+       CPU writes, so a write-back cache could hold text that never reaches the
+       screen. The DMA only ever READS — there is no DMA-writes / CPU-reads
+       direction — so write-through eliminates the problem instead of managing
+       it. BRAM was never the constraint: 19 of 208 used.
+       📌 **Measured — clocks to userspace, same image, identical output:**
+       | `+memlat` | no cache | D-cache | |
+       |---|---|---|---|
+       | 0 | 503,134,412 | 594,781,497 | 18.2% **slower** — model artefact |
+       | 4 | 1,017,805,763 | 1,012,172,330 | 0.55% faster — the crossover |
+       | 9 (the real part) | 1,666,686,417 | 1,518,594,747 | **8.9% faster** |
+       Read hit rate a steady **73%** at every latency.
+       ⚠️ **Do NOT benchmark it at `+memlat=0` and believe the answer.**
+       `sim_mem` answers in one clock, which is faster than any cache in front
+       of it. That 18% is a property of the model, not of the design, and it is
+       what nearly got the cache thrown away on the day it started working.
+       ⚠️ **It breaks even at about a five-clock memory**, and `sdram_ctrl` is
+       ~10 — the right side of the line, but not by a mile. Making memory
+       cheaper moves the machine back toward the crossover, so if the open-row
+       policy below ever lands, re-measure the two together.
+       ⚠️ **What still limits it, both measured in that run**: 21.5M writes
+       against 27.6M cacheable reads, and write-through means every write is a
+       full memory round trip plus the cache's two cycles; and 13.2M page-table
+       reads are bypassed yet still pay those two cycles. A write buffer and a
+       combinational walker bypass are the two named next moves.
+       ⚠️ **Still worth measuring first**: `sdram_ctrl`'s own header names an
+       open-row policy and a real 4-word burst as the performance left on the
+       table. Those roughly halve EVERY line fill — both caches — and they
+       change one FSM rather than adding anything.
 
 11. [ ] 🌐 **Networking. There is none at all, and it is TWO absences.**
        (a) No stack: `grep -c CONFIG_NET koti_defconfig` = **0**, so no sockets,
@@ -344,13 +363,15 @@ kept with their evidence because each one constrains work downstream of it.
      remapping a page cannot leave a stale line behind. Page-table walks,
      which share the fetch port, **bypass** the cache — otherwise a cached
      PTE would outlive the `sfence.vma` meant to retire it.
-   - **A D-cache is deliberately not part of this.** The video DMA reads the
-     charbuf out of the same SDRAM the CPU writes, so the data side has a
-     coherence question the fetch side does not, and answering it is worth
-     more once there is a kernel to measure. The natural companion is
-     cheaper: an open-row policy and a real 4-word SDRAM burst would make
-     line fills roughly twice as fast, and `sdram_ctrl`'s own header already
-     names both as the performance left on the table.
+   - ~~**A D-cache is deliberately not part of this.**~~ ✅ **It was built and
+     enabled on 2026-08-08** — see item 10 above. The coherence question the
+     data side has and the fetch side does not was answered by making it
+     write-through rather than by managing it. The kernel that was wanted "to
+     measure" now exists, and it measured 8.9% at realistic memory latency.
+     The cheaper companion is still unbuilt and still worth more per hour: an
+     open-row policy and a real 4-word SDRAM burst would make line fills
+     roughly twice as fast, for BOTH caches, and `sdram_ctrl`'s own header
+     already names both as the performance left on the table.
 
 Precedent that the memory-starved version works at all: KianV RV32IMA uLinux
 SoC (TT06, 30 MHz, QSPI Pmod).

@@ -134,6 +134,26 @@ module tb_dcache;
       end
   endtask
 
+  // Two page-table reads back to back, driven the way koti_core's walker
+  // drives them — which is the ONLY access pattern in the machine that keeps
+  // `c_req` asserted through an acknowledgement. See test 9.
+  task walk_two_levels(input [22:0] a, input [22:0] b);
+      begin
+          settle;
+          c_addr = a; c_we = 0; c_ptw = 1; c_be = 4'hF; c_req = 1;
+          @(negedge clk);
+          while (!c_ack) @(negedge clk);
+          // ⚠️ THE ADDRESS DOES NOT MOVE DURING THE ACK CYCLE, and that is the
+          // whole test. Moving it here instead would hand the cache the level-0
+          // address one cycle early and hide the defect completely.
+          @(negedge clk);
+          c_addr = b;
+          @(negedge clk);
+          while (!c_ack) @(negedge clk);
+          c_req = 0; c_ptw = 0;
+      end
+  endtask
+
   integer base_reads, base_writes;
   integer i;
 
@@ -227,6 +247,31 @@ module tb_dcache;
         // what matters is that the CACHE missed rather than answering from
         // the other tag's line.
         $display("  note memory model aliases; the count above is the check");
+    end
+
+    // ---- 9. THE ACK CYCLE IS NOT AN ACCEPT CYCLE -------------------------
+    // The defect that made this cache produce zero characters with a kernel,
+    // and the reason every other test here passed while it did: it needs a
+    // requester that is still asking DURING the acknowledgement, which is the
+    // page walker and nothing else. Everything above drops `c_req` the moment
+    // it sees the ack, so none of it can see this.
+    //
+    // walk_two_levels drives the port the way koti_core drives it: the level-0
+    // address does not appear until the cycle AFTER the level-1 answer, because
+    // dw_state only advances on the edge that ends the ack cycle. A cache that
+    // accepts during its own ack re-latches the level-1 address and hands back
+    // the level-1 PTE a second time — a wrong translation, then a trap storm.
+    base_reads = reads_seen;
+    walk_two_levels(23'h000051, 23'h0000A2);
+    check("two-level walk: memory reads (2 = both levels fetched)",
+          reads_seen - base_reads, 2);
+    check("two-level walk: level-0 answer is the level-0 word",
+          c_rdata, mem[10'h0A2]);
+    // Without this the check above could pass on two equal words and prove
+    // nothing. The model fills mem[i] = 0xA0000000 + i, so they differ.
+    if (mem[10'h0A2] === mem[10'h051]) begin
+        $display("  FAIL the two levels hold the same word: the check above is vacuous");
+        fails = fails + 1;
     end
 
     $display("");

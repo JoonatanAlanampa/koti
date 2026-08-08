@@ -23,6 +23,25 @@
 // to flash acknowledged as no-ops. A memory that answered combinationally
 // would hide every handshake bug in the arbiter and the cache.
 //
+// ⚠️ `+memlat=<n>` EXISTS BECAUSE ONE-CLOCK MEMORY CANNOT MEASURE A CACHE.
+// Answering in a single clock makes this model FASTER than any cache in front
+// of it, so a boot run through it scores every cache as pure overhead — which
+// is exactly what happened when the D-cache was first benchmarked here
+// (2026-08-08: 594.8M clocks with it against 503.1M without, on a board where
+// the real part takes ~10 clocks for a random word). The number was real and
+// the conclusion it invited was backwards.
+//
+// So the latency is a knob, and it DEFAULTS TO 0 = the historical behaviour,
+// bit for bit: no existing gate, budget or recorded clock count moves. Pass
+// `+memlat=9` to model sdram_ctrl's measured ~10-clock random read and the
+// comparison becomes meaningful.
+//
+// It is a FLAT latency, and that is a simplification worth naming: the real
+// sdram_ctrl is cheaper on a row hit and dearer on a row miss, and this models
+// neither. It is the right instrument for "what is a memory round trip worth",
+// and the wrong one for "how fast is this board" — for that, run the whole SoC
+// on the real controller (test/test_fpga.py, tb_fpga_bram).
+//
 // Copyright (c) 2026 Joonatan Alanampa
 // SPDX-License-Identifier: Apache-2.0
 
@@ -80,6 +99,9 @@ module sim_mem #(
   //                  window that starts at 0x0100_0000.
   integer i;
   integer ramoff;
+  integer memlat;                    // extra clocks before the ack; 0 = as before
+  reg [15:0] waitn;
+  reg        counting;
   // 512 characters, not 128: a $value$plusargs("%s") target that is too
   // short truncates the FRONT of the path and then reports the truncated
   // name in its own error message, which sends you looking for a file that
@@ -98,6 +120,10 @@ module sim_mem #(
       $readmemh(fname, flash);
       $display("sim_mem: flash <- %0s", fname);
     end
+    if (!$value$plusargs("memlat=%d", memlat)) memlat = 0;
+    if (memlat != 0)
+      $display("sim_mem: +memlat=%0d — each transaction waits %0d extra clocks",
+               memlat, memlat);
     if (!$value$plusargs("ramoff=%d", ramoff)) ramoff = 0;
     if ($value$plusargs("ram=%s", fname)) begin
       $readmemh(fname, ram, ramoff);
@@ -107,10 +133,20 @@ module sim_mem #(
 
   always @(posedge clk) begin
     if (rst) begin
-      ack <= 1'b0;
+      ack      <= 1'b0;
+      counting <= 1'b0;
     end else begin
       ack <= 1'b0;
-      if (req && !ack) begin
+      // The wait, when there is one. With memlat = 0 neither of the first two
+      // arms is ever taken and this is the original one-clock acknowledgement,
+      // unchanged.
+      if (req && !ack && memlat != 0 && !counting) begin
+        counting <= 1'b1;
+        waitn    <= memlat[15:0];
+      end else if (counting && waitn != 16'd0) begin
+        waitn <= waitn - 16'd1;
+      end else if (req && !ack) begin
+        counting <= 1'b0;
         ack    <= 1'b1;
         rdata  <= rd(addr);
         rdata2 <= burst ? rd(addr + 23'd1) : 32'h0000_0000;
@@ -131,6 +167,13 @@ module sim_mem #(
           // else: a write to flash. Acknowledged and discarded, which is what
           // qspi_ctrl does with one.
         end
+      end else if (!req) begin
+        // The requester walked away mid-wait — the arbiter's fetch port does
+        // exactly that on a pipeline flush. Drop the count rather than carrying
+        // an expired one into the NEXT transaction, which would then be
+        // acknowledged with no latency at all and quietly under-report the
+        // cost of memory.
+        counting <= 1'b0;
       end
     end
   end

@@ -57,6 +57,39 @@
 // FPGA-only, behind KOTI_FPGA like sdram_ctrl and icache: a TinyTapeout tile
 // has no block RAM to put this in.
 //
+// ⛔ NOT ENABLED. `KOTI_DCACHE` is defined nowhere, so project.sv takes the
+// bypass. Enabling it made tb_boot print NOTHING in 700,000,000 clocks.
+//
+// WHAT IS ALREADY RULED OUT, measured 2026-08-08 -- do not re-walk these:
+//   * The cache in isolation. tb_dcache passes and its three mutations (never
+//     setting valid, not writing through, caching PTEs) are all caught.
+//   * The SoC integration in general. tb_fpga_bram PASSES with the cache
+//     enabled, through the real sdram_ctrl, at 135215 clocks -- FASTER than
+//     the 135401 without it.
+//   * Timing. 30.88 MHz post-route with it in, PASS at 25, up from 29.98.
+//   * ⭐ THE FIRMWARE. Running tb_boot with only +flash (no kernel) prints
+//     "STK", 3 characters, IDENTICALLY with and without the cache. So crt0's
+//     flash->RAM .data copy, the M-mode trap shim and the UART path are all
+//     fine through it. The machine is not dead.
+//
+// ⇒ WHAT IS LEFT, and it is a narrow target: the failure needs a KERNEL. With
+// an Image at 0x01400000 the firmware boots it instead of the payload, and
+// that is the only configuration that fails. The kernel is also the only thing
+// that turns the MMU on -- which points straight at the `c_ptw` bypass and the
+// EX-side walker borrowing the data port mid-stream. The specific suspicion to
+// test first: the cache LATCHES a request into look_* on accept and holds it
+// until completion, so if the core can switch between a normal access and a
+// walker access while a transaction is outstanding, the cache answers the
+// address it latched rather than the one the core is now asking about.
+//
+// Reproduce in ~30 s, no CI needed:
+//   python3 test/mkhex.py sw/sbi/sbi_sd.bin fw.hex
+//   iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_SIMMEM -DKOTI_DCACHE //     -o b.vvp src/*.sv src/usb_hid_host_rom.v vendor/*.sv vendor/*.v //     test/sim_prims.v test/sim_mem.sv test/tb_boot.v
+//   vvp b.vvp +flash=fw.hex +ram=<kernel.hex> +ramoff=1048576 +maxclk=2000000
+// ⚠️ test/mkhex.py, NOT fpga/ulx3s/mkflashhex.py -- the latter emits one BYTE
+// per line for the fabric flash and sim_mem's array is WORDS, which silently
+// loads garbage and looks exactly like this bug.
+//
 // Copyright (c) 2026 Joonatan Alanampa
 // SPDX-License-Identifier: Apache-2.0
 

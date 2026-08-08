@@ -292,40 +292,11 @@ jobs:
         working-directory: linux-${{ env.KVER }}
         run: |
           cp ../sw/linux/koti_kbd.c drivers/input/keyboard/
-          printf '
-config KEYBOARD_KOTI
-	tristate "Koti-1 USB HID keyboard"
-	depends on INPUT
-	select INPUT_KEYBOARD
-	help
-	  Input driver for koti'"'"'s USB HID keyboard block (src/usb_kbd.sv).
-	  Reads the second FIFO port so the SBI console keeps its own.
-' >> drivers/input/keyboard/Kconfig
-          printf 'obj-$(CONFIG_KEYBOARD_KOTI)	+= koti_kbd.o
-' >> drivers/input/keyboard/Makefile
+          printf '\nconfig KEYBOARD_KOTI\n\ttristate "Koti-1 USB HID keyboard"\n\tdepends on INPUT\n\tselect INPUT_KEYBOARD\n\thelp\n\t  Input driver for koti'"'"'s USB HID keyboard block (src/usb_kbd.sv).\n\t  Reads the second FIFO port so the SBI console keeps its own.\n' >> drivers/input/keyboard/Kconfig
+          printf 'obj-$(CONFIG_KEYBOARD_KOTI)\t+= koti_kbd.o\n' >> drivers/input/keyboard/Makefile
           tail -10 drivers/input/keyboard/Kconfig
           grep -n koti drivers/input/keyboard/Makefile
 
-      # The initramfs, which since 2026-08-06 is a REAL userspace by default:
-      # sw/linux/rootfs.cpio, a 1.14 MiB static-musl busybox built by the
-      # `userspace` workflow and committed like sw/linux/koti.dtb and
-      # sw/sbi/sbi_test.bin — build products whose tool (Buildroot, ~40 minutes
-      # and a whole toolchain from source) cannot sit in front of every push.
-      #
-      # ⚠️ A COMMITTED BUILD PRODUCT GOES STALE IN SILENCE, so it is checked
-      # here rather than trusted: check_initramfs.py reads the archive that is
-      # about to be embedded and asserts the members the boot cannot do without,
-      # that every ELF inside is rv32 with e_flags == 0 (koti decodes no
-      # compressed instructions and has no FPU), that it fits the size budget,
-      # that the overlay in the working tree still matches the copy inside the
-      # cpio byte for byte, and that the Buildroot fragment still hashes to what
-      # built it. Above all it asserts the archive contains the exact marker
-      # string test/tb_boot.v waits for — without which no boot can ever pass
-      # and the symptom is a timeout, which reads as a broken CPU.
-      #
-      # The `init` alternative is sw/linux/init.S plus the /dev/console node
-      # without which it would run with no file descriptors and print nothing.
-      # gen_init_cpio makes the device node from this description without root.
       - name: Build the initramfs
         env:
           WHICH: ${{ inputs.initramfs || 'rootfs' }}

@@ -63,7 +63,25 @@ CONFIG_RISCV_SBI_V01=y
 CONFIG_HVC_RISCV_SBI=y
 CONFIG_SERIAL_EARLYCON_RISCV_SBI=y
 # CONFIG_SERIAL_8250 is not set
-# CONFIG_VT is not set
+# ---- the screen as a Linux console (PLAN.md item 9b) -----------------------
+# CONFIG_VT was OFF until 2026-08-08, and turning it on is what gives the
+# keyboard's input events somewhere to go: drivers/tty/vt/keyboard.c is the only
+# thing in the kernel that turns input events into console characters, it
+# applies the keymap that `loadkeys` edits, and it feeds VTs — not hvc0.
+#
+# HW_CONSOLE comes with a console driver being present; koticon (a `struct
+# consw` over koti's 40x30 character buffer) is that driver. It is a TEXT-mode
+# console, not fbcon: koti has character cells in memory, not a pixel buffer,
+# so no framebuffer or DRM stack is needed or wanted here.
+#
+# ⚠️ hvc0 STAYS. `console=hvc0` in bootargs keeps the serial console primary,
+# so a bring-up session watching COM3 sees exactly what it saw before; tty1 is
+# additional. Losing the serial console to a screen nobody is looking at would
+# be a bad trade on a board being brought up.
+CONFIG_VT=y
+CONFIG_VT_CONSOLE=y
+CONFIG_CONSOLE_TRANSLATIONS=y
+CONFIG_KOTICON=y
 
 # ---- the machine description -----------------------------------------------
 # The command line comes from koti.dts /chosen/bootargs. An empty built-in

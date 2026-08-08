@@ -136,14 +136,11 @@
 	};
 
 	/*
-	 * RAM: the full 16 MB window the core can address, out of the board's
-	 * 32 MB part. (addr[22] selects flash from RAM, so the map reaches half
-	 * the chip; widening it needs a wider address bus through the core and
-	 * the arbiter, for memory sv32 Linux does not need.)
-	 *
-	 * All 16 MB is usable only because the FPGA build lifts the RAM-high
-	 * access fault — see the `pa_ram_hi` ifdef in koti_core.sv. On the QSPI
-	 * build that fault is correct and RAM is 8 MB.
+	 * RAM: the whole 32 MB part, all of it addressable since 2026-08-08.
+	 * (It used to be 16 MB because `addr[22]` was spent as the flash/RAM
+	 * device select; the core's word address is 24 bits now and the select
+	 * is `a[23:22] != 00`. There is no longer a second build with a
+	 * different answer — koti is FPGA-only.)
 	 */
 	memory@1000000 {
 		device_type = "memory";
@@ -294,6 +291,30 @@
 			reg = <0x00060000 0x00010000>;
 			interrupt-parent = <&plic0>;
 			interrupts = <1>;
+		};
+
+		/*
+		 * The 40x30 text console — PLAN.md item 9b, driver
+		 * sw/linux/koticon.c. `reg` is the VGA register block, NOT the
+		 * character buffer: the buffer is ordinary RAM that the driver
+		 * allocates for itself, and `VGA_BASE` (offset 0x04) is how the
+		 * raster is told where it is.
+		 *
+		 * ⭐ That register is why this needed no ownership protocol with
+		 * the firmware. M-mode keeps drawing the boot log into its own
+		 * buffer at 0x0100_8000 forever; Linux simply points the
+		 * hardware somewhere else and owns the screen from that
+		 * instant.
+		 *
+		 * ⚠️ The driver writes offset 0x04 and nothing else. Offset
+		 * 0x00 also holds `uart_b0`, which moves the serial console to
+		 * uo[6] and pairs with the SW3 DIP switch — a read-modify-write
+		 * from Linux could move the console out from under whoever is
+		 * watching it.
+		 */
+		vgacon0: koticon@40000 {
+			compatible = "koti,vga-text";
+			reg = <0x00040000 0x0000000c>;
 		};
 	};
 };

@@ -297,6 +297,21 @@ jobs:
           tail -10 drivers/input/keyboard/Kconfig
           grep -n koti drivers/input/keyboard/Makefile
 
+      # The OUTPUT twin of the driver above, and the reason CONFIG_VT is now on.
+      # A VT needs a console driver to draw on, and koti's screen is character
+      # cells in memory rather than a pixel buffer -- so this is a `struct
+      # consw` in drivers/video/console/ alongside vgacon, NOT fbcon and not a
+      # framebuffer. `depends on VT` because do_take_over_console() is the VT
+      # layer's, and without VT the file would not compile.
+      - name: Add koti's text console driver
+        working-directory: linux-${{ env.KVER }}
+        run: |
+          cp ../sw/linux/koticon.c drivers/video/console/
+          printf '\nconfig KOTICON\n\tbool "Koti-1 40x30 text console"\n\tdepends on VT\n\thelp\n\t  Console driver for koti'"'"'s character buffer (src/vga_text.sv).\n\t  Text mode, not a framebuffer: it writes 8-bit characters and the\n\t  font ROM in fabric renders them.\n' >> drivers/video/console/Kconfig
+          printf 'obj-$(CONFIG_KOTICON)\t+= koticon.o\n' >> drivers/video/console/Makefile
+          tail -10 drivers/video/console/Kconfig
+          grep -n koti drivers/video/console/Makefile
+
       - name: Build the initramfs
         env:
           WHICH: ${{ inputs.initramfs || 'rootfs' }}

@@ -48,6 +48,18 @@
 //             clears on the same read. Nothing else lives here, deliberately:
 //             a status bit in a register with a side effect invites a "just
 //             checking" read that eats a keystroke.
+//   +0x08  R  {ovf2, avail2, code[7:0]} — LINUX'S PORT. Same layout as +0x00
+//             and it POPS the same way, but over its OWN read pointer and its
+//             OWN overflow bit. Two consumers, one stream of keystrokes: the
+//             firmware feeds hvc0 from +0x00 and sw/linux/koti_kbd.c feeds
+//             /dev/input/eventN from here, exactly as a PC delivers a keypress
+//             to the console and to evdev at the same time.
+//             ⛔ Port 2 is PASSIVE: it cannot stall the writer or disturb
+//             +0x00. If it falls more than 8 entries behind it is lapped, its
+//             entries are gone, and ovf2 says so. That trade is on purpose —
+//             a Linux driver that stopped reading must never be able to starve
+//             the console the login prompt depends on.
+//             ⚠️ The PLIC interrupt follows THIS port, not +0x00.
 //   +0x04  R  {conerr, typ[1:0], modifiers[7:0]} — no side effects at all.
 //             `modifiers` is LIVE, not queued. Shift and ctrl are levels,
 //             not events, so queueing them would pair a character with whatever
@@ -158,9 +170,42 @@ module usb_kbd (
   wire sel_rd = sel && !we;
   wire pop    = sel_rd && (reg_a == 2'd0) && !f_empty;
 
+  // ---- port 2: a SECOND, INDEPENDENT READER (added 2026-08-08) ------------
+  // WHY. Reading register 0 POPS, and koti's M-mode SBI firmware is its
+  // consumer — that is what feeds `hvc0` and makes the login prompt typeable.
+  // A Linux input driver would be a SECOND consumer of a single-consumer
+  // queue, and the two would split the keystrokes between them. Two
+  // independent read pointers over the same entries is what a real PC does:
+  // one keypress reaches the console AND /dev/input/eventN.
+  //
+  // ⛔ PORT 2 IS STRICTLY PASSIVE AND MUST STAY THAT WAY. It has its own
+  // pointer and its own overflow flag, and it CANNOT influence `wptr`, `rptr`,
+  // `ovf` or `f_full`. Port 1's behaviour is bit-identical to before this
+  // existed — which matters because port 1 is the path that has typed on real
+  // hardware.
+  // The hazard this avoids is specific and would have been nasty: if "full"
+  // were computed against the laggier of the two readers, then a Linux driver
+  // that stopped draining (nothing has the evdev node open, say) would fill
+  // the FIFO and starve the FIRMWARE — and the symptom would be a login prompt
+  // that stops accepting keys because of a feature that was supposed to be
+  // additive.
+  //
+  // The cost is that port 2 can be LAPPED: the writer may overwrite entries it
+  // has not read. That is the correct trade — a slow observer loses events and
+  // is told so, rather than stalling the machine.
+  logic [3:0] rptr2;
+  logic       ovf2;
+  wire        f_empty2 = (wptr == rptr2);
+  wire        pop2     = sel_rd && (reg_a == 2'd2) && !f_empty2;
+  // How far behind the writer port 2 is. Only the newest 8 entries still
+  // exist, so anything beyond that has been overwritten.
+  wire [3:0]  lag2    = wptr - rptr2;
+  wire        lapped2 = (lag2 > 4'd8);
+
   always_ff @(posedge clk)
       if (rst) begin
           wptr <= 4'd0; rptr <= 4'd0; ovf <= 1'b0;
+          rptr2 <= 4'd0; ovf2 <= 1'b0;
           p1 <= 8'd0; p2 <= 8'd0; p3 <= 8'd0; p4 <= 8'd0;
           diff_run <= 1'b0; diff_i <= 2'd0;
       end else begin
@@ -193,9 +238,27 @@ module usb_kbd (
               rptr <= rptr + 4'd1;
               ovf  <= 1'b0;              // sticky until read
           end
+
+          // Port 2, kept entirely separate from the block above on purpose.
+          // Resync BEFORE the pop so a lapped reader cannot also consume a
+          // stale slot in the same cycle: it lands on the oldest entry that
+          // still exists rather than on one that was overwritten under it.
+          if (lapped2) begin
+              rptr2 <= wptr - 4'd8;
+              ovf2  <= 1'b1;
+          end else if (pop2) begin
+              rptr2 <= rptr2 + 4'd1;
+              ovf2  <= 1'b0;             // sticky until read, like ovf
+          end
       end
 
-  assign kb_avail_irq = !f_empty;
+  // ⭐ THE INTERRUPT FOLLOWS PORT 2, NOT PORT 1, and that is deliberate.
+  // This line goes to the PLIC, the PLIC drives `seip`, and `seip` is
+  // SUPERVISOR external — i.e. it exists to interrupt LINUX. The firmware
+  // never uses it: `console_getchar` polls register 0 when Linux asks it to.
+  // Tying it to port 1 would mean the firmware draining its own queue lowered
+  // the interrupt line for a driver whose queue was still full.
+  assign kb_avail_irq = !f_empty2;
 
   // ---------------------------------------------------------- the registers
   // Captured on the select cycle and served on the ack cycle, the same
@@ -211,6 +274,12 @@ module usb_kbd (
           // keystroke it was asked about would be a bug nobody would find by
           // reading the caller. Nothing in this register has a side effect.
           2'd1:    rmux = {21'd0, usb_conerr, usb_typ, mods_live};
+          // Port 2 — the Linux input driver's own view of the same keystrokes.
+          // Same layout as register 0 and it POPS the same way, but its own
+          // pointer and its own overflow bit. See the port-2 block above for
+          // why it cannot disturb register 0.
+          2'd2:    rmux = {22'd0, ovf2, !f_empty2,
+                           f_empty2 ? 8'd0 : fifo[rptr2[2:0]]};
           default: rmux = 32'd0;
       endcase
 

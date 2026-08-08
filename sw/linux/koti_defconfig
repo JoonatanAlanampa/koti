@@ -136,6 +136,21 @@ CONFIG_KOTI_SD=y
 # ⚠️ NO JOURNAL. An unclean shutdown can leave damage, so `sync` before pulling
 # the power. That is the cost of ext2, stated rather than discovered.
 CONFIG_EXT2_FS=y
+
+# ---- the keyboard as an INPUT device ----------------------------------------
+# Added 2026-08-08. Before this, Linux had no input subsystem at all: keystrokes
+# arrived as console characters via the SBI firmware and nothing in the kernel
+# knew a keyboard existed. This gives /dev/input/eventN, so key events, layouts
+# and `loadkeys` become the OS's business.
+# ⚠️ It does NOT make the login prompt work -- that has always come from the
+# firmware feeding hvc0, and still does. hvc0 is a serial-style console and
+# input devices do not feed it; that would need a VT plus a framebuffer console
+# Linux knows about, which koti does not have (the HDMI text is drawn by the
+# firmware). The two paths read separate ports of the same FIFO.
+CONFIG_INPUT=y
+CONFIG_INPUT_EVDEV=y
+CONFIG_INPUT_KEYBOARD=y
+CONFIG_KEYBOARD_KOTI=y
 # The partition scanner. The card carries an MBR: one partition for the raw
 # kernel image the firmware loads at LBA 2048, one for the filesystem.
 CONFIG_PARTITION_ADVANCED=y

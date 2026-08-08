@@ -86,6 +86,12 @@
 // ⚠️ READING USB_KBD POPS the queue when USB_AVAIL is set. Read it once.
 #define USB_KBD   REG32(0x00060000)   // ⚠️ READING POPS when USB_AVAIL is set
 #define USB_STAT  REG32(0x00060004)   // status + live modifiers, NO side effects
+// ⛔ +0x08 IS LINUX'S, NOT THE FIRMWARE'S. Same layout as USB_KBD and it POPS
+// the same way, but it has its OWN read pointer and overflow bit over the same
+// entries, so the two consumers do not steal each other's keystrokes. The
+// firmware must never read it and sw/linux/koti_kbd.c must never read USB_KBD:
+// that is the whole point of there being two.
+#define USB_KBD_LINUX 0x00060008u
 #define USB_AVAIL  0x100u
 #define USB_OVF    0x200u             // sticky; cleared by the read that sees it
 // From USB_STAT only. Status is in the other register on purpose: a "is a

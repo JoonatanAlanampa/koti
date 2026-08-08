@@ -283,6 +283,29 @@ jobs:
           tail -12 drivers/block/Kconfig
           grep -n koti drivers/block/Makefile
 
+      # koti's keyboard as a real INPUT device. Until 2026-08-08 keystrokes
+      # reached Linux only as console characters through the SBI firmware, so
+      # there was no /dev/input at all. This does not replace that path -- the
+      # gateware has a second, independent read port precisely so both can run
+      # (see src/usb_kbd.sv). Same printf-not-heredoc reasoning as above.
+      - name: Add koti's keyboard input driver
+        working-directory: linux-${{ env.KVER }}
+        run: |
+          cp ../sw/linux/koti_kbd.c drivers/input/keyboard/
+          printf '
+config KEYBOARD_KOTI
+	tristate "Koti-1 USB HID keyboard"
+	depends on INPUT
+	select INPUT_KEYBOARD
+	help
+	  Input driver for koti'"'"'s USB HID keyboard block (src/usb_kbd.sv).
+	  Reads the second FIFO port so the SBI console keeps its own.
+' >> drivers/input/keyboard/Kconfig
+          printf 'obj-$(CONFIG_KEYBOARD_KOTI)	+= koti_kbd.o
+' >> drivers/input/keyboard/Makefile
+          tail -10 drivers/input/keyboard/Kconfig
+          grep -n koti drivers/input/keyboard/Makefile
+
       # The initramfs, which since 2026-08-06 is a REAL userspace by default:
       # sw/linux/rootfs.cpio, a 1.14 MiB static-musl busybox built by the
       # `userspace` workflow and committed like sw/linux/koti.dtb and

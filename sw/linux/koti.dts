@@ -12,9 +12,11 @@
  *                     address and is not a 16550. The console is the SBI one,
  *                     and it needs CONFIG_RISCV_SBI_V01 because koti's
  *                     firmware answers the legacy calls and not DBCN.
- *   no keyboard node— the PS/2 block is one MMIO word, not an i8042, so
- *                     nothing in mainline would bind to a node for it. It
- *                     raises PLIC source 1; the driver is still to write.
+ *   keyboard@60000  — ADDED 2026-08-08, with a driver of koti's own
+ *                     (sw/linux/koti_kbd.c). Mainline binds to nothing here:
+ *                     a soft USB host core is neither EHCI nor OHCI, exactly
+ *                     as the PS/2 word this replaced was not an i8042. What
+ *                     changed is that the driver now exists.
  *
  * (A PLIC node WAS absent for the same reason until 2026-08-04, when
  * src/plic.sv was built. It is here now, under /soc.)
@@ -255,6 +257,29 @@
 			compatible = "koti,sd-1";
 			reg = <0x00050000 0x00010000>;
 			koti,sectors = <61067264>;
+		};
+
+		/*
+		 * The USB HID keyboard block, src/usb_kbd.sv. Added 2026-08-08.
+		 *
+		 * ⚠️ Linux does NOT own this keyboard exclusively, and the driver
+		 * says so: koti's M-mode SBI firmware reads register +0x00 to feed
+		 * the hvc0 console (that is what makes the login prompt typeable),
+		 * while sw/linux/koti_kbd.c reads +0x08. They are two independent
+		 * read pointers over one queue of keystrokes, so neither steals
+		 * from the other -- the same way a PC delivers a keypress to the
+		 * console and to /dev/input at once.
+		 *
+		 * PLIC source 1. The interrupt follows the LINUX port, not the
+		 * firmware's: it exists to raise `seip`, which is supervisor
+		 * external, so tying it to the firmware's queue would let the
+		 * firmware's reads lower a line meant for Linux.
+		 */
+		kbd0: keyboard@60000 {
+			compatible = "koti,usb-kbd-1.0";
+			reg = <0x00060000 0x00010000>;
+			interrupt-parent = <&plic0>;
+			interrupts = <1>;
 		};
 	};
 };

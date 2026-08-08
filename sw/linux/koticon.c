@@ -58,12 +58,13 @@
  *     the VT are dropped rather than approximated.
  *   * a hardware cursor. There is none, so the cursor is drawn in software by
  *     overwriting a cell with '_' and restoring the character underneath.
- *   * hardware scrolling. `con_scroll` returns false and lets the VT layer do
- *     it by repainting, which costs 1200 bytes of memmove per scrolled line
- *     and needs no support from the hardware.
+ *   * hardware scrolling. There is no scroll register, so con_scroll moves the
+ *     VT's buffer and repaints the charbuf in software — see the comment there
+ *     for why returning false instead does NOT work.
  */
 
 #include <linux/console.h>
+#include <linux/minmax.h>
 #include <linux/consolemap.h>
 #include <linux/init.h>
 #include <linux/io.h>
@@ -72,6 +73,7 @@
 #include <linux/platform_device.h>
 #include <linux/screen_info.h>
 #include <linux/slab.h>
+#include <linux/vt_buffer.h>	/* scr_memmovew / scr_memsetw */
 #include <linux/vt_kern.h>
 
 #define KOTI_COLS	40
@@ -225,13 +227,72 @@ static void koticon_cursor(struct vc_data *vc, bool enable)
 	cur_on = true;
 }
 
-/* false = "not handled": the VT layer scrolls its own buffer and repaints
- * through con_putcs. koti has no scroll register to offer it. */
+/*
+ * ⛔ RETURNING false HERE DOES NOT MEAN "the VT will scroll for me". That was
+ * this driver's first assumption and it put a login prompt and a kernel message
+ * on the SAME LINE of a real monitor:
+ *
+ *     buildroot login: _otd fs, running e2fsck
+ *
+ * vt.c's con_scroll() falls back to `scr_memmovew` on the VT's OWN buffer at
+ * vc_origin and then returns — it never asks the driver to repaint. For vgacon
+ * that is fine, because vc_origin points INTO the video memory, so moving the
+ * VT buffer IS moving the screen. koticon's buffer is a separate page that the
+ * raster reads by physical address, so the VT scrolled a buffer nobody
+ * displays while the screen stayed exactly as it was, and every subsequent
+ * line was written over the bottom row.
+ *
+ * So this does what fbcon's SCROLL_REDRAW case does: move and clear the VT's
+ * buffer itself, repaint the affected rows into the charbuf, and return TRUE
+ * to say it is handled. Returning true is what makes vt.c skip its fallback,
+ * which is why the buffer maintenance below is not optional.
+ *
+ * Repainting the whole scrolled region rather than tracking damage is a choice
+ * the size makes easy: 40x30 is 1200 bytes, so a full region repaint is a
+ * memcpy-sized cost on a screen that scrolls at reading speed.
+ */
 static bool koticon_scroll(struct vc_data *vc, unsigned int top,
 			   unsigned int bottom, enum con_scroll dir,
 			   unsigned int lines)
 {
-	return false;
+	unsigned int rows = bottom - top;
+	u16 *base = (u16 *)vc->vc_origin;
+	unsigned int r, c, cols = min_t(unsigned int, vc->vc_cols, KOTI_COLS);
+
+	/* Odd shapes go back to the VT: its fallback keeps its own buffer
+	 * correct, and a screen that is not ours to scroll is not ours to
+	 * repaint either. */
+	if (!lines || lines >= rows || bottom > KOTI_ROWS)
+		return false;
+
+	/* The cursor is about to be somewhere else entirely. */
+	cur_on = false;
+
+	if (dir == SM_UP) {
+		scr_memmovew(base + top * vc->vc_cols,
+			     base + (top + lines) * vc->vc_cols,
+			     (rows - lines) * vc->vc_size_row);
+		scr_memsetw(base + (bottom - lines) * vc->vc_cols,
+			    vc->vc_video_erase_char,
+			    lines * vc->vc_size_row);
+	} else {
+		scr_memmovew(base + (top + lines) * vc->vc_cols,
+			     base + top * vc->vc_cols,
+			     (rows - lines) * vc->vc_size_row);
+		scr_memsetw(base + top * vc->vc_cols,
+			    vc->vc_video_erase_char,
+			    lines * vc->vc_size_row);
+	}
+
+	for (r = top; r < bottom; r++) {
+		const u16 *src = base + r * vc->vc_cols;
+		u8 *dst = koti_cb + r * KOTI_COLS;
+
+		for (c = 0; c < cols; c++)
+			dst[c] = src[c] & 0xff;
+	}
+
+	return true;
 }
 
 /* true = "the console layer should repaint the whole screen for me". */

@@ -168,23 +168,69 @@ Measured, in this order, against the real board:
 | recover by SRAM-loading `console.bit` with fujprog | ✅ 62.05 s, so **host JTAG was never damaged** |
 
 ⭐ **The ESP32's JTAG works.** A correct IDCODE needs all four of TMS/TCK/TDI/TDO
-right, so this also settles the pinout question below. Compare `fujprog -i`,
-which reports `FFFFFFFF` whenever the ESP32 has left its JTAG pins driven —
-**that, not "the ESP32 owns the flash", is the most likely reading of the
-original `fujprog -j flash` failure.** Both masters are wired to the same four
-signals and only one can talk at a time.
+right, so this also settles the pinout question below.
+
+⛔ **`fujprog -i` IS NOT A WORKING DIAGNOSTIC ON THIS BOARD. Stop quoting it.**
+Freshly power-cycled with the ESP32 untouched it still reports `FFFFFFFF`, while
+`fujprog` SRAM-programming succeeds in that very state (`console.bit`, 62 s). An
+earlier run gave `00000005`. Two different garbage answers and a tool that works
+anyway ⇒ the read path is broken, not the chain.
+
+### ⛔ Why `fujprog -j flash` really fails — and it is NOT the ESP32 (2026-08-08)
+
+**Tested, not argued.** The ESP32 was put into `machine.deepsleep(600000)` — GPIOs
+floating, provably silent — and `fujprog -j flash` failed **identically**:
+`TDO: 4000 Expected: 0000 mask: C100`, `Line 37: Operation not permitted`.
+⇒ The JTAG-contention theory is **refuted**. Do not re-run this experiment.
+
+`fujprog -s FILE` dumps the SVF it plays, so the failing line is readable
+offline. Line 37 sits right after this:
+
+```
+SDR 32 TDI(0000001B);            # 0x1B bit-reversed = 0xD8 = 64K BLOCK ERASE
+RUNTEST DRPAUSE 5.50E-01 SEC;    # a FIXED 0.55 s wait
+SDR 16 TDI(00A0) TDO(00FF) MASK(C100);   # 0x A0 reversed = 0x05 = READ STATUS
+```
+It erases, waits a fixed 0.55 s, then requires the masked status bits to be
+clear — and finds `0x4000` still set. So the flash is **still busy or still
+write-enabled** when fujprog gives up. Two candidates, both untested:
+1. the erase is slower than the hard-coded 0.55 s, or
+2. the flash is **write-protected** — upstream ships a whole module for this,
+   `ecp5wp.py`, "ECP5 JTAG FLASH protection tool".
+
+⭐ **This is a positive reason to expect the ESP32 route to succeed where fujprog
+cannot**: `ecp5.py`'s `flash_wait_status()` **polls** the status register with a
+retry budget instead of waiting a fixed 0.55 s. A slow erase defeats fujprog by
+construction and does not defeat `ecp5.py`.
+
+⚠️ `fujprog -z` "completing in 141 s" is consistent with this and means nothing —
+it forces past exactly these status checks.
 
 ⚠️ **UPSTREAM `jtagpin.py` IS WRONG FOR THIS BOARD.** emard/esp32ecp5 ships the
 v3.0.x block uncommented; this is a **v3.1.8**, where `tms` moves 21 -> 5 and
 `tdo` moves 19 -> 34. Wrong pins give a garbage IDCODE, which reads exactly like
 a dead JTAG chain. Use the v3.1.x block.
 
-⛔ **The blocker is the FACTORY FIRMWARE, not the board and not `ecp5.py`.** The
-stock image is **MicroPython 1.14** (Feb 2021); `ecp5.py` is developed against
-modern MicroPython. It imports and bitbangs fine, but dies the moment it
-instantiates hardware `SPI(2)` on the JTAG pins. `deflate` is also absent (the
-`uzlib` fallback covers that one). ⇒ **The ESP32 route needs a newer MicroPython
-flashed first** — which is the step the 2026-08-08 plan had tried to avoid.
+⛔ **CORRECTION, same day: "the blocker is the factory firmware" was WRONG, and
+so was the plan to reflash it.** Upstream's own README heads its install section
+**"# micropython 1.14 (recommended)"** — the stock image is the *recommended*
+version, and 1.25 is the one where "flashing doesn't work". What differs is
+**which `ecp5.py`**: for 1.14 upstream installs `upip.install("esp32ecp5")`,
+i.e. the **PyPI release (1.0.12)**, not git master. The relevant diff is in
+`flash_read_block`:
+
+| | 1.0.12 (pairs with 1.14) | git master |
+| --- | --- | --- |
+| flash reads | `swspi` — **SoftSPI** | `hwspi` + `hwspi.init(sck=...)` re-init |
+
+⇒ master added hardware-SPI acceleration on the exact path that killed this
+board. **Use PyPI 1.0.12 on MicroPython 1.14.** Do not reflash the ESP32 for
+this; that step was proposed on a wrong diagnosis and is not needed.
+
+✅ **The v3.1.x pinout is confirmed by upstream's README**, not just inferred:
+`tms=5, tck=18, tcknc=21, tdi=23, tdo=34, led=19`. `tcknc` is a deliberately
+unconnected pin that `tck` is parked on while switching between bitbanging and
+hardware SPI, because that switch can glitch the clock line.
 
 ✅ **Nothing on the board was written.** Only reads were attempted; both flash
 chips are untouched. The ESP32's filesystem gained `ecp5.py` and `jtagpin.py`,

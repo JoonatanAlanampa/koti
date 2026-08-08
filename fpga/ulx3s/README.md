@@ -342,9 +342,13 @@ Two observations from that boot, neither blocking:
   `+ramoff` were all left alone. Only the DTS length changed.
   `Memory: 23996K/28672K available`, MemFree 3296 → 19452 kB, userspace still
   reached; `sw/memtest.bin` walks all 32 MB with 0 errors under Verilator.
-  ⛔ **NOT yet confirmed on the board** — flash `image: memtest` and expect
-  `addrbits: OK` and `upper: OK`. Simulation cannot prove that the upper 16 MB
-  physically decodes on the fitted part.
+  🏆 **CONFIRMED ON THE BOARD 2026-08-08.** `image: memtest` (SW3 **off** — it
+  never touches video, so its console is `uo[0]`): **eight consecutive clean
+  passes** over the full 32 MB, `addrbits: OK` / `16M: OK` / `upper: OK` /
+  `pass N CLEAN, errors: 0`, 0 non-printable bytes. Then `image: sbi` (SW3
+  **on**): `MemTotal: 25020 kB`, `MemFree: 19412 kB`, `buildroot login:`.
+  📌 Boot cost ~0.65% — `Run /init` at 45.02 s against 44.73 s at 16 MB, the
+  kernel initialising twice the page structs.
 - ✅ `koti-sd … read-only` — **COSMETIC, and already fixed in git. The card is
   writable.** The kernel on the card was built **21:04:58 UTC**, which is 2m26s
   *after* the write half landed (`a235672`, 21:02:32) and 17 min *before* the

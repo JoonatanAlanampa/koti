@@ -296,10 +296,17 @@ Software, in order:
        is NOT what ships. `sw/sbi/dtb.S` embeds **`sw/linux/koti.dtb`**, so the
        firmware carried the old 16 MB blob and the kernel dutifully reported the
        old number while every RTL check passed.
-       ⛔ **STILL TO DO: run it on the board.** Simulation proves the arithmetic
-       and the map; only the ULX3S proves the upper 16 MB physically decodes on
-       the fitted part. `sim_mem` will happily answer from wherever it is told.
-       Flash `image: memtest` and expect `addrbits: OK` + `upper: OK`.
+       🏆 **CONFIRMED ON THE REAL ULX3S, 2026-08-08 — both halves.**
+       `image: memtest` (SW3 **off**): **eight consecutive clean passes**, each
+       walking the full 32 MB with an address-derived pattern —
+       `addrbits: OK`, `16M: OK`, `upper: OK`, `pass N CLEAN, errors: 0`,
+       1120 bytes and 0 non-printable. The upper 16 MB physically decodes on the
+       fitted part, through real bank and row wiring.
+       `image: sbi` (SW3 **on**): `Memory: 24012K/28672K available`,
+       **`MemTotal: 25020 kB`**, `MemFree: 19412 kB`, `Run /init as init
+       process`, `koti: userspace is alive`, `buildroot login:`.
+       📌 Boot cost ~0.65%: `Run /init` at **45.02 s** against 44.73 s with
+       16 MB — the kernel initialises twice the page structs. Cheap for 16 MB.
 
        ~~(the original entry)~~ Found in the standalone boot log —
        `MemTotal: 8796 kB` — and it was

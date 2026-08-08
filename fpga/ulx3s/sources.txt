@@ -35,7 +35,6 @@ src/clint.sv
 src/plic.sv
 src/vga_text.sv
 src/vga_timing.sv
-src/ps2_rx.sv
 src/arbiter3.sv
 src/control.sv
 src/alu.sv

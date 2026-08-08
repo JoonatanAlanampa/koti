@@ -394,7 +394,8 @@ is far too weak to be it. `PULLMODE=UP` in the LPF stops the lines floating; it
 does not terminate the bus.
 
 Nothing here needs the keyboard to be driven, which is why this works at all:
-`ui` is input-only on the chip, so `ps2_rx` is receive-only by design. A
+`ui` is input-only on the chip, which is why the keyboard that replaced
+PS/2 is a USB host on US2 rather than anything on `ui`. A
 keyboard completes its power-on self-test and starts sending scancodes on its
 own, without any host command.
 

@@ -80,6 +80,22 @@ jobs:
             buildroot-dl-${{ inputs.brver || '2025.02.4' }}-
             buildroot-dl-
 
+      # ⚠️ CHECKED BEFORE THE BUILD, because Buildroot does not fail on this.
+      # A post-build script without the executable bit produces:
+      #     >>>   Executing post-build script ../sw/linux/post-build.sh
+      #     /bin/bash: line 1: ../sw/linux/post-build.sh: Permission denied
+      # and then `make` still exits 0. The rootfs.ext2 appears, the CPIO does
+      # NOT, and the failure surfaces forty minutes later as a missing file in
+      # an unrelated step. It happened on run 31275755900: the file was authored
+      # on Windows, where git records mode 100644 unless told otherwise
+      # (`git update-index --chmod=+x`).
+      - name: the post-build script can actually be executed
+        run: |
+          test -x sw/linux/post-build.sh || {
+            echo "::error::sw/linux/post-build.sh is not executable. Buildroot           will print 'Permission denied', carry on, and silently produce no           rootfs.cpio. Fix with: git update-index --chmod=+x sw/linux/post-build.sh"
+            exit 1; }
+          echo "post-build.sh is executable"
+
       - name: Configure
         working-directory: buildroot
         run: |

@@ -21,6 +21,7 @@ What is already proven, and what is not:
 | The UART follows koti's two personalities | same suite: the SBI image's output arrives via the SW3 mux |
 | The flash-writer path | `pmod-cartridge` simulated the whole I/E/P/R chain including read-back, 2026-07-20 |
 | ✅ **The board, end to end** | 2026-08-07: `sw/bringup.bin` printed 31 gapless lines over the real UART out of a fabric boot flash — see step 2b |
+| ✅ **`sw/bringup.S`, the ASSEMBLY rewrite** | 2026-08-08: first contact. 296 bytes, **0 non-printable**, counter monotonic #257-260. Proves the SDRAM stack round-trip (so `RD_ADV` still holds), `remu`/`divu`, and — since this bitstream carries it — the **core ack-routing fix** of the same day |
 | ✅ **The SDRAM, including `RD_ADV` and the address decode** | 2026-08-07: `sw/memtest.bin`, four clean passes over the full 16 MB with an address-derived pattern, plus the byte-lane/DQM path |
 | ✅ **The board revision** | it is a **PCB v3.1.8**, and only `wifi_gpio0` differs from v2.0 — see step 1 |
 | **NOT proven: the font glyphs look right** | needs the Tiny VGA Pmod — step 6, and PLAN.md item 9 |
@@ -66,12 +67,56 @@ which is how the L2/F1 drift was caught in the first place.
 Load the bitstream with nothing plugged into J1 or J2:
 
 ```
-fujprog fpga/ulx3s/build/koti-bram.bit        # SRAM, volatile, ~60 s
-fujprog -j flash fpga/ulx3s/build/koti-bram.bit   # persistent
+fujprog fpga/ulx3s/build/koti-bram.bit        # SRAM, volatile, ~60 s  ✅ WORKS
 ```
 
 **The volatile load is gone at power-off**, which is what you want while
 iterating. Do the whole checklist with it.
+
+## ⛔ `fujprog -j flash` DOES NOT WORK ON THIS BOARD — tried 2026-08-08
+
+This README used to carry `fujprog -j flash … # persistent` as if it were a
+working alternative. **It was documented and never run.** It was run on
+2026-08-08 and it fails, and the reason is the board's architecture rather than
+anything in koti:
+
+⭐ **THE ESP32 OWNS BOTH THE SPI FLASH AND THE UART AT POWER-ON.** Proof, not
+inference: after a power cycle the serial port produced the ESP32's boot ROM log
+and a **MicroPython v1.14 prompt**, not koti —
+
+```
+rst:0x1 (POWERON_RESET),boot:0x1f (SPI_FAST_FLASH_BOOT)
+MicroPython v1.14 on 2021-02-02; ESP32 module (spiram) with ESP32
+>>>
+```
+
+That single observation explains every symptom of the attempt:
+| symptom | cause |
+| --- | --- |
+| `TDO: 4000 Expected: 0000 mask: C100`, then `Line 37: Operation not permitted` | the ESP32 contending for the flash during the JTAG write |
+| `fujprog -i` → `FPGA IDCODE: FFFFFFFF`, `SIZE: 0` | an all-ones JTAG chain — not communicating |
+| `-z` (force) reported `Completed in 141.22 seconds` | it forced past the verify failures; the write still did not take |
+| after a power cycle: LEDs static, no banner | the FPGA never configured from flash |
+
+⚠️ **koti's `wifi_en = 0` does not help here, and cannot.** It only takes effect
+once the FPGA is CONFIGURED — and at power-on, before any bitstream loads, the
+ESP32 is unrestrained. That is an ordering problem, not a bug. (Confirmed from
+the other side: as soon as koti was reloaded over SRAM, the ESP32 released the
+serial line and the banner came back.)
+
+✅ **Nothing was damaged.** The SRAM path was unaffected throughout — reflashed
+in 58.94 s afterwards and koti printed immediately. The board has never booted
+from its own flash, so a partially-erased flash cost nothing.
+
+**Routes to a genuinely standalone koti, none tried:**
+1. **Stop the ESP32 booting.** Its MicroPython is factory firmware koti does not
+   want. ⚠️ Erasing it is destructive and irreversible without re-flashing
+   MicroPython — the owner's call, not a casual step.
+2. **Use the ESP32 as designed.** On this board it is the intended FPGA loader:
+   put the bitstream in its filesystem and let it configure the FPGA at power-on.
+   That reaches "5 V and nothing else" without fighting the hardware.
+3. Hold the ESP32 in reset for the duration of the JTAG flash write, if a way to
+   do that from the host exists.
 
 ⛔ **`fujprog`, NOT `openFPGALoader`, on this board.** fujprog drives the FTDI
 through its stock driver. openFPGALoader wants a WinUSB bind (Zadig), and that

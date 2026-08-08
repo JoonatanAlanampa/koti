@@ -171,6 +171,37 @@ Software, in order:
        recognised koti's PS/2 word, so this is a small custom driver either
        way — plan for one, not for `usbhid` to just work.
 
+9b.[ ] 🖥️ **Let the input device actually drive the console — a VT plus a
+       console driver Linux knows about.** The natural sequel to item 9, and
+       the thing that would make koti a computer whose OS owns its own screen
+       and keyboard instead of borrowing both from the firmware.
+       - **The problem, precisely.** Linux has two kinds of console. `hvc0` is
+         a serial-style character stream: bytes in, bytes out, no notion of
+         keys. A **VT** (`tty1`) is the kernel's own terminal emulator, and its
+         input half (`drivers/tty/vt/keyboard.c`) is **the only thing in the
+         kernel that turns input events into console characters** — it applies
+         the keymap (that is what `loadkeys` changes) and feeds a tty. It feeds
+         VTs, not `hvc0`. So `/dev/input/event0` from item 9 has nowhere to go:
+         the login prompt is on `hvc0`, and no VT exists.
+       - **Why no VT exists.** A VT needs a console driver to draw on, and
+         Linux cannot see koti's display at all. The HDMI text is drawn by the
+         FIRMWARE: SBI `console_putchar` writes the UART *and* the 40x30
+         charbuf, and `vga_text.sv` scans that out through the font ROM. There
+         is no fbdev, no DRM, no driver — ⛔ never call the current setup a
+         framebuffer.
+       - ⭐ **The cheap route is a TEXT-MODE console driver, not a framebuffer.**
+         `fbcon` wants a linear pixel buffer to draw glyphs into, which koti
+         does not have and which would mean new gateware. But koti's charbuf is
+         literally character cells in memory — exactly what the old `vgacon`
+         drove. A `koticon` (`struct consw`) writes characters into the charbuf
+         and lets the existing hardware render them. **No new video hardware.**
+       - 🪤 **It is an OWNERSHIP handover, the output twin of item 9's input
+         one.** If Linux owns the charbuf the firmware must stop writing it, or
+         the two scribble over each other. `getty` moves to `tty1`. Plan the
+         handover deliberately — that is the part that will bite.
+       - Payoff: `loadkeys` works, the Finnish keymap moves out of firmware and
+         into the OS, key repeat becomes meaningful, Ctrl+Alt+Fn works.
+
 10. [ ] ⚡ **D-cache.** The I-cache took fetch from ~8 clocks/instruction to 1
        on a hit, which made DATA the dominant cost: a random 32-bit SDRAM read
        is 10 clocks (measured) and ~a third of instructions are loads/stores,

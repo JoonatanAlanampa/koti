@@ -154,6 +154,56 @@ it.
 3. Hold the ESP32 in reset for the duration of the JTAG flash write, if a way to
    do that from the host exists.
 
+### ⭐ The ESP32 CAN drive this FPGA's JTAG — and the STOCK FIRMWARE CANNOT (2026-08-08)
+
+Measured, in this order, against the real board:
+
+| step | result |
+| --- | --- |
+| upload `ecp5.py` + `jtagpin.py` over the raw REPL, hash-checked on the device | ✅ 941 and 19010 bytes, sha256 matched |
+| `ecp5.idcode()` from the ESP32 | ✅ **`0x41113043` = LFE5U-85F** |
+| anything reaching `spi_jtag_on()` (`flash_open`, and therefore `prog`/`flash`) | ❌ one `0x00` byte on the UART, then a **dead line** |
+| recover with a port-open (DTR/RTS) reset | ❌ not enough |
+| recover with `esptool --after hard-reset` | ✅ the first time, ❌ the second (`No serial data received`) |
+| recover by SRAM-loading `console.bit` with fujprog | ✅ 62.05 s, so **host JTAG was never damaged** |
+
+⭐ **The ESP32's JTAG works.** A correct IDCODE needs all four of TMS/TCK/TDI/TDO
+right, so this also settles the pinout question below. Compare `fujprog -i`,
+which reports `FFFFFFFF` whenever the ESP32 has left its JTAG pins driven —
+**that, not "the ESP32 owns the flash", is the most likely reading of the
+original `fujprog -j flash` failure.** Both masters are wired to the same four
+signals and only one can talk at a time.
+
+⚠️ **UPSTREAM `jtagpin.py` IS WRONG FOR THIS BOARD.** emard/esp32ecp5 ships the
+v3.0.x block uncommented; this is a **v3.1.8**, where `tms` moves 21 -> 5 and
+`tdo` moves 19 -> 34. Wrong pins give a garbage IDCODE, which reads exactly like
+a dead JTAG chain. Use the v3.1.x block.
+
+⛔ **The blocker is the FACTORY FIRMWARE, not the board and not `ecp5.py`.** The
+stock image is **MicroPython 1.14** (Feb 2021); `ecp5.py` is developed against
+modern MicroPython. It imports and bitbangs fine, but dies the moment it
+instantiates hardware `SPI(2)` on the JTAG pins. `deflate` is also absent (the
+`uzlib` fallback covers that one). ⇒ **The ESP32 route needs a newer MicroPython
+flashed first** — which is the step the 2026-08-08 plan had tried to avoid.
+
+✅ **Nothing on the board was written.** Only reads were attempted; both flash
+chips are untouched. The ESP32's filesystem gained `ecp5.py` and `jtagpin.py`,
+which are two deletable files.
+
+✅ **`console.bit` IS THE RECOVERY BITSTREAM, and it is now proven.** It drives
+`wifi_gpio0 = 1'b1` ("keep the ESP32 booted") and **never assigns `wifi_en`**,
+where koti drives `wifi_en = 0` on J5 and holds the ESP32 in reset. So a koti in
+the config flash can always be displaced. ⚠️ It does not make the ESP32
+*audible* — console drives the FTDI line itself. To hear the ESP32 the FPGA must
+be **unconfigured**, i.e. power-cycled with no bitstream loaded.
+
+✅ **The two flash chips are SEPARATE, so writing the FPGA's config flash cannot
+brick the ESP32.** The ESP32's flash reports manufacturer `a1` and carries its
+bootloader at `0x1000` and its partition table at `0x8000`; the board's FPGA
+config flash is the `IS25LP128F` (ISSI, `9d`). Decisively: `ecp5.flash()` runs
+*out of* the ESP32's own flash while writing the FPGA's, which would be suicide
+on one shared chip.
+
 ⛔ **`fujprog`, NOT `openFPGALoader`, on this board.** fujprog drives the FTDI
 through its stock driver. openFPGALoader wants a WinUSB bind (Zadig), and that
 bind **destroys the COM port koti's console is** — so the tool that flashes the

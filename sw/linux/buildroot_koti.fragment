@@ -88,6 +88,15 @@ BR2_TARGET_ROOTFS_EXT2_LABEL="kotiroot"
 # looked alive but unusable.
 BR2_TARGET_GENERIC_GETTY_PORT="hvc0"
 
+# ⭐ AND A SECOND GETTY, ON tty1 — the screen. sw/linux/post-build.sh appends it
+# to the generated inittab, which is the only way to ADD one: this symbol takes
+# a single port, so setting it to tty1 would MOVE the login off the serial line
+# rather than put one on the monitor. koti's UART is transmit-only, so the
+# serial login is the one that must not be lost.
+# Without that script koticon renders kernel messages and nothing else, because
+# /dev/console is hvc0 and no shell runs on the VT.
+BR2_ROOTFS_POST_BUILD_SCRIPT="../sw/linux/post-build.sh"
+
 # Keep it small. koti has ~8.4 MB free after the kernel (measured: "Memory:
 # 8468K/12288K available"), and an initramfs costs that space twice while it is
 # being unpacked. Busybox alone is the whole point of this rung: a shell.

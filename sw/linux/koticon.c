@@ -56,8 +56,8 @@
  *   * colour. koti's colours are two GLOBAL registers, not per-cell attributes,
  *     so a cell carries an 8-bit character and nothing else. Attributes from
  *     the VT are dropped rather than approximated.
- *   * a hardware cursor. There is none. `con_cursor` is a no-op, so the shell
- *     has no visible cursor block on the HDMI output.
+ *   * a hardware cursor. There is none, so the cursor is drawn in software by
+ *     overwriting a cell with '_' and restoring the character underneath.
  *   * hardware scrolling. `con_scroll` returns false and lets the VT layer do
  *     it by repainting, which costs 1200 bytes of memmove per scrolled line
  *     and needs no support from the hardware.
@@ -83,6 +83,15 @@
 
 static u8 __iomem *koti_regs;
 static u8 *koti_cb;		/* our charbuf; the hardware reads this */
+
+/* Software-cursor state. Declared here rather than beside con_cursor because
+ * every cell-writing path has to be able to invalidate it — see the comment on
+ * koticon_cursor() for why a saved character goes stale. */
+static bool cur_on;
+static unsigned int cur_off;		/* cell index the cursor is drawn at */
+static u8 cur_under;			/* the character it is covering */
+
+#define KOTI_CURSOR_GLYPH '_'
 
 /*
  * The hardware takes a WORD address: project.sv latches `vga_base` from
@@ -129,6 +138,11 @@ static void koticon_clear(struct vc_data *vc, unsigned int y, unsigned int x,
 	if (off + count > KOTI_CELLS)
 		count = KOTI_CELLS - off;
 
+	/* Lift the cursor before touching cells: if it sat inside this run, the
+	 * character saved under it is about to become wrong. */
+	if (cur_on && cur_off >= off && cur_off < off + count)
+		cur_on = false;
+
 	memset(koti_cb + off, ' ', count);
 }
 
@@ -140,8 +154,13 @@ static void koticon_clear(struct vc_data *vc, unsigned int y, unsigned int x,
 static void koticon_putc(struct vc_data *vc, u16 ca, unsigned int y,
 			 unsigned int x)
 {
-	if (y < KOTI_ROWS && x < KOTI_COLS)
-		koti_cb[y * KOTI_COLS + x] = ca & 0xff;
+	unsigned int off = y * KOTI_COLS + x;
+
+	if (y >= KOTI_ROWS || x >= KOTI_COLS)
+		return;
+	if (cur_on && cur_off == off)
+		cur_on = false;		/* what it saved is stale now */
+	koti_cb[off] = ca & 0xff;
 }
 
 static void koticon_putcs(struct vc_data *vc, const u16 *s, unsigned int count,
@@ -154,14 +173,56 @@ static void koticon_putcs(struct vc_data *vc, const u16 *s, unsigned int count,
 	if (off + count > KOTI_CELLS)
 		count = KOTI_CELLS - off;
 
+	if (cur_on && cur_off >= off && cur_off < off + count)
+		cur_on = false;
+
 	while (count--)
 		koti_cb[off++] = *s++ & 0xff;
 }
 
-/* No cursor in the hardware, and pretending otherwise would mean writing a
- * character over the user's text and remembering to put it back. */
+/*
+ * A SOFTWARE CURSOR, because the hardware has none and a shell without one is
+ * unusable — you cannot see where you are typing.
+ *
+ * koti's cells carry a character and nothing else: no attribute bits, so there
+ * is no "invert this cell" to ask for. The cursor is therefore drawn by
+ * OVERWRITING the cell with '_' and putting the original character back when
+ * it moves. That means remembering both where it is and what was underneath,
+ * which is what `cur_*` below are for.
+ *
+ * ⚠️ The saved character can go stale: the VT can rewrite the cell under the
+ * cursor without moving it (scrolling being the obvious case). Restoring
+ * blindly would then paste an old character over new text. So the restore is
+ * conditional — it only puts back what it saved if the cell still holds the
+ * cursor glyph it drew. If anything else is there, the screen has moved on and
+ * the saved byte is discarded.
+ */
+static void koticon_cursor_erase(void)
+{
+	if (!cur_on)
+		return;
+	if (cur_off < KOTI_CELLS && koti_cb[cur_off] == KOTI_CURSOR_GLYPH)
+		koti_cb[cur_off] = cur_under;
+	cur_on = false;
+}
+
 static void koticon_cursor(struct vc_data *vc, bool enable)
 {
+	unsigned int off;
+
+	koticon_cursor_erase();
+
+	if (!enable)
+		return;
+
+	off = vc->state.y * KOTI_COLS + vc->state.x;
+	if (off >= KOTI_CELLS)
+		return;
+
+	cur_off = off;
+	cur_under = koti_cb[off];
+	koti_cb[off] = KOTI_CURSOR_GLYPH;
+	cur_on = true;
 }
 
 /* false = "not handled": the VT layer scrolls its own buffer and repaints
@@ -185,6 +246,7 @@ static bool koticon_blank(struct vc_data *vc, enum vesa_blank_mode blank,
 	if (blank == VESA_NO_BLANKING)
 		return false;		/* repaint from the VT's buffer */
 
+	cur_on = false;
 	memset(koti_cb, ' ', KOTI_CELLS);
 	return true;
 }

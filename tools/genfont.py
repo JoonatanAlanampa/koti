@@ -2,8 +2,9 @@
 # (derived from the public-domain font8x8_basic set; glyph art to be
 # visually verified on FPGA before tapeout). Convention: 8 rows top to
 # bottom, bit 0 = leftmost pixel. ASCII 0x20..0x7F; anything else
-# renders blank. Glyphs 0x60+ are folded onto 0x40+ in vga_text
-# (uppercase-only, C64 style) so only 0x20..0x5F carry ROM area.
+# renders blank. ALL of 0x20..0x7F carries ROM area since 2026-08-08;
+# the uppercase fold in vga_text.sv went with the tile budget that
+# justified it.
 #
 #   python tools/genfont.py
 #
@@ -121,9 +122,13 @@ def main():
         "    logic [63:0] g;",
         "    case (ch)",
     ]
+    # ⭐ EVERY glyph, 0x20..0x7F. Until 2026-08-08 this skipped 0x60+ and
+    # vga_text.sv folded lowercase onto uppercase, "C64 style" -- a die-area
+    # decision for an 8x2 TinyTapeout tile. koti is FPGA-only now and the tile
+    # budget that bought it no longer exists, so the screen can show lowercase
+    # like any other terminal. The glyph art was here the whole time; only the
+    # generator was throwing it away.
     for code, rows in sorted(FONT.items()):
-        if code >= 0x60:
-            continue
         g = 0
         for i, b in enumerate(rows):
             g |= b << (8 * i)

@@ -1,9 +1,10 @@
 // vga_text.sv — 40x30 text-mode video: 640x480@60, 8x8 font rendered
 // into 16x16 cells (pixels doubled both ways — C64-class density,
 // chosen by the 8x2 area budget: 40 columns halves the line buffers).
-// Lowercase folds onto uppercase (0x60+ -> 0x40+), so the font ROM
-// carries only 64 glyphs (512 B as logic). The character buffer lives
-// in PSRAM (1200 bytes); on-die state is two 40-byte line buffers
+// Lowercase renders as lowercase since 2026-08-08: the fold that mapped
+// 0x60+ onto 0x40+ is gone, and the ROM carries all 96 glyphs of
+// 0x20..0x7F (768 B as logic, up from 512). The character buffer lives
+// in RAM (1200 bytes); on-die state is two 40-byte line buffers
 // (ping-pong) plus the font ROM.
 //
 // Row DMA: while text row r is displayed (16 scanlines), row r+1 is
@@ -96,7 +97,13 @@ module vga_text (
     // Pixels double both ways; lowercase folds to uppercase.
     `include "font_rom.svh"
     wire [7:0] ch   = lb[cur][x[9:4]];
-    wire [7:0] chf  = (ch[6:5] == 2'b11) ? ch - 8'h20 : ch;
+    // ⭐ NO FOLD. Until 2026-08-08 this read
+    //     chf = (ch[6:5] == 2'b11) ? ch - 8'h20 : ch;
+    // which mapped lowercase onto uppercase so the font ROM only had to carry
+    // 0x20..0x5F -- a die-area trade for an 8x2 TinyTapeout tile. koti is
+    // FPGA-only now, the ROM carries all 96 glyphs, and a terminal that cannot
+    // show lowercase is not a terminal anyone would use.
+    wire [7:0] chf  = ch;
     wire [7:0] grow = font_row(chf, y[3:1]);
     always_ff @(posedge clk)
         if (rst)     pix <= 1'b0;

@@ -40,6 +40,11 @@ on:
       # committed cpio stale: check_initramfs.py would catch it later, in
       # `linux`, as a confusing failure about a file nobody had just touched.
       - 'sw/linux/rootfs-overlay/**'
+      # post-build.sh appends the tty1 getty to the generated inittab, so it is
+      # part of the artifact for exactly the same reason the overlay is. Without
+      # this line, editing it alone leaves the committed cpio stale and the
+      # screen has no login on it, with nothing pointing at the cause.
+      - 'sw/linux/post-build.sh'
 
 jobs:
   rootfs:

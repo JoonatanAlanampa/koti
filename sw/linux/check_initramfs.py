@@ -362,6 +362,34 @@ def main():
         else:
             print(f"  ok   /etc/network/interfaces configures only lo")
 
+    # A getty on tty1, which is what puts a LOGIN on koti's own screen rather
+    # than kernel messages alone. It comes from sw/linux/post-build.sh, and a
+    # post-build script that silently did not run is invisible: the rootfs
+    # builds, the machine boots, the monitor shows the boot log, and the only
+    # symptom is that you cannot log in at it. Assert the RESULT, in the
+    # artifact, for the same reason the network check above does.
+    #
+    # ⚠️ hvc0 must ALSO still be there. koti's UART is transmit-only, so the
+    # serial login is read-only in practice, but it is /dev/console and the
+    # bench and every bring-up session watch it. A change that moved the getty
+    # instead of adding one would pass a naive "is there a getty" check.
+    inittab = by_name.get("etc/inittab")
+    if inittab is not None:
+        text = inittab.data.decode("utf-8", "replace")
+        ports = re.findall(r"^(\S+)::respawn:.*getty", text, re.MULTILINE)
+        for want, why in (("tty1", "a login on the screen (koticon)"),
+                          ("hvc0", "the serial login, which is /dev/console")):
+            if want in ports:
+                print(f"  ok   getty on {want}")
+            else:
+                print(f"  FAIL no getty on {want}")
+                bad.append(
+                    f"/etc/inittab has no getty on {want} - {why}. Gettys "
+                    f"found: {ports or 'none'}. tty1 comes from "
+                    f"sw/linux/post-build.sh (BR2_ROOTFS_POST_BUILD_SCRIPT); "
+                    f"hvc0 from BR2_TARGET_GENERIC_GETTY_PORT. Neither may "
+                    f"replace the other.")
+
     # ---- 5. freshness: the overlay, byte for byte ----------------------------
     for p in overlay_files():
         rel = str(p.relative_to(OVERLAY)).replace("\\", "/")

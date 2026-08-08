@@ -11,3 +11,15 @@
 *.elf binary
 *.fst binary
 *.bit binary
+
+# The rootfs overlay is copied VERBATIM into the target filesystem and then run
+# by a Linux kernel, so the same autocrlf that is merely untidy elsewhere is
+# fatal here: a shell script checked out with CRLF fails as
+# `bad interpreter: /bin/sh^M`, and for /init specifically that is "no working
+# init found" — a panic, on a machine whose whole point is that it boots.
+# The committed blobs are already LF (git normalises on the way in) and CI
+# checks out on Linux, so this guards the case where someone builds Buildroot
+# from a Windows working tree or through WSL on /mnt/c.
+sw/linux/rootfs-overlay/** text eol=lf
+*.sh text eol=lf
+*.S text eol=lf

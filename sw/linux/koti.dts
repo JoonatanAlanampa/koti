@@ -45,7 +45,22 @@
 		 * up for the first time is the difference between a bug and a
 		 * mystery.
 		 */
-		bootargs = "console=hvc0 earlycon=sbi random.trust_bootloader=1";
+		/*
+		 * root= names the card's second partition, the ext2 filesystem
+		 * tools/sdkernel.py writes. It is here rather than hardcoded in
+		 * /init so the device lives in ONE place.
+		 *
+		 * ⚠️ The kernel itself never acts on this. An initramfs is built
+		 * in, so the kernel runs /init and never reaches its own root=
+		 * handling; sw/linux/rootfs-overlay/init is what reads this out of
+		 * /proc/cmdline and switch_roots onto it. That indirection is
+		 * deliberate — the kernel's root= answers a missing card with a
+		 * panic, and /init answers it by staying in RAM and saying why.
+		 * Changing this line therefore changes where root comes from, but
+		 * only via /init, and only after a firmware reflash since the DTB
+		 * ships in flash.
+		 */
+		bootargs = "console=hvc0 earlycon=sbi random.trust_bootloader=1 root=/dev/kotisd2 rootfstype=ext2 rw";
 
 		/*
 		 * ⚠️ THIS SEED IS NOT SECRET AND NOT RANDOM. It is a fixed

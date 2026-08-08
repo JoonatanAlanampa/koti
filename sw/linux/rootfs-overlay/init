@@ -1,0 +1,100 @@
+#!/bin/sh
+# /init — koti's first userspace process. Overrides Buildroot's own /init via
+# BR2_ROOTFS_OVERLAY.
+#
+# WHAT IT IS FOR: moving the root filesystem off the RAM initramfs and onto the
+# microSD, so the machine REMEMBERS. Until 2026-08-08 the rootfs was an
+# initramfs and nothing written survived a power cycle.
+#
+# ⛔ WHY THIS IS A switch_root AND NOT SIMPLY `root=` WITH THE INITRAMFS
+# DELETED. Because the card can be absent, unformatted, or corrupt, and the
+# kernel's own root= handling answers that with a panic — an unbootable board.
+# sw/sbi/sdboot.c already settled this exact question for the KERNEL transport:
+# every failure path returns 0 having changed nothing, so a missing card falls
+# back to the flash payload rather than bricking a bring-up board. This is the
+# same rule one layer up. A machine that quietly boots to RAM and says why is
+# always better than one that stops.
+#
+# ⇒ EVERY exit from the card path lands on the RAM fallback at the bottom, and
+# every one of them prints its reason first. If you see "root stays in RAM",
+# the machine is fine and the sentence tells you what to fix.
+#
+# TO FORCE RAM DELIBERATELY: take the card out. There is intentionally no
+# command-line escape hatch, because the command line lives in the devicetree
+# inside the firmware, so changing it means reflashing — which is exactly the
+# situation you are in when you want the escape hatch.
+#
+# ⚠️ THIS FILE MUST BE EXECUTABLE. The kernel runs /init directly; a mode-644
+# /init is "no working init found" and a panic. sw/linux/check_initramfs.py
+# asserts the mode inside the built cpio, because the overlay copy passing
+# through git on Windows is exactly where that bit goes missing.
+#
+# Copyright (c) 2026 Joonatan Alanampa
+# SPDX-License-Identifier: Apache-2.0
+
+# ---- everything Buildroot's own /init did, kept verbatim --------------------
+# The RAM fallback has to behave exactly as it did before this file existed,
+# and that means doing this whether or not the card works out.
+/bin/mount -t devtmpfs devtmpfs /dev
+
+# use the /dev/console device node from devtmpfs if possible to not
+# confuse glibc's ttyname_r().
+# This may fail (E.G. booted with console=), and errors from exec will
+# terminate the shell, so use a subshell for the test
+if (exec 0</dev/console) 2>/dev/null; then
+    exec 0</dev/console
+    exec 1>/dev/console
+    exec 2>/dev/console
+fi
+
+# ---- try to move root onto the card ----------------------------------------
+/bin/mount -t proc proc /proc 2>/dev/null
+
+koti_root=""
+koti_type="ext2"
+for word in $(cat /proc/cmdline 2>/dev/null); do
+    case "$word" in
+        root=*)        koti_root="${word#root=}" ;;
+        rootfstype=*)  koti_type="${word#rootfstype=}" ;;
+    esac
+done
+
+why=""
+if [ -z "$koti_root" ]; then
+    why="no root= on the kernel command line"
+elif [ ! -b "$koti_root" ]; then
+    # The usual cause, and worth naming: no card in the slot. The block driver
+    # registers whether or not a card answers, but the partition scan finds
+    # nothing, so /dev/kotisd2 never appears.
+    why="$koti_root is not a block device - no card, or no partition 2"
+elif ! /bin/mount -t "$koti_type" -o rw "$koti_root" /mnt 2>/dev/null; then
+    why="$koti_root would not mount as $koti_type"
+elif [ ! -x /mnt/sbin/init ]; then
+    # An empty ext2 mounts perfectly. Without this check the machine would
+    # switch_root into a filesystem with no init and panic AFTER discarding the
+    # initramfs, which is the one failure this script cannot recover from.
+    why="$koti_root has no executable /sbin/init - not a root filesystem"
+    /bin/umount /mnt 2>/dev/null
+else
+    echo "koti: root on $koti_root ($koti_type), switching"
+    # Carry /dev across. After switch_root the initramfs is gone, and with it
+    # the devtmpfs mounted on its /dev; the new root's /dev would be an empty
+    # directory and the console would disappear mid-switch.
+    /bin/mount -o move /dev /mnt/dev 2>/dev/null || \
+        /bin/mount -t devtmpfs devtmpfs /mnt/dev 2>/dev/null
+    # /proc must go before switch_root deletes the initramfs under it. The new
+    # root's own rcS mounts it again from /etc/fstab.
+    /bin/umount /proc 2>/dev/null
+    exec switch_root /mnt /sbin/init "$@"
+    # Only reached if the exec itself failed, and by then /dev has moved and
+    # the initramfs may be partly gone. Say so plainly rather than pretending
+    # the fallback below is a clean state.
+    echo "koti: switch_root FAILED after committing to it - continuing in RAM"
+fi
+
+# ---- the fallback, which is a working machine, not an error -----------------
+if [ -n "$why" ]; then
+    echo "koti: root stays in RAM ($why)"
+fi
+/bin/umount /proc 2>/dev/null
+exec /sbin/init "$@"

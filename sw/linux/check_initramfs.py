@@ -79,8 +79,10 @@ TB_BOOT = ROOT / "test" / "tb_boot.v"
 # every line it prints goes nowhere. The machine looks hung. That is the same
 # silent-timeout failure the marker check exists for, arriving by another road.
 REQUIRED_MEMBERS = {
-    "init":               ("Buildroot's /init — what the kernel execve's", True),
+    "init":               ("koti's /init — what the kernel execve's", True),
     "sbin/init":          ("busybox init, which /init hands over to", False),
+    "sbin/switch_root":   ("how /init moves root onto the card; without it the "
+                           "machine can only ever run from RAM", False),
     "bin/busybox":        ("every program in this userspace, in one binary", True),
     "etc/inittab":        ("what busybox init runs, including the getty", False),
     "etc/init.d/S99koti": ("prints the marker test/tb_boot.v waits for", True),
@@ -257,6 +259,51 @@ def main():
                        f"string test/tb_boot.v waits for. No boot could ever "
                        f"pass, and the symptom would be a timeout rather than "
                        f"an error.")
+
+    # ---- 3b. /init is OURS, and it can actually run --------------------------
+    # The overlay is how koti's /init replaces Buildroot's. If BR2_ROOTFS_OVERLAY
+    # ever stops applying — a moved path, a renamed symbol — Buildroot's own
+    # /init comes back, the machine boots perfectly from RAM, and the entire
+    # root-on-the-card feature is gone with no error anywhere. That is the same
+    # silent-substitution failure the S99koti marker check above exists for, so
+    # it gets the same treatment: assert on CONTENT, not on a config symbol.
+    init = by_name.get("init")
+    if init is not None:
+        for needle, why in (
+            (b"switch_root",
+             "no switch_root call, so this is not koti's /init — the overlay "
+             "did not apply and root can never move off the initramfs"),
+            (b"root stays in RAM",
+             "no RAM fallback message, so a missing card would fail silently "
+             "instead of saying why"),
+        ):
+            ok = needle in init.data
+            print(f"  {'ok  ' if ok else 'FAIL'} /init contains {needle.decode()!r}")
+            if not ok:
+                bad.append(f"/init: {why}")
+
+        # ⚠️ THE ONE THAT BRICKS. A shell script with CRLF endings fails as
+        # `bad interpreter: /bin/sh^M`, and for /init that is "no working init
+        # found" — a kernel panic on a machine whose whole claim is that it
+        # boots. The repo is developed on Windows with core.autocrlf on, so the
+        # working-tree copy of an overlay file genuinely can carry CR bytes;
+        # .gitattributes pins eol=lf and this asserts the RESULT.
+        crs = init.data.count(b"\r")
+        print(f"  {'ok  ' if not crs else 'FAIL'} /init has no CR bytes "
+              f"({crs} found)")
+        if crs:
+            bad.append(f"/init contains {crs} CR bytes. With CRLF endings the "
+                       f"kernel cannot run it (`bad interpreter: /bin/sh^M`) "
+                       f"and panics with no working init. Check .gitattributes "
+                       f"and the checkout that built this.")
+
+        first = init.data.split(b"\n", 1)[0]
+        ok = first.startswith(b"#!")
+        print(f"  {'ok  ' if ok else 'FAIL'} /init starts with a shebang "
+              f"({first[:24].decode(errors='replace')!r})")
+        if not ok:
+            bad.append("/init has no #! line, so the kernel has nothing to "
+                       "execute it with")
 
     # ---- 4. koti can actually execute what is in here ------------------------
     elves = [m for m in members

@@ -136,6 +136,42 @@ jobs:
           echo "--- verifying the pair the way linux.yaml will ---"
           python3 sw/linux/check_initramfs.py sw/linux/rootfs.cpio
 
+      # ---- the card image -----------------------------------------------
+      # The ext2 that goes on the microSD's p2, which is what makes koti
+      # REMEMBER. Checked here rather than on the machine, because the failure
+      # mode is nasty: /init switch_roots into it and only then discovers the
+      # filesystem is unusable — after the initramfs has been discarded, which
+      # is the one point in the boot with nothing left to fall back to. So the
+      # things /init cannot verify at runtime get verified here.
+      #
+      # debugfs rather than a loopback mount: no root needed on the runner, and
+      # it reads the on-disk structures directly, which is what the kernel will
+      # do too.
+      - name: The card filesystem is one koti could switch_root into
+        run: |
+          img=buildroot/output/images/rootfs.ext2
+          ls -l "$img"
+          dumpe2fs -h "$img"
+          echo "--- /sbin/init must exist and be executable ---"
+          # A dangling symlink or a mode-644 init is a panic after the point of
+          # no return. debugfs follows the link the way the kernel does.
+          debugfs -R "stat /sbin/init" "$img" 2>&1 | tee init.stat
+          grep -q "Type: symlink\|Type: regular" init.stat
+          echo "--- and the things /init itself checks for ---"
+          for p in /bin/busybox /dev/console /etc/inittab /sbin/switch_root; do
+            debugfs -R "stat $p" "$img" > /dev/null 2>&1 \
+              || { echo "MISSING from the card filesystem: $p"; exit 1; }
+            echo "  ok  $p"
+          done
+          # It has to fit the partition tools/sdkernel.py writes it into.
+          # ROOTFS_PART_LBA is 18432 and p2 runs to the end of a ~29 GB card,
+          # so this is a sanity bound rather than a tight one — but an image
+          # larger than the partition would be written straight past its end.
+          bytes=$(stat -c%s "$img")
+          test "$bytes" -le $((512 * 1024 * 1024)) \
+            || { echo "rootfs.ext2 is $bytes bytes, unexpectedly large"; exit 1; }
+          echo "rootfs.ext2: $bytes bytes, ready for 'sdkernel.py writefs'"
+
       # What is actually in it, for the run where the size gate above fails.
       # The first successful build was 4.09 MiB and this listing is how it was
       # diagnosed in one look: 1.6 MB of libc.so.6 and 1.2 MB of libm.so.6.
@@ -153,4 +189,5 @@ jobs:
           path: |
             buildroot/output/images/rootfs.cpio
             buildroot/output/images/rootfs.provenance
+            buildroot/output/images/rootfs.ext2
             buildroot-config.txt

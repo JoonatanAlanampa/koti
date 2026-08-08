@@ -57,12 +57,29 @@ BR2_RISCV_ABI_ILP32=y
 # BR2_TARGET_OPENSBI is not set
 # BR2_TARGET_UBOOT is not set
 
-# An initramfs, because koti has no storage yet. microSD is ladder item 7; ext2
-# on a card comes after that, and until then the rootfs has to travel inside
-# the kernel Image. CONFIG_INITRAMFS_SOURCE in koti_defconfig points at the
-# cpio this produces.
+# BOTH, and both are load-bearing — this is not belt and braces.
+#
+# The cpio is still the initramfs inside the kernel Image, and it is now the
+# FALLBACK: sw/linux/rootfs-overlay/init tries to switch_root onto the card and
+# drops back to it when the card is absent, unformatted or not a rootfs. Delete
+# the cpio and a missing card becomes an unbootable board, which is the outcome
+# sw/sbi/sdboot.c already refused to accept one layer down.
+#
+# The ext2 is what goes on the card's p2, written with
+# `python tools/sdkernel.py writefs rootfs.ext2`. It is built by Buildroot
+# rather than assembled from the cpio by hand because only Buildroot gets the
+# device nodes, ownership and permissions right without root — and a rootfs
+# whose /dev/console is missing or whose /sbin/init is mode 644 fails at the
+# worst possible moment, after switch_root has already discarded the initramfs.
+#
+# ⚠️ SIZE: the image is written into p2 as a fixed-size blob, so this is the
+# filesystem size, NOT the partition size (p2 is ~29 GB). 16M leaves room to
+# install things without a rebuild; resize2fs can grow it on the machine later.
 BR2_TARGET_ROOTFS_CPIO=y
-# BR2_TARGET_ROOTFS_EXT2 is not set
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_2=y
+BR2_TARGET_ROOTFS_EXT2_SIZE="16M"
+BR2_TARGET_ROOTFS_EXT2_LABEL="kotiroot"
 # BR2_TARGET_ROOTFS_TAR is not set
 
 # ⚠️ The console is hvc0 — the SBI console sw/sbi/sbi.c implements — and NOT a

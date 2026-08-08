@@ -118,7 +118,24 @@ Software, in order:
          engine pulls from; the driver gained `REQ_OP_WRITE` and answers
          `REQ_OP_FLUSH` immediately because there is no cache to flush.
        - ⚠️ **ext2 has NO JOURNAL** — `sync` before pulling the power.
-       - ⚠️ `root=` is still the initramfs on purpose — see the defconfig.
+       - 🟡 **`root=` MOVED ONTO THE CARD 2026-08-08 — written and CI-gated, but
+         NOT yet run on hardware.** `koti.dts` bootargs carry
+         `root=/dev/kotisd2 rootfstype=ext2 rw`, Buildroot now also emits
+         `rootfs.ext2` for p2 (`sdkernel.py writefs`), and
+         `sw/linux/rootfs-overlay/init` switch_roots onto it.
+         ⛔ **It is a switch_root, NOT the kernel's own `root=`, deliberately.**
+         The kernel answers a missing card with a panic; `/init` answers it by
+         staying in RAM and printing why — the same rule `sw/sbi/sdboot.c`
+         already applies to the kernel transport, one layer down. All five
+         decision paths are exercised; the four failure paths all reach a
+         booting machine.
+         ⚠️ **Ordering: the `userspace` workflow must rebuild and the new
+         `rootfs.cpio` be committed BEFORE `linux` can pass** — the committed
+         cpio still holds Buildroot's stock `/init`, and `check_initramfs.py`
+         now fails on it by design.
+         ⚠️ To force RAM deliberately, take the card out. There is no
+         command-line escape hatch on purpose: the cmdline lives in the DTB in
+         flash, so using it would mean reflashing.
 7b.[x] 🏆 **DONE 2026-08-07 — THE KEYBOARD WORKS AND GOAL 2 IS ACHIEVED.**
        `buildroot login: root` / `# uname -a`, typed on a real USB keyboard.
        ⛔ The old note here ("the login prompt cannot be typed at") is DEAD.

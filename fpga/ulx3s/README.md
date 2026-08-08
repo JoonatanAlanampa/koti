@@ -285,6 +285,31 @@ result. **The ECP5 configured itself from its own flash at power-on.**
 ⇒ **The ~60 s `fujprog` on every power-up is GONE.** Reflashing is now only
 needed to change the bitstream.
 
+### ⭐⭐ `fujprog -j flash` WORKS NOW — the ESP32 was only ever the diagnosis
+
+With `BP=0` the original command simply succeeds:
+```
+fujprog.exe -j flash koti-bram.bit     ->  Completed in 142.09 seconds.
+```
+No `TDO ... Expected`, no `Operation not permitted`, no `Failed.` **Block
+protection was the only thing ever wrong with it.**
+
+⇒ **THE STANDARD WAY TO UPDATE koti PERSISTENTLY IS NOW ONE COMMAND:**
+```
+~/opt/oss-cad-suite/bin/fujprog.exe -j flash <bitstream>.bit   # ~142 s
+```
+The entire ESP32/`ecp5.py`/MicroPython apparatus was scaffolding to find one
+status-register bit. It is not needed for routine work — keep it only as the
+tool that can read and change flash protection.
+
+⚠️ **BUT THE ESP32 IS NOW LOCKED OUT AT POWER-ON.** koti self-configures from
+flash in ~1 s and drives `wifi_en = 0`, so the ESP32 never boots. To reach it
+again you must SRAM-load something that leaves `wifi_en` alone — and note
+`console.bit` releases the ESP32 but **drives the FTDI line itself**, so the
+ESP32 is *running but inaudible*. Reaching the MicroPython REPL again needs a
+**passthru bitstream**, not console.bit. Budget for that before planning any
+future ESP32 work.
+
 ⚠️ The image written here is **`bringup`**, so a standalone board prints its
 banner forever. Standalone *Linux* needs the `bram` variant built with
 `image: sbi` (green dispatch run **31259899529**) and **DIP SW3 ON**.

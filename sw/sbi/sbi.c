@@ -3,7 +3,6 @@
 // instruction trap (mtval carries the instruction).
 #include "../koti.h"
 #include "../console.h"
-#include "../ps2kbd.h"
 #include "sdboot.h"
 #ifdef KOTI_ULX3S
 #include "../usbkbd.h"
@@ -47,7 +46,6 @@
 
 void sbi_init(void) {
     con_init();
-    ps2_init();                  // .bss is NOLOAD here — see ps2kbd.h
     VGA_CTRL = 3;                // VGA on + UART mirrored on blue LSB
 }
 
@@ -191,26 +189,21 @@ void sbi_trap(uint32_t cause, uint32_t *r) {
             return;
         case 2:                          // legacy console_getchar
             // Non-blocking, per the legacy SBI spec: -1 when nothing is
-            // ready. ps2_getchar consumes at most one scancode per call, so
-            // prefixes, releases and shift presses also return -1 — the
-            // caller polls.
-            // USB FIRST, PS/2 second, and both rather than one: USB is the
-            // keyboard the user actually owns, and PS/2 stays until USB has
-            // typed a character on real hardware (the standing rule in
-            // PLAN.md — a working path is not deleted before its replacement
-            // is proven). They cannot fight: a machine has one or the other
-            // plugged in, and an absent USB keyboard returns -1 forever.
-            //
-            // Order matters for a subtler reason too. usb_getchar() POPS its
-            // queue, so it must not be called after something else has already
-            // returned a character this call — hence `if`, not two statements.
+            // ready. usb_getchar consumes at most one report slot per call, so
+            // modifier-only presses and releases also return -1 — the caller
+            // polls.
+            // USB is now the ONLY keyboard. PS/2 was removed 2026-08-08,
+            // once USB had typed on real hardware — the condition PLAN.md set
+            // for retiring it.
+            // ⚠️ usb_getchar() POPS its queue, so it must be called exactly
+            // once per invocation. On a build without the USB host there is no
+            // keyboard at all and this correctly returns -1 forever, which the
+            // legacy SBI spec defines as "nothing ready".
             {
                 int ch = -1;
 #ifdef KOTI_ULX3S
                 ch = usb_getchar();
 #endif
-                if (ch < 0)
-                    ch = ps2_getchar();
                 r[A0] = (uint32_t)ch;
             }
             csr_write(mepc, csr_read(mepc) + 4);

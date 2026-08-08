@@ -82,7 +82,6 @@ EXPECTED = {
     "vga_gp[0]": "A7", "vga_gp[1]": "C8", "vga_gp[2]": "C6", "vga_gp[3]": "A6",
     "vga_gn[0]": "A8", "vga_gn[1]": "B8", "vga_gn[2]": "C7", "vga_gn[3]": "B6",
     # gp[8], gp[9]
-    "ps2_gp[0]": "A4", "ps2_gp[1]": "A2",
     # onboard 32 MB SDRAM (upstream ulx3s_v20.lpf, fetched 2026-08-02)
     "sdram_clk": "F19",
     "sdram_cke": "F20",
@@ -129,8 +128,6 @@ EXPECTED = {
 # optional cross-check; koti and console name some blocks differently because
 # they carry different things on the same header.
 CONSOLE_ALIAS = {
-    "ps2_gp[0]": "pad_gp[0]",
-    "ps2_gp[1]": "pad_gp[1]",
 }
 
 PORT_RE = re.compile(

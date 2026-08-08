@@ -164,7 +164,6 @@ async def _bring_up(dut, image, seat_flip, strap, uart_strap=0):
     flash.mem[:len(image)] = image
 
     dut.seat_flip.value = seat_flip
-    dut.ps2_gp.value = 0b11                # PS/2 idle high (external pull-ups)
     dut.sw.value = (strap & 1) | ((uart_strap & 1) << 2)
     dut.btn.value = 0b0000000              # btn[0] low = held in reset
     await ClockCycles(dut.clk, 5)

@@ -18,7 +18,6 @@
 # Header plan:
 #   J1 (gp/gn 0-3)   Cartridge Pmod or TT QSPI Pmod   -> uio[7:0]   <- SW1 flips rows
 #   J2 (gp/gn 4-7)   Tiny VGA Pmod                    -> uo[7:0]    <- SW2 flips rows
-#   gp 8/9           PS/2 keyboard  clock / data      -> ui[1:0]
 #   btn 1-6          GPIO inputs (MMIO 0x10008)       -> ui[7:2]
 
 LOCATE COMP "clk_25mhz" SITE "G2";
@@ -204,31 +203,11 @@ IOBUF PORT "vga_gn[1]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
 IOBUF PORT "vga_gn[2]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
 IOBUF PORT "vga_gn[3]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
 
-# ---- PS/2 keyboard on gp[8] (clock) and gp[9] (data) ----
-# Both are INPUTS to the FPGA: koti's ps2_rx only ever samples, and ui is
-# input-only on the chip, so nothing here can drive the bus.
-#
-# !! POWER THE KEYBOARD FROM 3.3 V, NOT 5 V. PS/2 is nominally a 5 V bus and
-# ECP5 IO is NOT 5 V tolerant, so a 5 V-powered keyboard wired straight to
-# these pins can damage the FPGA. Run it from the board's 3.3 V rail instead:
-# its pull-ups then sit on 3.3 V and every level is in spec. Most PS/2
-# keyboards work fine undervolted, and if one does not it simply stays quiet -
-# an undervolt fails safe in a way an overvolt does not.
-#
-# EXTERNAL PULL-UPS. PS/2 is open-collector: the keyboard only pulls low and
-# something else must pull high. The FPGA's internal pull-up is ~10-50 kOhm
-# against PS/2's 1-10 kOhm, so PULLMODE=UP below is a floating-line guard, not
-# a bus termination. Fit ~4.7 kOhm to the SAME 3.3 V that powers the keyboard.
-#
-# If a keyboard refuses to run at 3.3 V, use a BSS138-type level-shifter module
-# (sold as an "I2C level converter", ~2 EUR) and power it at 5 V. Do NOT reach
-# for a plain resistor divider: the keyboard's own pull-up to 5 V and a divider
-# to ground fight each other, and the high level lands around 1.6 V - below the
-# LVCMOS33 input threshold. That combination looks reasonable and does not work.
-LOCATE COMP "ps2_gp[0]" SITE "A4";
-LOCATE COMP "ps2_gp[1]" SITE "A2";
-IOBUF PORT "ps2_gp[0]" PULLMODE=UP IO_TYPE=LVCMOS33;
-IOBUF PORT "ps2_gp[1]" PULLMODE=UP IO_TYPE=LVCMOS33;
+# gp[8] (A4) and gp[9] (A2) are FREE. They carried the PS/2 clock and data
+# until 2026-08-08, when PS/2 was removed — the USB HID keyboard on US2 had
+# typed on real hardware, which was the condition PLAN.md set for retiring it.
+# Nothing is constrained here now, so the pins are available for the next
+# thing that needs two inputs.
 
 # ---- onboard 32 MB SDRAM (16-bit) ----
 # Sites from upstream emard/ulx3s doc/constraints/ulx3s_v20.lpf, fetched

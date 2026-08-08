@@ -142,13 +142,63 @@ Software, in order:
        USB HID host on US2: core vendored, `src/usb_kbd.sv` does the 12->25 MHz
        crossing and turns held keys into keystrokes, `sw/usbkbd.c` carries a
        Finnish keymap. See item 8 for what is still open.
-8. [ ] **USB HID host + its Linux driver and devicetree node** (decision 2
-       below). Mainline will not recognise a soft host core any more than it
-       recognises koti's PS/2 word, so a small custom driver is required
-       either way — plan for one, not for `usbhid` to just work.
-       The PS/2 block it replaces stays until USB has typed a character on
-       real hardware: one MMIO word `{ovf[9], avail[8], scancode[7:0]}`,
-       read-to-clear, raising `meip`.
+8. [x] ⌨️ **PS/2 REMOVED — DONE 2026-08-08.** The standing condition ("PS/2
+       stays until USB types a character on real hardware") was met on
+       2026-08-07, so the whole path is gone: `src/ps2_rx.sv`, `sw/ps2kbd.c/.h`,
+       the MMIO word at `0x0004000C`, the `ps2_gp` pins, three cocotb tests and
+       the LPF constraints. ⭐ **The PLIC's one wired source moved from PS/2's
+       `kb_avail` to the USB FIFO's `usb_kb_irq`** — deleting PS/2 without that
+       would have left the interrupt controller Linux binds to with no source at
+       all. `meip` is now tied low; every interrupt reaches Linux via `seip`.
+       ⚠️ `0x0004000C` still decodes and reads **zero**, deliberately: to a
+       surviving PS/2 driver that means "no key waiting", which idles rather
+       than misbehaves. gp[8]/gp[9] (A4/A2) are free.
+       ⚠️ **Open and undiagnosed**: the first USB login echoed `rooo. .. .t. .t`
+       — possible duplicate keystrokes, never reproduced. There is now no
+       fallback input path, so this is worth chasing.
+
+9. [ ] ⌨️ **The USB keyboard's LINUX half — a devicetree node and an input
+       driver.** Today keystrokes are NOT an input device: `usb_kbd.sv` →
+       MMIO → `sw/usbkbd.c` (M-mode firmware, Finnish keymap) → SBI
+       `console_getchar` → `hvc0`. Linux therefore sees *console characters*,
+       exactly as it would from a UART. Verified 2026-08-08: **zero**
+       `INPUT`/`HID`/`EVDEV` symbols in `koti_defconfig` and **zero** mention of
+       the keyboard in `koti.dts`.
+       Consequences: no `/dev/input/*`, no evdev, no key-RELEASE events, no
+       modifiers as events, `loadkeys` does nothing (the keymap lives in koti's
+       firmware, not the OS), and M-mode firmware sits in the path of every
+       keystroke. Mainline will not recognise a soft host core any more than it
+       recognised koti's PS/2 word, so this is a small custom driver either
+       way — plan for one, not for `usbhid` to just work.
+
+10. [ ] ⚡ **D-cache.** The I-cache took fetch from ~8 clocks/instruction to 1
+       on a hit, which made DATA the dominant cost: a random 32-bit SDRAM read
+       is 10 clocks (measured) and ~a third of instructions are loads/stores,
+       so ~3 clocks/instruction on the data side against ~1 on fetch. Boot to
+       userspace is ~49 s on hardware; this is where it goes.
+       ⭐ **The coherence objection has a cheap answer: make it WRITE-THROUGH.**
+       The worry was that the video DMA reads the charbuf out of the same SDRAM
+       the CPU writes, so a write-back cache could hold text that never reaches
+       the screen. But the DMA only ever READS — there is no DMA-writes /
+       CPU-reads direction — so write-through eliminates the problem instead of
+       managing it. BRAM is not a constraint: 19 of 208 used.
+       ⚠️ **Measure the cheaper thing first.** `sdram_ctrl`'s own header names
+       an open-row policy and a real 4-word burst as the performance left on
+       the table. Those roughly halve EVERY line fill — I-cache today, D-cache
+       later — and they change one FSM rather than adding a cache with a new
+       coherence story.
+
+11. [ ] 🌐 **Networking. There is none at all, and it is TWO absences.**
+       (a) No stack: `grep -c CONFIG_NET koti_defconfig` = **0**, so no sockets,
+       no TCP/IP, not even loopback. busybox ships `ip`/`ping`/`wget` as
+       applets and they fail with `socket: Function not implemented` — which is
+       exactly what `S40network` prints in the boot log.
+       (b) **No network hardware**: no MAC and no PHY anywhere in `src/`.
+       Enabling `CONFIG_NET` alone would give a stack with nothing to attach.
+       Options, cheapest first: **the onboard ESP32 over a second UART** (it is
+       already on the board; koti currently holds `wifi_en` low), an Ethernet
+       Pmod plus a MAC in fabric, or USB Ethernet through the soft host — by
+       far the largest lift.
 
 Parked — Koti-1 as a chip (nothing above depends on these):
 - [ ] Generate the 32x32 2R1W regfile macro with AUCOHL/DFFRAM

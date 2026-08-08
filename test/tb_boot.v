@@ -38,8 +38,11 @@ module tb_boot ();
   reg         clk = 1'b0;
   reg         rst_n = 1'b0;
   reg         ena = 1'b1;
-  // ui[1:0] are the PS/2 clock and data, which idle HIGH. Driving them low
-  // would look to ps2_rx like a start bit at time zero.
+  // ui[1:0] were the PS/2 clock and data until 2026-08-08 and had to idle
+  // HIGH so ps2_rx did not see a start bit at time zero. PS/2 is gone; these
+  // are plain GPIO inputs now and the value no longer matters. Left as-is
+  // because GPIO_IN is readable from software and changing what a running
+  // kernel reads is not what removing a keyboard should do.
   reg  [7:0]  ui_in = 8'b0000_0011;
   reg  [7:0]  uio_in = 8'd0;
   wire [7:0]  uo_out, uio_out, uio_oe;

@@ -102,11 +102,11 @@ module tt_um_koti (
   wire [7:0]  led;
   wire        uart_txd;
   wire        mtip, msip;
-  wire        kb_irq;      // pending keyboard byte -> meip (legacy, inert)
-  // Declared here rather than beside the plic instance: the core is
-  // instantiated above that point, and this file is read by a simulator that
+  // Declared here rather than beside the usb_kbd instance: the PLIC's source
+  // list is wired above that point, and this file is read by a simulator that
   // rejects declare-after-use (the same constraint that produced koti_core's
   // forward-declaration block).
+  wire        usb_kb_irq;  // USB keyboard has something queued -> PLIC source 1
   wire        plic_eip;    // PLIC -> the core's S-level external interrupt
 
   wire        if_req, if_ack;
@@ -146,7 +146,11 @@ module tt_um_koti (
 
   koti_core #(.UART_DIV(UDIV)) core (
       .clk(clk), .rst(rst),
-      .mtip(mtip), .msip(msip), .meip(kb_irq), .seip(plic_eip),
+      // meip is tied low. It was the PS/2 byte-available line, which predates
+      // the PLIC and was already marked inert once the PLIC took over S-level
+      // delivery; with PS/2 gone there is no M-level interrupt source at all.
+      // Every interrupt Linux sees arrives through seip and the PLIC.
+      .mtip(mtip), .msip(msip), .meip(1'b0), .seip(plic_eip),
       .halted(halted), .led(led), .uart_txd(uart_txd), .gpio_in(ui_in),
       .qspi_cfg(qspi_cfg),
       .if_req(if_req), .if_addr(if_addr), .if_ack(if_ack),
@@ -206,15 +210,18 @@ module tt_um_koti (
       .mtip(mtip), .msip(msip)
   );
 
-  // ---- VGA/PS2 register block: +0 ctrl (bit0 VGA_EN, bit1 UART on
-  // the blue LSB), +4 charbuf byte address, +8 {bg[13:8], fg[5:0]},
-  // +C PS/2 {avail[8], scancode[7:0]} (read clears avail) ----
+  // ---- VGA register block: +0 ctrl (bit0 VGA_EN, bit1 UART on
+  // the blue LSB), +4 charbuf byte address, +8 {bg[13:8], fg[5:0]} ----
+  //
+  // +C used to be the PS/2 scancode word. PS/2 was REMOVED 2026-08-08, once
+  // the USB HID keyboard had typed on real hardware — the condition PLAN.md
+  // had set for retiring it. The offset is left decoded and reading zero
+  // rather than reused: software built before the removal reads a register
+  // that says "no key", which is the harmless answer, whereas handing the
+  // offset to something else would make that stale software do damage.
   reg        vga_en, uart_b0;
   reg [22:0] vga_base;
   reg [5:0]  col_fg, col_bg;
-  reg [7:0]  kb_code;
-  reg        kb_avail;
-  reg        kb_ovf;
 
   wire vga_wr = vga_sel && !vga_ack && d_we;
   wire vga_rd = vga_sel && !vga_ack && !d_we;
@@ -230,64 +237,17 @@ module tt_um_koti (
               default: ;
           endcase
 
-  wire [7:0] ps2_code;
-  wire       ps2_valid;
-  ps2_rx #(.CLK_HZ(25_000_000)) ps2 (
-      .clk(clk), .rst(rst),
-      .ps2_clk(ui_in[0]), .ps2_dat(ui_in[1]),
-      .data(ps2_code), .valid(ps2_valid)
-  );
-  // Keyboard byte: ONE entry, no FIFO — but it now REPORTS the byte it drops.
-  //
-  // Against a real keyboard the single entry is ample: a PS/2 device clocks at
-  // 10-16.7 kHz, so a frame takes 0.7-1.1 ms, while software polling this
-  // register through QSPI-XIP code gets round roughly every 7000 clocks
-  // (~0.28 ms). Three to four polls per frame. Feed it frames any faster — as
-  // test.py's first attempt did, at ~2200 clocks apart — and a byte is lost.
-  //
-  // Losing one is survivable. Losing one SILENTLY is not, once anything
-  // decodes set-2 sequences: a dropped 0xF0 turns the next release into a
-  // phantom press, a byte dropped after 0xE0 leaves the decoder waiting for a
-  // second byte that already went by. One lost byte becomes a stream of wrong
-  // characters, and software has no way to suspect it. Hence `kb_ovf` at
-  // bit 9 of the read word: set when a byte arrives on top of an unread one,
-  // cleared by the same read that clears `kb_avail`. A driver that sees it
-  // knows to throw its prefix state away and resynchronise.
-  //
-  // ORDER MATTERS HERE. The read-clear is written FIRST so that `ps2_valid`
-  // in the same cycle wins: the arriving byte is kept and stays available,
-  // instead of being cleared as it is set. That is not just one fewer dropped
-  // byte — without it the flag would be a liar. A read coinciding with an
-  // arrival would clear `kb_ovf` at the very moment it should have been
-  // raised, so the one case software could not otherwise detect would be the
-  // one case the overrun bit failed to report.
-  always @(posedge clk)
-      if (rst) begin
-          kb_avail <= 1'b0; kb_code <= 8'd0; kb_ovf <= 1'b0;
-      end else begin
-          if (vga_rd && d_addr[1:0] == 2'd3) begin
-              kb_avail <= 1'b0;
-              kb_ovf   <= 1'b0;
-          end
-          if (ps2_valid) begin
-              kb_code  <= ps2_code;
-              kb_avail <= 1'b1;
-              // Overwriting a byte nobody has read is a LOST byte. A byte read
-              // this same cycle was not lost, so that is not an overrun.
-              if (kb_avail && !(vga_rd && d_addr[1:0] == 2'd3))
-                  kb_ovf <= 1'b1;
-          end
-      end
-
-  // read data is captured on the select cycle (before the read-clear
-  // of kb_avail lands) and served on the ack cycle
+  // read data is captured on the select cycle and served on the ack cycle
   reg [31:0] vga_rmux;
   always @(*)
       case (d_addr[1:0])
           2'd0: vga_rmux = {30'd0, uart_b0, vga_en};
           2'd1: vga_rmux = {7'd0, vga_base, 2'b00};
           2'd2: vga_rmux = {18'd0, col_bg, 2'd0, col_fg};
-          default: vga_rmux = {22'd0, kb_ovf, kb_avail, kb_code};
+          // +C was the PS/2 scancode word, removed 2026-08-08. It reads zero,
+          // which to any surviving PS/2 driver means "no key waiting" — the
+          // one answer that makes stale software idle instead of misbehave.
+          default: vga_rmux = 32'd0;
       endcase
   reg [31:0] vga_rdata_q;
   always @(posedge clk)
@@ -295,15 +255,20 @@ module tt_um_koti (
 
   // ---- PLIC ----
   // Sources are level-sensitive and numbered from 1. Only the keyboard is
-  // wired: `kb_avail` stays high until software reads the scancode register
-  // and drops when it does, which is exactly the shape a PLIC gateway wants.
+  // wired: `usb_kb_irq` is the USB FIFO's not-empty flag, which stays high
+  // until software drains it and drops when it does — exactly the shape a
+  // level-sensitive PLIC gateway wants, and the same shape PS/2's `kb_avail`
+  // had before it was removed on 2026-08-08.
+  // ⚠️ On the NON-FPGA (TinyTapeout) build usb_kbd does not exist and this is
+  // tied low, so that build has no interrupt source at all. That is honest
+  // rather than broken: with PS/2 gone the tile has no keyboard either.
   //
   // VSync is deliberately NOT wired even though PLAN.md lists it as a source.
   // `vt_vs` is a PULSE, and a level-sensitive gateway would either miss it or
   // latch it forever depending on the cycle it landed on. It needs a
   // read-to-clear status bit of its own first, the way the keyboard has one.
   // Sources 2-4 are tied low so the register map already has room for them.
-  wire [4:1]  plic_src = {3'b000, kb_avail};
+  wire [4:1]  plic_src = {3'b000, usb_kb_irq};
   wire [31:0] plic_rdata;
 
   plic #(.SOURCES(4)) plic0 (
@@ -344,7 +309,6 @@ module tt_um_koti (
   // The vendored host core lives in the harness, in its own 12 MHz domain;
   // usb_kbd does the crossing and turns held keys into keystrokes.
   wire [31:0] usb_rdata;
-  wire        usb_kb_irq;
 `ifdef KOTI_FPGA
   usb_kbd ukbd (
       .clk(clk), .rst(rst),
@@ -586,8 +550,6 @@ module tt_um_koti (
   assign video_vs  = vt_vs;
   assign video_de  = vt_act;
 `endif
-
-  assign kb_irq = kb_avail;
 
   wire _unused = &{ena, uio_in[7:6], uio_in[3], uio_in[0], led[7:6], 1'b0};
 

@@ -339,7 +339,7 @@ async def test_koti_boot_and_timer(dut):
 
 # Flash byte addresses that the OLD 3-bit MMIO decode aliased into device
 # registers (every 512 KiB): 0x0011_0000 -> core MMIO (io_m),
-# 0x0012_0000 -> CLINT, 0x0014_0000 -> VGA/PS2. Each sentinel low byte is
+# 0x0012_0000 -> CLINT, 0x0014_0000 -> VGA. Each sentinel low byte is
 # distinct and != 0/1, so a misdecoded register read (uart_busy=0,
 # CLINT/VGA regs) cannot masquerade as the flash value.
 APERTURES = [(0x0011_0000, 0x15),   # core-MMIO alias
@@ -457,32 +457,15 @@ async def test_vga_disable_does_not_park_grant(dut):
     raise AssertionError("row refill never completed after VGA_EN cleared (F3)")
 
 
-# ---------------------------------------------------------------- VGA + PS/2
+# ---------------------------------------------------------------------- VGA
 
-
-async def ps2_send_pins(dut, byte):
-    """Clock one PS/2 frame on ui[0]/ui[1] (~100 clk per half-bit)."""
-    parity = 1 ^ (bin(byte).count("1") & 1)
-    bits = [0] + [(byte >> i) & 1 for i in range(8)] + [parity, 1]
-    for b in bits:
-        dut.ui_in.value = (b << 1) | 1
-        await ClockCycles(dut.clk, 100)
-        dut.ui_in.value = (b << 1) | 0
-        await ClockCycles(dut.clk, 100)
-    dut.ui_in.value = 0b11
 
 
 def vga_program():
     x0, x5, x6, x7, x8, x9, x10, x11 = 0, 5, 6, 7, 8, 9, 10, 11
     return [
         lui(x5, MMIO_HI),          # LED MMIO
-        lui(x6, 0x40),             # VGA/PS2 block 0x0004_0000
-        # poll the keyboard, then show the scancode on the LEDs
-        lw(x9, 12, x6),
-        srli(x10, x9, 8),
-        beq(x10, x0, -8),
-        andi(x11, x9, 0xFF),
-        sw(x11, 0, x5),
+        lui(x6, 0x40),             # VGA block 0x0004_0000
         # write "KOTI" into the charbuf and switch the pins to VGA
         lui(x7, 0x1008),           # charbuf at 0x0100_8000
         lui(x8, 0x49545),
@@ -496,9 +479,15 @@ def vga_program():
 
 
 @cocotb.test()
-async def test_ps2_and_vga_text(dut):
-    """PS/2 scancode read via MMIO shows on LEDs; then VGA mode renders
-    the first glyph row of 'K' pixel-exactly on the uo pins."""
+async def test_vga_text(dut):
+    """VGA mode renders the first glyph row of 'K' pixel-exactly on the uo
+    pins.
+
+    This used to drive a PS/2 frame first and check the scancode reached the
+    LEDs. PS/2 was removed on 2026-08-08; the VGA half is untouched and is the
+    part that was always doing the work — it is the only test in the suite that
+    checks the font ROM, the line buffers and the pixel doubling against
+    actual pin values."""
     clock = Clock(dut.clk, 40, unit="ns")  # 25 MHz
     cocotb.start_soon(clock.start())
 
@@ -509,21 +498,13 @@ async def test_ps2_and_vga_text(dut):
     cocotb.start_soon(spi_bus(dut, flash, ram))
 
     dut.ena.value = 1
-    dut.ui_in.value = 0b11         # PS/2 idle high
+    dut.ui_in.value = 0
     dut.uio_in.value = 0
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 10)
     dut.rst_n.value = 1
 
     await ClockCycles(dut.clk, 200)
-    await ps2_send_pins(dut, 0x2A)
-
-    for _ in range(60000):
-        await RisingEdge(dut.clk)
-        if int(dut.uo_out.value) >> 2 == 0x2A:
-            break
-    else:
-        raise AssertionError("scancode never reached the LEDs")
 
     # VGA mode: catch a full vsync pulse (uo[3] low for 2 lines), then
     # line up on y=0 x=0: 33 hsync falls after the vsync rise, +142 clk
@@ -657,219 +638,6 @@ async def test_sbi_firmware(dut):
     await ClockCycles(dut.clk, 20_000)   # let the last charbuf write land
     assert ram.mem[0x8000:0x8003] == b"STK", \
         f"VGA console mirror: {bytes(ram.mem[0x8000:0x8010])!r}"
-
-
-# Gap between PS/2 frames, in system clocks.
-#
-# NOT arbitrary, and getting it wrong is what made the first three runs of these
-# tests fail. `ps2_send_pins` clocks a frame in ~2200 clocks — roughly 10x
-# faster than any real keyboard, which runs its clock at 10-16.7 kHz and so
-# takes 0.7-1.1 ms (17,500-27,500 clocks at 25 MHz) per 11-bit frame.
-#
-# That matters because the keyboard register is a SINGLE ENTRY with no FIFO and
-# no overrun flag (src/project.sv:125-134): `ps2_valid` overwrites kb_code
-# whether or not the previous byte was read, and a read in the same cycle
-# clears kb_avail even as it is being set — the clear is later in the block, so
-# it wins. Meanwhile the CPU polls only about every 7000 clocks, because every
-# instruction of the poll loop is fetched one bit at a time out of QSPI flash.
-#
-# Feed it frames every 2200 clocks and most of them are simply overwritten
-# before anyone looks. That is what "STKi" in the charbuf meant: one byte of
-# twelve survived. 60k clocks (2.4 ms) is slower than a real keyboard and gives
-# the poll loop a wide margin.
-PS2_FRAME_GAP = 60_000
-
-
-async def ps2_type(dut, *codes):
-    """Send scancode frames at a realistic keyboard rate."""
-    for sc in codes:
-        await ps2_send_pins(dut, sc)
-        await ClockCycles(dut.clk, PS2_FRAME_GAP)
-
-
-def kb_overrun_program():
-    """Wait, then read PS2_DATA ONCE and show {ovf, avail} on the LEDs.
-
-    The delay loop is the point. Poll immediately and the CPU may well read
-    between the two frames the test sends, which is the case with no overrun —
-    the test would then be measuring its own timing rather than the hardware.
-    ~200 iterations of two instructions fetched over 1-bit SPI is tens of
-    thousands of clocks, comfortably longer than the ~8000 the two frames take,
-    so both have certainly landed before the first read happens.
-    """
-    x0, x5, x6, x9, x10, x12 = 0, 5, 6, 9, 10, 12
-    return [
-        lui(x5, MMIO_HI),          # LED MMIO
-        lui(x6, 0x40),             # VGA/PS2 block 0x0004_0000
-        addi(x12, x0, 200),        # delay: let both frames arrive unread
-        addi(x12, x12, -1),        # loop:
-        beq(x12, x0, 8),           #   done -> skip the back-branch
-        beq(x0, x0, -8),           #   else back to the decrement
-        lw(x9, 12, x6),            # ONE read; it clears avail and ovf
-        srli(x10, x9, 8),          # {ovf, avail}
-        beq(x10, x0, -8),          # nothing at all yet: read again
-        sw(x10, 0, x5),            # LED = {ovf, avail}
-        beq(x0, x0, 0),            # spin
-    ]
-
-
-@cocotb.test()
-async def test_keyboard_reports_a_dropped_byte(dut):
-    """Two frames with no read between them must set the overrun bit.
-
-    The register holds one byte and has no FIFO, so the second frame overwrites
-    the first. That is acceptable; doing it SILENTLY is not, because a set-2
-    decoder holding E0/F0 prefix state cannot tell a lost byte from a real one
-    and turns a single drop into a stream of wrong characters. Before
-    2026-08-03 software had no way to know, and the only reason the existing
-    keyboard tests pass is PS2_FRAME_GAP being set slower than a real keyboard.
-
-    Sends the two frames back to back — deliberately far faster than any PS/2
-    device — and checks the LEDs show avail AND ovf.
-    """
-    clock = Clock(dut.clk, 40, unit="ns")  # 25 MHz
-    cocotb.start_soon(clock.start())
-
-    flash = SpiMem(1 << 16, writable=False)
-    ram = SpiMem(1 << 16, writable=True)
-    for i, insn in enumerate(kb_overrun_program()):
-        flash.mem[4 * i:4 * i + 4] = insn.to_bytes(4, "little")
-    cocotb.start_soon(spi_bus(dut, flash, ram))
-
-    dut.ena.value = 1
-    dut.ui_in.value = 0b11         # PS/2 idle high
-    dut.uio_in.value = 0
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 10)
-    dut.rst_n.value = 1
-
-    await ClockCycles(dut.clk, 200)
-    await ps2_send_pins(dut, 0x2A)   # 'v'
-    await ps2_send_pins(dut, 0x1C)   # 'a', straight after: nothing read yet
-
-    for _ in range(400_000):
-        await RisingEdge(dut.clk)
-        led = int(dut.uo_out.value) >> 2
-        if led:
-            break
-    else:
-        raise AssertionError("the keyboard status never reached the LEDs")
-
-    assert led == 0b11, (
-        f"expected avail+ovf (0b11), got {led:#04b} — "
-        "0b01 means the dropped byte was not reported"
-    )
-
-
-@cocotb.test()
-async def test_keyboard_echoes_through_sbi(dut):
-    """Type on the PS/2 pins, read the characters back off the UART.
-
-    The whole interactive path in one test: ps2_rx decodes the frame, the
-    MMIO word latches it, ps2kbd.c turns set-2 scancodes into ASCII, the
-    payload asks for them with SBI console_getchar (EID 0x02) and echoes them
-    with console_putchar. Until 2026-08-02 that SBI call returned -1 with the
-    comment "keyboard hookup pending", so nothing above the hardware had ever
-    read a key.
-    """
-    clock = Clock(dut.clk, 40, unit="ns")  # 25 MHz
-    cocotb.start_soon(clock.start())
-
-    img = (Path(__file__).parent.parent / "sw" / "sbi"
-           / "sbi_test.bin").read_bytes()
-    flash = SpiMem(1 << 16, writable=False)
-    ram = SpiMem(1 << 16, writable=True)
-    flash.mem[:len(img)] = img
-    cocotb.start_soon(spi_bus(dut, flash, ram))
-
-    dut.ena.value = 1
-    dut.ui_in.value = 0b11               # PS/2 idle: both lines high
-    dut.uio_in.value = 0
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 10)
-    dut.rst_n.value = 1
-
-    for _ in range(400_000):
-        await RisingEdge(dut.clk)
-        if (int(dut.uo_out.value) >> 6) & 1:
-            break
-    else:
-        raise AssertionError("UART idle never appeared on uo[6]")
-
-    assert await uart_rx(dut, 3, bit=6) == b"STK"   # payload reaches its loop
-
-    # 'h', 'i', then shift+'a'. Each press is a make code and each release is
-    # 0xF0 + the make code; the shift pair brackets the 'a' so the translator
-    # has to be holding state across four frames to get 'A' rather than 'a'.
-    rx = cocotb.start_soon(uart_rx(dut, 3, bit=6, timeout=6_000_000))
-    await ps2_type(dut,
-                   0x33, 0xF0, 0x33,      # h
-                   0x43, 0xF0, 0x43,      # i
-                   0x12,                  # LSHIFT down
-                   0x1C, 0xF0, 0x1C,      # a  -> 'A'
-                   0xF0, 0x12)            # LSHIFT up
-
-    # Diagnostics, not decoration. This test failed on its first two runs with
-    # NO uart output at all, and "nothing came out" does not say whether the
-    # keystroke never became a character or whether it did and the UART decode
-    # missed it. sbi_putchar mirrors to the VGA charbuf, so the charbuf is an
-    # independent witness: "STK" alone means the getchar path returned -1
-    # forever; "STKhiA" means the characters exist and only the UART read is
-    # wrong. PS2_DATA is read-to-clear, so it cannot be inspected after the
-    # fact — the mirror is the only record.
-    try:
-        got = await rx
-    except AssertionError as e:
-        cb = bytes(ram.mem[0x8000:0x8020])
-        raise AssertionError(f"{e}; VGA charbuf mirror = {cb!r}") from None
-    assert got == b"hiA", f"charbuf mirror = {bytes(ram.mem[0x8000:0x8020])!r}"
-
-
-@cocotb.test()
-async def test_keyboard_releases_produce_nothing(dut):
-    """A release must not echo, and a stuck shift must not survive it.
-
-    This is the failure that would look like working hardware: if releases
-    were treated as presses every keystroke would double, and if a shift
-    release were missed everything after the first capital would stay
-    upper-case. Both are silent in a test that only ever types one letter.
-    """
-    clock = Clock(dut.clk, 40, unit="ns")
-    cocotb.start_soon(clock.start())
-
-    img = (Path(__file__).parent.parent / "sw" / "sbi"
-           / "sbi_test.bin").read_bytes()
-    flash = SpiMem(1 << 16, writable=False)
-    ram = SpiMem(1 << 16, writable=True)
-    flash.mem[:len(img)] = img
-    cocotb.start_soon(spi_bus(dut, flash, ram))
-
-    dut.ena.value = 1
-    dut.ui_in.value = 0b11
-    dut.uio_in.value = 0
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 10)
-    dut.rst_n.value = 1
-
-    for _ in range(400_000):
-        await RisingEdge(dut.clk)
-        if (int(dut.uo_out.value) >> 6) & 1:
-            break
-    assert await uart_rx(dut, 3, bit=6) == b"STK"
-
-    # shift down, 'z' -> 'Z', shift UP, 'z' -> 'z'. Two characters, not four.
-    rx = cocotb.start_soon(uart_rx(dut, 2, bit=6, timeout=6_000_000))
-    await ps2_type(dut,
-                   0x12, 0x1A, 0xF0, 0x1A, 0xF0, 0x12,   # shift+z
-                   0x1A, 0xF0, 0x1A)                     # z
-
-    try:
-        got = await rx
-    except AssertionError as e:
-        cb = bytes(ram.mem[0x8000:0x8020])
-        raise AssertionError(f"{e}; VGA charbuf mirror = {cb!r}") from None
-    assert got == b"Zz", f"charbuf mirror = {bytes(ram.mem[0x8000:0x8020])!r}"
-
 
 # --------------------------------------------------------- Linux boot handoff
 

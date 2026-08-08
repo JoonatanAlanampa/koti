@@ -52,7 +52,6 @@ module tb_fpga_bram ();
 
   wire [3:0] pmod_gp, pmod_gn;
   wire [3:0] vga_gp, vga_gn;
-  reg  [1:0] ps2_gp = 2'b11;          // PS/2 idles high; low would look like a start bit
 
   // PULLMODE=UP in ulx3s.lpf, modelled — and it matters MORE here than in
   // tb_fpga.v: nothing drives these wires at all in this build, so without the
@@ -108,7 +107,6 @@ module tb_fpga_bram ();
       .pmod_gn    (pmod_gn),
       .vga_gp     (vga_gp),
       .vga_gn     (vga_gn),
-      .ps2_gp     (ps2_gp),
       .sd_clk     (sd_clk),
       .sd_cmd     (sd_cmd),
       .sd_d       (sd_d),

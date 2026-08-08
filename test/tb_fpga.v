@@ -39,7 +39,6 @@ module tb_fpga ();
 
   wire [3:0] pmod_gp, pmod_gn;
   wire [3:0] vga_gp, vga_gn;
-  reg  [1:0] ps2_gp;
 
   // ---- the modelled memory Pmod -------------------------------------------
   // It drives exactly one wire: SD1 (uio[2]), and only while the selected
@@ -94,7 +93,6 @@ module tb_fpga ();
       .pmod_gn    (pmod_gn),
       .vga_gp     (vga_gp),
       .vga_gn     (vga_gn),
-      .ps2_gp     (ps2_gp),
       .sdram_clk  (sdram_clk),
       .sdram_cke  (sdram_cke),
       .sdram_csn  (sdram_csn),

@@ -31,16 +31,13 @@
 #define MTIMECMP_LO REG32(0x00020008)
 #define MTIMECMP_HI REG32(0x0002000C)
 
-// VGA / PS2 block
+// VGA block
 #define VGA_CTRL  REG32(0x00040000)   // bit0 VGA_EN, bit1 UART on B0
 #define VGA_BASE  REG32(0x00040004)   // charbuf byte address
 #define VGA_COLOR REG32(0x00040008)   // {bg[13:8], fg[5:0]}
-// {ovf[9], avail[8], scancode[7:0]}, read clears avail AND ovf.
-// ovf = a byte arrived on top of an unread one, i.e. one was lost; any
-// decoder holding E0/F0 prefix state must throw it away when it sees this.
-#define PS2_DATA  REG32(0x0004000C)
-#define PS2_AVAIL 0x100u
-#define PS2_OVF   0x200u
+// 0x0004000C was the PS/2 scancode word. PS/2 was REMOVED 2026-08-08 once the
+// USB HID keyboard had typed on real hardware; the offset still decodes and
+// reads zero. See USB_KBD below, which is the keyboard now.
 
 // microSD (FPGA builds only — a TinyTapeout tile has no pin for a card).
 // See src/sd_ctrl.sv. Poll SD_DONE, never SD_BUSY: sd_spi leaves `ready` high
@@ -82,9 +79,10 @@
 #define SD_RAW_MISO_HI 0x20u          // w: the value to drive
 
 // USB HID keyboard on US2 (FPGA builds only). See src/usb_kbd.sv.
-// Deliberately the SAME bit positions as PS2_DATA for `avail` and `ovf`, so the
-// two keyboard paths read alike — but the CODE IS A HID USAGE, not a PS/2
-// scancode, and the two numbering schemes share nothing. sw/usbkbd.c translates.
+// The CODE IS A HID USAGE, not a character and not a PS/2 scancode —
+// sw/usbkbd.c translates it, and carries the Finnish keymap. The `avail` and
+// `ovf` bit positions were chosen to match the PS/2 register this replaced,
+// which is why they sit at 8 and 9 rather than 0 and 1.
 // ⚠️ READING USB_KBD POPS the queue when USB_AVAIL is set. Read it once.
 #define USB_KBD   REG32(0x00060000)   // ⚠️ READING POPS when USB_AVAIL is set
 #define USB_STAT  REG32(0x00060004)   // status + live modifiers, NO side effects

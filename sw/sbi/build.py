@@ -51,7 +51,7 @@ def main():
              "-ffreestanding", "-nostdlib", "-nostartfiles", "-static",
              *extra,
              "-I", "..", "-T", "link.ld", "-o", f"{name}.elf",
-             "sbi.S", "sbi.c", "payload.c", "../console.c", "../ps2kbd.c",
+             "sbi.S", "sbi.c", "payload.c", "../console.c",
              *srcs, "dtb.S"])
         run([OBJCOPY, "-O", "binary", f"{name}.elf", f"{name}.bin"])
         size = (SBI / f"{name}.bin").stat().st_size

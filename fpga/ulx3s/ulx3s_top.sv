@@ -31,7 +31,6 @@
 //   clk_25mhz    -> clk (the design's real frequency)
 //   btn[0] (PWR) -> reset, active low, gated with a power-on-reset counter
 //   btn[6:1]     -> ui[7:2] GPIO inputs (MMIO 0x10008)
-//   gp[8]/gp[9]  -> ui[1:0] PS/2 clock / data  (external pull-ups needed!)
 //   J1 gp/gn0-3  -> uio[7:0] QSPI memory Pmod  (SW1 flips rows)
 //   J2 gp/gn4-7  -> uo[7:0]  Tiny VGA Pmod     (SW2 flips rows)
 //   ftdi_rxd     -> uo[0] or uo[6]             (SW3 selects)
@@ -89,11 +88,6 @@ module ulx3s_top (
     // J2 header: Tiny VGA Pmod (outputs only)
     output logic [3:0] vga_gp,
     output logic [3:0] vga_gn,
-
-    // PS/2 keyboard: gp[8] = clock, gp[9] = data. Inputs only — koti's
-    // ps2_rx samples the bus and never drives it, which is also why this
-    // works on silicon, where `ui` is input-only.
-    input  wire  [1:0] ps2_gp,
 
     // Onboard 32 MB SDRAM. This is the half of the memory map that used to be
     // the QSPI Pmod's PSRAM: same addresses, roughly ten times the speed and
@@ -164,9 +158,12 @@ module ulx3s_top (
   wire [7:0] uo_out, uio_out, uio_oe;
   wire [7:0] uio_in;
 
-  // ui[1:0] = PS/2 clock/data, ui[7:2] = the six board buttons as GPIO.
-  // btn[1..6] are pulled down, so a press reads 1 at MMIO 0x10008.
-  wire [7:0] ui_in = {btn[6:1], ps2_gp[1], ps2_gp[0]};
+  // ui[7:2] = the six board buttons as GPIO; btn[1..6] are pulled down, so a
+  // press reads 1 at MMIO 0x10008.
+  // ui[1:0] were the PS/2 clock and data until 2026-08-08. PS/2 is gone and
+  // gp[8]/gp[9] are unconstrained again, so these read a constant 0 rather
+  // than a floating pin — GPIO_IN's low two bits are now defined, not noise.
+  wire [7:0] ui_in = {btn[6:1], 2'b00};
 
   // SDRAM data bus, resolved here rather than inside the SoC — same split as
   // the QSPI pins, and the same reason: a tri-state driver is a pad-ring

@@ -50,8 +50,9 @@ genuinely read those bytes back off the card.
   pointing root at it before it had been used in anger would turn a driver bug
   into a machine that will not boot. Moving it is a config change, not work.
 - **ext2 has no journal.** `sync` before pulling the power.
-- **No PS/2 keyboard**, and there never will be — the RTL is still present but
-  superseded by USB.
+- **No PS/2 keyboard.** Superseded by USB, and as of 2026-08-08 the RTL,
+  firmware, pins and tests are gone too — the condition for removing it was
+  that USB had typed on real hardware, and it had.
 - **This is an FPGA project.** Koti-1 is not going to a shuttle; see
   [PLAN.md](PLAN.md). The ASIC path (8x2 tiles, a DFFRAM regfile macro) is
   parked, not deleted.

@@ -24,7 +24,6 @@ SOURCES = [
     SRC_DIR / "plic.sv",
     SRC_DIR / "vga_text.sv",
     SRC_DIR / "vga_timing.sv",
-    SRC_DIR / "ps2_rx.sv",
     SRC_DIR / "arbiter3.sv",
     SRC_DIR / "control.sv",
     SRC_DIR / "alu.sv",

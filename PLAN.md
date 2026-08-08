@@ -250,6 +250,34 @@ Software, in order:
        Pmod plus a MAC in fabric, or USB Ethernet through the soft host — by
        far the largest lift.
 
+12. [ ] 🧠 **Double the RAM: koti uses 16 MB of the 32 MB soldered on the board.**
+       Found in the standalone boot log — `MemTotal: 8796 kB` — and it is
+       **architectural, not a devicetree typo, so `koti.dts` is currently
+       CORRECT for the hardware as built.**
+       **The cause is one bit.** `d_addr = byte_addr[24:2]`, and **`addr[22]` is
+       spent as the flash/RAM device select**, so only `addr[21:0]` — 4M words,
+       **16 MB** — ever reaches the SDRAM. ⭐ `src/sdram_ctrl.sv` already takes a
+       full 23-bit word address (`8M words = 32 MB`) and drives the whole part;
+       `src/project.sv` drops the top bit on the way in, with the comment
+       "addr[22] is dropped on the way in: it was the device select".
+       ⇒ The part, the controller and the pins are all fine. **Only the memory
+       map is in the way.**
+       ⚠️ **NOT a one-line change — these must move together or nothing boots:**
+       - `src/project.sv` — a new flash/RAM select that does not eat an address
+         bit (the CPU's `[24:2]` bus is already fully spent, so this likely
+         means widening the address path, not just re-decoding it).
+       - ⚠️ `sel_ram` is latched per-transaction (`inflight`/`sel_q`, and the
+         comment there warns the obvious version is a trap). Whatever replaces
+         `addr[22]` has to keep that capture-once behaviour.
+       - `sw/linux/koti.dts` — the `memory@1000000` node.
+       - the linker scripts and **SBI's kernel load address** (`0x0140_0000`).
+       - `sw/memtest.c` — today it walks 16 MB and would still pass on a broken
+         32 MB map, so **extend it first**; a memory test that cannot fail is
+         the standing lesson of this repo.
+       **Payoff:** 8.8 MB free -> ~25 MB, which is the difference between a
+       machine that boots Linux and a machine that can run things on it. It also
+       de-risks item 11, whose stack costs RAM koti does not currently have.
+
 Parked — Koti-1 as a chip (nothing above depends on these):
 - [ ] Generate the 32x32 2R1W regfile macro with AUCOHL/DFFRAM
       (`dffram.py -p sky130A -s sky130_fd_sc_hd -b <rf-2r1w> 32x32`; a Linux

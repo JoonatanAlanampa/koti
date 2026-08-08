@@ -270,9 +270,20 @@ which is the confirming detail rather than a problem: **koti holds the ESP32 in
 reset via `wifi_en = 0`**, so the ESP32 goes quiet exactly when the FPGA is
 alive. The two are mutually exclusive on this board, by design.
 
-⚠️ **This is a commanded reconfigure (`LSC_REFRESH`), which reads the same flash
-by the same path a cold power-on does — but it is not itself a cold boot.**
-Standalone is only proven by pulling the power. Record that result separately.
+### 🏆🔌 COLD BOOT CONFIRMED — koti IS STANDALONE (2026-08-08)
+
+Power pulled and restored, **no bitstream loaded, nothing attached but 5 V**:
+```
+bytes: 1169   banner lines: 16   non-printable: 0
+counter range: #51 -> #66        (gapless)
+```
+⭐ **The counter restarts low.** The pre-power-cycle run was at **#580**, so #51
+is a fresh boot rather than a session that never stopped — that is the check
+that makes this a cold-boot proof and not a restatement of the `LSC_REFRESH`
+result. **The ECP5 configured itself from its own flash at power-on.**
+
+⇒ **The ~60 s `fujprog` on every power-up is GONE.** Reflashing is now only
+needed to change the bitstream.
 
 ⚠️ The image written here is **`bringup`**, so a standalone board prints its
 banner forever. Standalone *Linux* needs the `bram` variant built with

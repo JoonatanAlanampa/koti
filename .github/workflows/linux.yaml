@@ -514,7 +514,19 @@ jobs:
           userspace (the marker is at ~486M) and 486M is ~4.7 hours at this \
           engine's speed. Use engine=verilator for the userspace claim."
           else
-            : "${MAXCLK:=20000000}"; : "${QUIET:=8000000}"
+            # 32M, and the number is a MEASUREMENT that moved. This budget
+            # has to cover the four greps below, the last of which is
+            # `devtmpfs: initialized`. That used to arrive inside 20M clocks;
+            # after PLAN.md item 12 doubled RAM to 32 MB it arrives between
+            # 22M and 24M, because the kernel initialises twice the page
+            # structs before it gets there. 20M went red on a machine that was
+            # working perfectly (run 31265542722) and the full Verilator boot
+            # passed in the same workflow, which is what identified it as a
+            # budget rather than a defect.
+            # ⚠️ THIS NUMBER IS TIED TO THE MEMORY SIZE. Grow RAM again and
+            # re-measure it; the symptom of leaving it alone is a red gate with
+            # a correct boot log that simply stops early.
+            : "${MAXCLK:=32000000}"; : "${QUIET:=8000000}"
           fi
           echo "full=${FULL:-no} maxclk=$MAXCLK quiet=$QUIET"
           vvp tb_boot.vvp +flash=fw.hex +ram=kernel.hex +ramoff=1048576 \
@@ -759,7 +771,19 @@ jobs:
           if [ "${FULL:-no}" = "yes" ]; then
             : "${MAXCLK:=700000000}"; : "${QUIET:=690000000}"
           else
-            : "${MAXCLK:=20000000}"; : "${QUIET:=8000000}"
+            # 32M, and the number is a MEASUREMENT that moved. This budget
+            # has to cover the four greps below, the last of which is
+            # `devtmpfs: initialized`. That used to arrive inside 20M clocks;
+            # after PLAN.md item 12 doubled RAM to 32 MB it arrives between
+            # 22M and 24M, because the kernel initialises twice the page
+            # structs before it gets there. 20M went red on a machine that was
+            # working perfectly (run 31265542722) and the full Verilator boot
+            # passed in the same workflow, which is what identified it as a
+            # budget rather than a defect.
+            # ⚠️ THIS NUMBER IS TIED TO THE MEMORY SIZE. Grow RAM again and
+            # re-measure it; the symptom of leaving it alone is a red gate with
+            # a correct boot log that simply stops early.
+            : "${MAXCLK:=32000000}"; : "${QUIET:=8000000}"
           fi
           echo "full=${FULL:-no} maxclk=$MAXCLK quiet=$QUIET (verilator)"
           t0=$(date +%s)

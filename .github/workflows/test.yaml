@@ -87,6 +87,15 @@ jobs:
           vvp tb_dcache.vvp | tee dcache.log
           grep -q "tb_dcache: PASS" dcache.log
 
+          # The keyboard's two-port FIFO. It had no bench of its own until
+          # 2026-08-08: it was compiled only into whole-SoC builds, which
+          # notice a keyboard that is dead and notice nothing about a second
+          # reader that steals the first one's keystrokes. The property it
+          # guards is that a stalled Linux driver cannot starve the console.
+          iverilog -g2012 -o tb_usb_kbd.vvp ../src/usb_kbd.sv tb_usb_kbd.v
+          vvp tb_usb_kbd.vvp | tee usb_kbd.log
+          grep -q "tb_usb_kbd: PASS" usb_kbd.log
+
       # PLIC standalone, same pure-Verilog pattern. An interrupt controller is
       # another block that can be wrong by being QUIET: one that never asserts
       # eip breaks nothing visible in a polling system, it just means

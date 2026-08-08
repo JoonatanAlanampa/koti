@@ -228,6 +228,18 @@ module dcache #(
                be[0] ? neu[7:0]   : old[7:0]};
   endfunction
 
+`ifdef DCDBG
+  integer dbg_n = 0;
+  always_ff @(posedge clk)
+      if (!rst && !initing && c_req && !look && !pending && ack_q
+          && dbg_n < 30) begin
+          $display("DCDBG re-accept ON ACK CYCLE: addr=%h ptw=%b we=%b | prev {%h,%h} ptw=%b same=%b",
+                   c_addr, c_ptw, c_we, look_tag, look_idx, look_ptw,
+                   (c_addr == {look_tag, look_idx}));
+          dbg_n = dbg_n + 1;
+      end
+`endif
+
   always_ff @(posedge clk) begin
       if (rst) begin
           initing  <= 1'b1;
@@ -245,7 +257,8 @@ module dcache #(
           end
 
           // ---- accept a request -------------------------------------------
-          if (!initing && c_req && !look && !pending) begin
+          // ⛔ `!ack_q`: THE ACK CYCLE IS NOT AN ACCEPT CYCLE. See the header.
+          if (!initing && c_req && !look && !pending && !ack_q) begin
               look      <= 1'b1;
               look_tag  <= tag;
               look_idx  <= idx;

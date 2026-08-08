@@ -108,7 +108,43 @@ serial line and the banner came back.)
 in 58.94 s afterwards and koti printed immediately. The board has never booted
 from its own flash, so a partially-erased flash cost nothing.
 
-**Routes to a genuinely standalone koti, none tried:**
+### ⭐ The ESP32 route is CHEAPER THAN IT LOOKS — prerequisites established 2026-08-08
+
+The objection to using the ESP32 was that flashing it needs a **passthru
+bitstream** so the FPGA can bridge the FT231X to the ESP32's UART and drive its
+EN/GPIO0. **That is not true on this board.** Measured:
+
+```
+esptool --port COM3 chip-id      # with the FPGA UNCONFIGURED
+  Chip type: ESP32-D0WD-V3 (revision v3.1)   MAC: c8:85:41:c9:ce:f0
+  Uploading stub flasher... Running stub flasher... Stub flasher running.
+```
+Download-mode control reaches the ESP32 through the FT231X with no help from the
+FPGA. Power-cycle the board, do NOT load a bitstream, and esptool just works.
+⚠️ The FPGA must be unconfigured — koti drives `wifi_en` low, which disables the
+ESP32 entirely.
+
+**Also established:**
+- The ESP32's flash is **16 MB** (`Manufacturer a1, Device 4018`), not 4 MB.
+  Room is not a constraint.
+- The stock image is plain **MicroPython 1.14** with **no FPGA loader**:
+  `import ecp5` -> ImportError, and `help('modules')` lists nothing ULX3S-
+  specific. Its filesystem holds only `boot.py`, 2,084,864 bytes free.
+- ⭐ **A full factory backup exists**: `Documents/ulx3s-backup/` holds
+  `esp32-factory-16MB-2026-08-08.bin` (16,777,216 bytes, sha256
+  `8e8df9bc…e323`, 0xE9 magic verified) plus a README with the one-line restore
+  command. Overwriting the ESP32 is now reversible, which is the only reason it
+  should be attempted at all.
+- **The bitstream gzips to 16%**: 1,976,403 -> 308,806 bytes, ~25 s to upload at
+  115200, against 1.78 MB of headroom. `uzlib` is on the stock image already.
+
+⇒ What remains for a standalone board: flash EMARD's ULX3S MicroPython build
+(which ships `ecp5.py`), put the gzipped bitstream in its filesystem, and add a
+`main.py` that configures the FPGA at boot. ⚠️ **NOT YET DONE.** The remaining
+risk is picking the wrong firmware image, and the backup above is the answer to
+it.
+
+**Routes to a genuinely standalone koti:**
 1. **Stop the ESP32 booting.** Its MicroPython is factory firmware koti does not
    want. ⚠️ Erasing it is destructive and irreversible without re-flashing
    MicroPython — the owner's call, not a casual step.

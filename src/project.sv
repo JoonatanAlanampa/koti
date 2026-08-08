@@ -385,7 +385,15 @@ module tt_um_koti (
   wire [3:0]  am_be;
   wire        am_ack;
   wire [31:0] ad_rdata;
-`ifdef KOTI_FPGA
+// ⛔ THE CACHE IS OUT OF THE PATH. Enabling it made tb_boot print NOTHING in
+// 700,000,000 clocks -- a completely dead machine -- while tb_fpga_bram passed
+// with it, so it fails only in the KOTI_SIMMEM boot configuration. Until that
+// is understood, `KOTI_DCACHE` is not defined anywhere and every build takes
+// the bypass below, which is the behaviour that has booted Linux on real
+// hardware. src/dcache.sv and test/tb_dcache.v stay and stay gated: the module
+// passes its own bench, and the bug is in how it meets the SoC, not in the
+// cache in isolation.
+`ifdef KOTI_DCACHE
   dcache dc (
       .clk(clk), .rst(rst),
       .c_req(dc_req), .c_we(d_we), .c_ptw(d_ptw), .c_addr(d_addr),

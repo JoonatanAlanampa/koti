@@ -369,6 +369,15 @@ Two observations from that boot, neither blocking:
   **on**): `MemTotal: 25020 kB`, `MemFree: 19412 kB`, `buildroot login:`.
   📌 Boot cost ~0.65% — `Run /init` at 45.02 s against 44.73 s at 16 MB, the
   kernel initialising twice the page structs.
+  🔌 **AND IT IS THE STANDALONE MACHINE**: `fujprog -j flash` (142.72 s), power
+  pulled and restored, nothing loaded over JTAG ⇒ `MemTotal: 25020 kB`,
+  `MemFree: 19424 kB`, `buildroot login:`.
+  🪤 **A power cycle REMOVES COM3.** The FT231X is bus-powered from the same
+  USB, so a capture holding the port open across one dies with
+  `PermissionError: ClearCommError failed` — which reads as a crashed tool and
+  is nothing of the sort. `fpga/ulx3s/waitboot.py` waits for the port to
+  re-enumerate and then captures; use it for cold boots, and `boottime.py` for
+  SRAM loads.
 - ✅ `koti-sd … read-only` — **COSMETIC, and already fixed in git. The card is
   writable.** The kernel on the card was built **21:04:58 UTC**, which is 2m26s
   *after* the write half landed (`a235672`, 21:02:32) and 17 min *before* the

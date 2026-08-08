@@ -18,8 +18,9 @@
 # THREE THINGS THAT WOULD MAKE IT A LIE IF GOT WRONG, all taken from the RTL:
 #
 #   * LOWERCASE RENDERS AS UPPERCASE. vga_text.sv does
-#         chf = (ch[6:5] == 2'b11) ? ch - 8'h20 : ch
-#     and the ROM only holds 0x20..0x5F, so 0x60..0x7F fold onto 0x40..0x5F.
+#         chf = ch          (no transformation since 2026-08-08)
+#     and the ROM holds all 96 glyphs of 0x20..0x7F. Until then it folded
+#     0x60..0x7F onto 0x40..0x5F, for die area on an 8x2 tile.
 #     koti's screen genuinely has no lowercase glyphs.
 #   * A CELL IS 16x16 SCREEN PIXELS, not 8x8: the scan-out indexes the font with
 #     x[3:1] and y[3:1], i.e. every font pixel is doubled. 40x16 = 640,
@@ -63,8 +64,18 @@ def load_font():
 
 
 def fold(ch):
-    """vga_text.sv: (ch[6:5] == 2'b11) ? ch - 0x20 : ch — lowercase -> uppercase."""
-    return ch - 0x20 if (ch >> 5) & 3 == 3 else ch
+    """No fold since 2026-08-08 — vga_text.sv passes the character through.
+
+    It used to be `(ch[6:5] == 2'b11) ? ch - 0x20 : ch`, mapping lowercase onto
+    uppercase because the ROM only held 0x20..0x5F. The ROM carries all 96
+    glyphs now, so this is the identity and lowercase renders as lowercase.
+
+    ⚠️ Kept as a function rather than deleted at the call site: this file's
+    whole claim is that it models the HARDWARE, so the place where the hardware
+    once transformed a character is where a future transformation belongs. If
+    vga_text.sv ever maps characters again, it goes here.
+    """
+    return ch
 
 
 def lay_out(text):

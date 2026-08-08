@@ -32,6 +32,15 @@ jobs:
       - name: disassembler and the straddle audit
         run: python3 test/test_rvdis.py
 
+      # The font ROM is GENERATED, COMMITTED, and read by two consumers that
+      # must agree — vga_text.sv scans it out, screenshot.py reconstructs the
+      # README's screens from it. Nothing checked either until 2026-08-08, when
+      # lowercase was added by deleting a fold in the RTL and a `continue` in
+      # the generator. Doing one without the other renders the wrong glyph and
+      # fails no test.
+      - name: the font ROM is the font we think it is
+        run: python3 test/test_font.py
+
       # The four source lists and src/ must agree. Cheap, needs nothing, and it
       # runs FIRST because it catches the failure that has cost this repo two
       # red runs in one day: a file added to src/ that a list was never told

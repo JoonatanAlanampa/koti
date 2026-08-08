@@ -34,6 +34,12 @@ on:
       - 'sw/linux/buildroot_koti.fragment'
       - 'sw/linux/check_rootfs.py'
       - '.github/workflows/userspace.yaml'
+      # ⚠️ The overlay is BAKED INTO the rootfs, so a change here is a change to
+      # the artifact — and /init lives in it, which is the first thing the
+      # kernel executes. Without this line an overlay-only edit leaves the
+      # committed cpio stale: check_initramfs.py would catch it later, in
+      # `linux`, as a confusing failure about a file nobody had just touched.
+      - 'sw/linux/rootfs-overlay/**'
 
 jobs:
   rootfs:

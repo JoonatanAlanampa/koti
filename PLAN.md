@@ -162,8 +162,23 @@ Software, in order:
        — possible duplicate keystrokes, never reproduced. There is now no
        fallback input path, so this is worth chasing.
 
-9. [ ] ⌨️ **The USB keyboard's LINUX half — a devicetree node and an input
-       driver.** Today keystrokes are NOT an input device: `usb_kbd.sv` →
+9. [x] ⌨️ **DONE, AND VERIFIED ON HARDWARE 2026-08-08.** The keyboard is a real
+       Linux input device:
+       ```
+       input: Koti USB HID keyboard as /devices/platform/soc/60000.keyboard/input/input0
+       koti-kbd 60000.keyboard: koti keyboard on irq 1; hvc0 keeps its own port
+       ```
+       `src/usb_kbd.sv` grew a SECOND read port at +0x08 with its own pointer
+       and overflow bit, so the firmware keeps feeding `hvc0` from +0x00 and the
+       driver feeds `/dev/input/eventN` from its own — one keypress reaching the
+       console AND evdev, as a PC does. ⛔ Port 2 is strictly passive and CANNOT
+       starve port 1; that property is `test/tb_usb_kbd.v` test 5, proven able
+       to fail (`got 8, want 40`).
+       ⚠️ The RTL/driver landed in `2ee14b9` but the BOARD ran a kernel built
+       the previous day, so it was written-but-unverified for most of a day.
+       Hardware verification needed the current Image written to the microSD.
+
+       ~~(the original entry)~~ Keystrokes were NOT an input device: `usb_kbd.sv` →
        MMIO → `sw/usbkbd.c` (M-mode firmware, Finnish keymap) → SBI
        `console_getchar` → `hvc0`. Linux therefore sees *console characters*,
        exactly as it would from a UART. Verified 2026-08-08: **zero**
@@ -176,8 +191,35 @@ Software, in order:
        recognised koti's PS/2 word, so this is a small custom driver either
        way — plan for one, not for `usbhid` to just work.
 
-9b.[ ] 🖥️ **Let the input device actually drive the console — a VT plus a
-       console driver Linux knows about.** The natural sequel to item 9, and
+9b.[x] 🖥️ **DONE ON HARDWARE 2026-08-08 — LINUX OWNS THE SCREEN.**
+       ```
+       [ 5.945626] Console: switching to mono koti 40x30 text 40x30
+       [ 6.667186] koticon 40000.koticon: koti text console 40x30 at pa 0x01caa000;
+                   the firmware keeps its own buffer
+       ```
+       The HDMI monitor shows kernel messages and STOPS before `buildroot
+       login:` — which is the success signature, not a fault: the screen is the
+       VT, and the login prompt lives on `hvc0` over the UART.
+       ⭐ **THE OWNERSHIP HANDOVER THIS ITEM WARNED ABOUT DOES NOT EXIST.** The
+       raster reads the charbuf at whatever address `VGA_BASE` holds — the base
+       is a REGISTER. `sw/linux/koticon.c` allocates its own page and points the
+       hardware at it; M-mode keeps writing 0x0100_8000 forever, into memory
+       nobody displays. No SBI call, no firmware change, no protocol.
+       ⭐ Text mode, not fbcon: koti has character cells, so a `struct consw`
+       writes 8-bit characters and the font ROM in fabric renders them.
+       🪤 **The first hardware test showed a BLANK screen and the driver was
+       working the whole time**: bootargs said `console=hvc0` alone, so nothing
+       ever wrote to tty1 and a buffer full of spaces renders as black. Fixed by
+       `console=tty1 console=hvc0` — order load-bearing, last one becomes
+       /dev/console and therefore where the login prompt lives.
+       🪤 **The DTB lives in the FIRMWARE, which lives in the BITSTREAM.** A new
+       DT node needs a place-and-route and a reflash, not just a kernel; the
+       first attempt ran a new kernel against an old machine description.
+       ⛔ **STILL TO DO for a shell on the screen: a getty on `tty1`.** Today the
+       monitor shows kernel messages only, because `/dev/console` is hvc0 and
+       nothing runs a getty on the VT. That is an inittab change in the rootfs.
+
+       ~~(the original entry)~~ The natural sequel to item 9, and
        the thing that would make koti a computer whose OS owns its own screen
        and keyboard instead of borrowing both from the firmware.
        - **The problem, precisely.** Linux has two kinds of console. `hvc0` is

@@ -62,7 +62,28 @@
 		 * only via /init, and only after a firmware reflash since the DTB
 		 * ships in flash.
 		 */
-		bootargs = "console=hvc0 earlycon=sbi random.trust_bootloader=1 root=/dev/kotisd2 rootfstype=ext2 rw";
+		/*
+		 * ⭐ TWO consoles, and the ORDER is load-bearing. printk goes to
+		 * every `console=` listed, so tty1 is what puts kernel messages
+		 * on the HDMI monitor through koticon (PLAN.md item 9b) — without
+		 * it koticon owns the screen and nothing ever writes to it, which
+		 * renders as a perfectly working BLANK display. That is exactly
+		 * what the first hardware test showed.
+		 *
+		 * ⚠️ hvc0 is LAST because the last `console=` becomes /dev/console,
+		 * and therefore where the login prompt lives. Keeping it on the
+		 * serial line means a bring-up session watching COM3 still sees
+		 * the prompt it expects. Swapping the order moves the login to the
+		 * screen — which is desirable eventually, but it needs a getty on
+		 * tty1 and it should be a deliberate change, not a side effect of
+		 * how this string is ordered.
+		 *
+		 * ⚠️ koti's UART IS TRANSMIT-ONLY. A serial console here can be
+		 * read and never typed at; every keystroke arrives through the USB
+		 * keyboard and SBI console_getchar. Do not assume a serial console
+		 * implies a serial terminal.
+		 */
+		bootargs = "console=tty1 console=hvc0 earlycon=sbi random.trust_bootloader=1 root=/dev/kotisd2 rootfstype=ext2 rw";
 
 		/*
 		 * ⚠️ THIS SEED IS NOT SECRET AND NOT RANDOM. It is a fixed

@@ -81,7 +81,7 @@ def main():
         defines={"KOTI_FPGA": 1},
         timescale=("1ns", "1ps"),
         # ALWAYS rebuild. cocotb's runner decides staleness from source
-        # timestamps and ignores build_args, so toggling -DKOTI_FPGA here
+        # timestamps and ignores build_args, so toggling here
         # silently reuses the previous binary and the run reports on a
         # configuration you are not testing. That cost a wrong conclusion
         # once — "still failing with SDRAM off" — when SDRAM was in fact

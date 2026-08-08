@@ -18,15 +18,20 @@ deliberate scope decision, and it changes what the constraints are:
 | No storage; software lives in flash | **Onboard microSD** ⇒ a real root filesystem |
 | Regfile needs a DFFRAM macro to route | Regfile is flops; no macro, no harden |
 
-Consequence: **the ASIC blockers are no longer on the critical path.** The
-32x32 RF macro, the red 8x2 harden and the shuttle submission are parked
-below, not deleted — Koti-1-as-a-chip stays a possible future project, but
-nothing about the computer waits on it.
+Consequence: **the ASIC blockers are gone, not parked.** ⛔ **User directive
+2026-08-08: "Koti will not be taped out. Clean ASIC related stuff so the focus
+is on this FPGA project purely."** The 32x32 RF macro, the red 8x2 harden and
+the shuttle submission are no longer tracked, and the apparatus that served
+them has been DELETED — TinyTapeout flow files, the `gds`/`docs`/`fpga`
+workflows, the ASIC cocotb suite, and every `KOTI_FPGA` conditional in `src/`.
+There is one configuration now and it is the board. Details, including what
+test coverage went with it, are at the end of the TODO list.
 
-The self-imposed rule that the FPGA build instantiates `tt_um_koti`
-*unchanged* was there so the FPGA validated the thing being hardened. With
-hardening off the critical path that rule is now a choice, not a
-requirement — see "Open architecture decisions" below.
+`tt_um_koti` keeps its name and its `ui_in`/`uo_out`/`uio_*` port list. That is
+not a residual: `uio` is how the design reaches the QSPI flash on the pmod
+variant and `uo` carries the VGA personality, so those pins are live on the
+ULX3S. Renaming the top level is a refactor with no functional payoff, and it
+would touch the harness, the LPF and every bench at once.
 
 ## TODO — the ladder to a usable machine
 
@@ -336,12 +341,33 @@ Software, in order:
        machine that boots Linux and a machine that can run things on it. It also
        de-risks item 11, whose stack costs RAM koti does not currently have.
 
-Parked — Koti-1 as a chip (nothing above depends on these):
-- [ ] Generate the 32x32 2R1W regfile macro with AUCOHL/DFFRAM
-      (`dffram.py -p sky130A -s sky130_fd_sc_hd -b <rf-2r1w> 32x32`; a Linux
-      flow, so CI or WSL). Verified open and self-generatable 2026-07-22.
-- [ ] Integrate it and re-harden 8x2 (currently red — PDN-0233).
-- [ ] Submit Koti-1 to a shuttle.
+~~Parked — Koti-1 as a chip~~ — **REMOVED 2026-08-08 (user directive: "Koti
+will not be taped out. Clean ASIC related stuff so the focus is on this FPGA
+project purely").** The DFFRAM 32x32 regfile macro, the 8x2 harden and the
+shuttle submission are no longer tracked here, and the apparatus that served
+them is deleted rather than parked: `info.yaml`, `src/config.json`,
+`docs/info.md`, the `gds`/`docs`/`fpga` workflows, the ASIC cocotb suite
+(`test/tb.v`, `test/test.py`, `test/run.py`, `test/Makefile`) and every
+`KOTI_FPGA` conditional in `src/`.
+⭐ The collapse was proven behaviour-preserving rather than assumed: the old
+`project.sv` preprocessed with `-DKOTI_FPGA` and the new one preprocessed with
+nothing are **identical, 285 lines each**.
+⚠️ **What the ASIC suite took with it, honestly.** Its five tests were all
+built on the CPU reaching flash AND PSRAM over the QSPI pins — a configuration
+that no longer exists — so they could not simply be moved. Two guarded named
+defects:
+- **F3** (disabling video parks the arbiter grant) → re-expressed as
+  `test/tb_vga_grant.v`, at module level, no CPU needed, and **proven able to
+  fail**: restoring `assign v_req = f_busy && en` trips it.
+- 🔴 **F1** (a partial address compare aliased flash data into the MMIO
+  carve-out every 512 KB) → **NOT re-expressed. This is a real coverage gap.**
+  The fix is still in `koti_core.sv` (`io_m = addr_m[31:16] == 16'h0001`) but
+  nothing would now catch its removal. It needs a running CPU to test, so the
+  cheapest restoration is a directed case in `test/run_cpu.py` (cocotb) or a
+  bare-metal image that reads flash past 64 KB and checks it is flash data.
+  `test_koti_boot_and_timer`, `test_vga_text` and `test_hello_c` went too;
+  those are substantially covered by `tb_boot`, `tb_fpga_bram` and the real
+  hardware, which is why they are not listed as gaps.
 
 ## Architecture decisions — ALL FOUR CLOSED (2026-08-03 / 2026-08-04)
 

@@ -2,10 +2,9 @@ name: fpga-ulx3s
 
 # Builds the ULX3S 85F prototype bitstream: yosys -> nextpnr-ecp5 -> ecppack.
 #
-# NOT to be confused with `fpga.yaml`, which is TinyTapeout's stock
-# ICE40UP5K action for TT's ASIC-simulation FPGA board — a different chip, a
-# different board, and disabled (`branches: none`). This workflow is the one
-# that produces something you can flash onto the ULX3S.
+# This is the ONLY bitstream workflow. It used to share the repo with
+# TinyTapeout's stock ICE40UP5K `fpga.yaml`, which was disabled and has been
+# deleted along with the rest of the ASIC apparatus (2026-08-08).
 #
 # It lives in CI rather than on the developer's PC on purpose: the 85F
 # place-and-route is the slow step by a wide margin, and local heavy compute is
@@ -31,9 +30,10 @@ on:
       #
       #   bringup  prints forever, never touches video. The default, and the only
       #            image whose banner can be read without racing 5 ms.
-      #   memtest  walks the 16 MB RAM window with an address-derived pattern.
-      #            The one that proves the SDRAM's address decode rather than
-      #            just its read timing.
+      #   memtest  walks the full 32 MB RAM window with an address-derived
+      #            pattern, plus a walking-1 `addrbits` phase that NAMES a dead
+      #            address bit. The one that proves the SDRAM's address decode
+      #            rather than just its read timing. ⚠️ SW3 OFF for this image.
       #   sdtest   initialises the microSD card and reads blocks from it, then
       #            checks the two properties that hold for ANY card: the same
       #            block reads the same twice, and a different block reads
@@ -65,7 +65,7 @@ on:
       # Extra `define`s for the synthesis, so that a bitstream which differs
       # from main by one feature can be built WITHOUT a commit that changes what
       # main means. It exists because of the D-cache: the cache is enabled by
-      # KOTI_FPGA, so the only way to get the OTHER half of an A/B onto the
+      # default, so the only way to get the OTHER half of an A/B onto the
       # bench is `-DKOTI_NO_DCACHE`, and hand-editing RTL to get a comparison
       # bitstream is how two variables end up in one experiment.
       #
@@ -194,13 +194,13 @@ jobs:
             echo "::notice::EXTRA DEFINES: $user_def — this bitstream is NOT what main builds"
           fi
           echo "variant=${{ matrix.variant }} extra=$extra"
-          # -DKOTI_FPGA serves the RAM half of the memory map from the board's
+          # serves the RAM half of the memory map from the board's
           # onboard 32 MB SDRAM rather than the QSPI Pmod's PSRAM. Must match
           # fpga/ulx3s/synth.ps1 and test/run_fpga.py: if the simulated and the
           # synthesised configurations differ, the suite proves nothing about
           # the bitstream.
           yosys -l fpga/ulx3s/build/yosys.log \
-            -p "read_verilog -sv -DKOTI_FPGA $extra -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
+            -p "read_verilog -sv $extra -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
 
       # nextpnr fails by design when the 25 MHz constraint in ulx3s.lpf is not
       # met. Capture its exit code instead of letting the step die, so the

@@ -170,24 +170,7 @@ module ulx3s_top (
   // concern, not a design one.
   wire [15:0] sdram_dout;
   wire        sdram_doe;
-`ifdef KOTI_FPGA
   assign sdram_d = sdram_doe ? sdram_dout : 16'bz;
-`else
-  // SDRAM build switched off: park the part safely rather than leaving its
-  // pins floating. CKE low and CS# high means it ignores everything, so the
-  // board is in a defined state and the QSPI Pmod serves RAM exactly as it did
-  // before the swap. This branch exists so there is always a known-good
-  // configuration to fall back to and to bisect against.
-  assign sdram_d    = 16'bz;
-  assign sdram_cke  = 1'b0;
-  assign sdram_csn  = 1'b1;
-  assign sdram_rasn = 1'b1;
-  assign sdram_casn = 1'b1;
-  assign sdram_wen  = 1'b1;
-  assign sdram_a    = 13'd0;
-  assign sdram_ba   = 2'd0;
-  assign sdram_dqm  = 2'b11;
-`endif
 
   // The part latches on the RISING edge of its own clock, so feeding it the
   // inverted system clock puts our outputs half a cycle ahead of it: 20 ns of
@@ -201,7 +184,6 @@ module ulx3s_top (
       .uio_in  (uio_in),
       .uio_out (uio_out),
       .uio_oe  (uio_oe),
-`ifdef KOTI_FPGA
       .sdram_cke  (sdram_cke),
       .sdram_csn  (sdram_csn),
       .sdram_rasn (sdram_rasn),
@@ -229,14 +211,12 @@ module ulx3s_top (
       .usb_key_modifiers(usb_key_modifiers),
       .usb_key1(usb_key1), .usb_key2(usb_key2),
       .usb_key3(usb_key3), .usb_key4(usb_key4),
-`endif
       .ena     (1'b1),
       .clk     (clk_25mhz),
       .rst_n   (rst_n)
   );
 
   // ------------------------------------------------------- onboard microSD
-`ifdef KOTI_FPGA
   wire soc_sd_cs_n, soc_sd_sck, soc_sd_mosi;
   wire soc_sd_miso_drv, soc_sd_miso_oe;
   assign sd_clk  = soc_sd_sck;
@@ -267,13 +247,6 @@ module ulx3s_top (
   // its own pull-up, so a bench stays green while the board goes deaf. The check
   // is the nextpnr log line above.
   assign sd_d[0] = soc_sd_miso_oe ? soc_sd_miso_drv : 1'bz;
-`else
-  // The QSPI build has no SD peripheral, so park the bus rather than leave it
-  // floating: CS high means the card ignores the pins entirely.
-  assign sd_clk  = 1'b0;
-  assign sd_cmd  = 1'b1;
-  assign sd_d    = {1'b1, 1'b1, 1'b1, 1'bz};
-`endif
 
   // ------------------------------------------------------- J1: QSPI Pmod
   // uio numbering (TT QSPI Pmod standard):
@@ -386,7 +359,6 @@ module ulx3s_top (
   // core oversamples 8x, so 12 MHz is not negotiable — it is the bit rate. The
   // two clocks are unrelated, so a proper crossing is mandatory; src/usb_kbd.sv
   // does it, and everything crossing is the ONE toggle generated below.
-`ifdef KOTI_FPGA
   wire clk_usb, usb_pll_lock;
   // ⚠️ The module really is called `clock` — a regrettably generic name, but it
   // is vendored verbatim from the core author's own ULX3S example and renaming
@@ -419,14 +391,12 @@ module ulx3s_top (
   // domain that owns it, and usb_kbd edge-detects it on the other side.
   logic usb_report_tog = 1'b0;
   always_ff @(posedge clk_usb) if (usb_report) usb_report_tog <= ~usb_report_tog;
-`endif
 
   // ------------------------------------------------------------ GPDI / HDMI
   // koti's standard video output (user directive 2026-08-07). The encoder trio
   // is vendored VERBATIM from console, which drove this exact board's HDMI on
   // 2026-08-06 — see vendor/README.md. A TMDS encoder is not where original
   // work belongs.
-`ifdef KOTI_FPGA
   wire [5:0] video_rgb;
   wire       video_hs, video_vs, video_de;
 
@@ -458,13 +428,6 @@ module ulx3s_top (
       .hsync (video_hs), .vsync (video_vs), .de (video_de),
       .gpdi_dp (gpdi_dp), .phase_err (dvi_phase_err)
   );
-`else
-  // The QSPI/ASIC-shaped build has no video pipeline exported, so park the pairs
-  // rather than leave them floating.
-  assign gpdi_dp = 4'b0000;
-  wire   dvi_phase_err = 1'b0;
-  wire   pll_lock      = 1'b0;
-`endif
 
   // SW4 off = the raw chip personality, which is the view you want at first
   // power: LED0 flickers with UART traffic, LED1 is HALTED (a solid LED1

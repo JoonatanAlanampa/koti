@@ -54,7 +54,6 @@ module tt_um_koti (
     input  wire [7:0] uio_in,   // IOs: Input path
     output wire [7:0] uio_out,  // IOs: Output path
     output wire [7:0] uio_oe,   // IOs: Enable path (active high: 0=input, 1=output)
-`ifdef KOTI_FPGA
     output wire        sdram_cke,
     output wire        sdram_csn,
     output wire        sdram_rasn,
@@ -100,7 +99,6 @@ module tt_um_koti (
     input  wire        usb_conerr,
     input  wire [7:0]  usb_key_modifiers,
     input  wire [7:0]  usb_key1, usb_key2, usb_key3, usb_key4,
-`endif
     input  wire       ena,      // always 1 when the design is powered, so you can ignore it
     input  wire       clk,      // clock
     input  wire       rst_n     // reset_n - low to reset
@@ -178,7 +176,6 @@ module tt_um_koti (
   // aliased flash data past 64 KB into these windows every 512 KB (F1).
   wire clint_range = d_addr[23:14] == 10'h002;
   wire vga_range   = d_addr[23:14] == 10'h004;
-`ifdef KOTI_FPGA
   // microSD at 0x0005_0000, the next free 64 KB window after VGA/PS2. Decoded
   // in FULL like the others: a partial compare aliased flash data into these
   // windows every 512 KB (defect F1), which is the sort of bug that reads as
@@ -187,10 +184,6 @@ module tt_um_koti (
   // USB HID keyboard at 0x0006_0000, the next window after the microSD. Same
   // full compare, same reason.
   wire usb_range   = d_addr[23:14] == 10'h006;
-`else
-  wire sd_range    = 1'b0;
-  wire usb_range   = 1'b0;
-`endif
   // PLIC: the TOP 4 MB of flash address space, 0x00C0_0000..0x00FF_FFFF.
   //
   // It cannot live in a 64 KB carve-out beside the CLINT: the SiFive layout
@@ -302,7 +295,6 @@ module tt_um_koti (
 
   // ---- microSD (FPGA only) ----
   wire [31:0] sd_rdata;
-`ifdef KOTI_FPGA
   sd_ctrl sd (
       .clk(clk), .rst(rst),
       .sel(sd_sel_i && !sd_ack), .we(d_we), .reg_a(d_addr[2:0]),
@@ -310,17 +302,11 @@ module tt_um_koti (
       .sd_cs_n(sd_cs_n), .sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso),
       .sd_miso_drv(sd_miso_drv), .sd_miso_oe(sd_miso_oe)
   );
-`else
-  // No pins on silicon, so the window reads as zero rather than as x. An x here
-  // would reach the CPU through d_rdata and look like a core defect.
-  assign sd_rdata = 32'd0;
-`endif
 
   // ---- USB HID keyboard (FPGA only) ----
   // The vendored host core lives in the harness, in its own 12 MHz domain;
   // usb_kbd does the crossing and turns held keys into keystrokes.
   wire [31:0] usb_rdata;
-`ifdef KOTI_FPGA
   usb_kbd ukbd (
       .clk(clk), .rst(rst),
       .sel(usb_sel_i && !usb_ack), .we(d_we), .reg_a(d_addr[1:0]),
@@ -331,10 +317,6 @@ module tt_um_koti (
       .usb_key3(usb_key3), .usb_key4(usb_key4),
       .kb_avail_irq(usb_kb_irq)
   );
-`else
-  assign usb_rdata  = 32'd0;
-  assign usb_kb_irq = 1'b0;
-`endif
 
   wire ad_ack;
   assign d_ack   = clint_ack || vga_ack || plic_ack || sd_ack || usb_ack || ad_ack;
@@ -361,7 +343,6 @@ module tt_um_koti (
   // TinyTapeout tile has none — the same reason sdram_ctrl.sv is an FPGA-only
   // source. Since koti stopped being a tapeout target (2026-08-02) the FPGA
   // build is the real design and this is where speed is worth buying.
-`ifdef KOTI_FPGA
   icache #(.ENTRIES(512)) ic (
       .clk(clk), .rst(rst), .flush(icache_flush),
       .req(if_req), .ptw(if_ptw), .addr(if_addr),
@@ -369,16 +350,6 @@ module tt_um_koti (
       .m_req(fc_req), .m_addr(fc_addr), .m_ack(fc_ack),
       .m_rdata(m_rdata), .m_rdata2(m_rdata2)
   );
-`else
-  // Straight through: the fetch port is wired to the arbiter exactly as it was
-  // before the cache existed, and read data comes off the memory bus.
-  assign fc_req    = if_req;
-  assign fc_addr   = if_addr;
-  assign if_ack    = fc_ack;
-  assign if_rdata  = m_rdata;
-  assign if_rdata2 = m_rdata2;
-  wire _unused_ic  = &{if_ptw, icache_flush, 1'b0};
-`endif
 
   // ---- data cache (FPGA only) --------------------------------------------
   // Sits between the data port and the arbiter. MMIO is already excluded here
@@ -408,11 +379,9 @@ module tt_um_koti (
 // the real board without editing RTL. What that selects is not an untested
 // special case — it is the same bypass every ASIC build compiles and every
 // ASIC test exercises, and it is what booted Linux on hardware before this.
-`ifdef KOTI_FPGA
 `ifndef KOTI_NO_DCACHE
 `ifndef KOTI_DCACHE
 `define KOTI_DCACHE
-`endif
 `endif
 `endif
 
@@ -446,7 +415,6 @@ module tt_um_koti (
       .m_wdata(m_wdata), .m_be(m_be), .m_ack(m_ack)
   );
 
-`ifdef KOTI_FPGA
 `ifdef KOTI_SIMMEM
   // ---- simulation only: one behavioural memory instead of two controllers --
   //
@@ -600,23 +568,6 @@ module tt_um_koti (
   assign m_rdata  = s_ack ? s_rdata  : q_ack ? q_rdata  : 32'd0;
   assign m_rdata2 = s_ack ? s_rdata2 : q_ack ? q_rdata2 : 32'd0;
 `endif
-`else
-  // ASIC: one controller serves both devices, and ITS select is its addr[22].
-  // The core's map now spends TWO bits on the device (a[23:22]), so translate
-  // rather than pass through: anything outside the flash quarter is RAM, and
-  // the within-device offset is a[21:0]. The 8 MiB part cannot cover the whole
-  // 32 MB window, so koti_core's pa_ram_hi faults a[23] and a[21] on this
-  // build — which is what keeps the addresses that DO arrive here unambiguous.
-  qspi_ctrl qspi (
-      .clk(clk), .rst(rst), .cfg(qspi_cfg),
-      .req(m_req), .we(m_we), .burst(m_burst),
-      .addr({(m_addr[23:22] != 2'b00), m_addr[21:0]}),
-      .wdata(m_wdata), .be(m_be),
-      .ack(m_ack), .rdata(m_rdata), .rdata2(m_rdata2),
-      .sck(sck), .sd_out(sd_out), .sd_oe(sd_oe), .sd_in(sd_in),
-      .cs_flash_n(cs_flash_n), .cs_ram_n(cs_ram_n)
-  );
-`endif
 
   // QSPI Pmod: uio[1,2,4,5] = SD0..SD3, direction owned by the controller
   assign sd_in = {uio_in[5], uio_in[4], uio_in[2], uio_in[1]};
@@ -643,7 +594,6 @@ module tt_um_koti (
 
   assign uo_out = vga_en ? uo_vga : {led[5:0], halted, uart_txd};
 
-`ifdef KOTI_FPGA
   // The same pixels the VGA personality packs into `uo`, unpacked. Deliberately
   // NOT gated on `vga_en`: the HDMI link must keep running whatever the SoC is
   // doing, so the monitor holds its lock instead of resyncing every time
@@ -653,7 +603,6 @@ module tt_um_koti (
   assign video_hs  = vt_hs;
   assign video_vs  = vt_vs;
   assign video_de  = vt_act;
-`endif
 
   wire _unused = &{ena, uio_in[7:6], uio_in[3], uio_in[0], led[7:6], 1'b0};
 

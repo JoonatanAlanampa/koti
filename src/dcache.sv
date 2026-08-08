@@ -54,10 +54,11 @@
 // but it means the cache cannot be left stale by a write from any source,
 // which is a property worth having by construction rather than by argument.
 //
-// FPGA-only, behind KOTI_FPGA like sdram_ctrl and icache: a TinyTapeout tile
-// has no block RAM to put this in. ✅ ENABLED on every FPGA build since
-// 2026-08-08 — project.sv derives KOTI_DCACHE from KOTI_FPGA, and
-// `KOTI_NO_DCACHE` is the bring-up switch that puts the bypass back.
+// ✅ ENABLED on every build since 2026-08-08 — project.sv defines KOTI_DCACHE
+// unconditionally, and `KOTI_NO_DCACHE` is the bring-up switch that puts the
+// bypass back. (It was behind `KOTI_FPGA` while koti still had an ASIC
+// configuration with no block RAM to put a cache in; that configuration was
+// deleted the same day.)
 //
 // ══════════════════════════════════════════════════════════════════════════
 // ⭐ THE ACK CYCLE IS NOT AN ACCEPT CYCLE. That single rule — the `!ack_q` term

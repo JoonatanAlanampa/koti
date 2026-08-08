@@ -41,14 +41,6 @@ jobs:
       - name: The source lists agree with src/
         run: python3 test/check_sources.py
 
-      - name: Run tests
-        run: |
-          cd test
-          make clean
-          make
-          # make will return success even if the test fails, so check for failure in the results.xml
-          ! grep failure results.xml
-
       # sdram_ctrl against a strict behavioural part. Standalone because the
       # controller is verified before it goes anywhere near the SoC — a memory
       # controller that is wrong in a corner is far cheaper to find here than
@@ -95,6 +87,16 @@ jobs:
           iverilog -g2012 -o tb_usb_kbd.vvp ../src/usb_kbd.sv tb_usb_kbd.v
           vvp tb_usb_kbd.vvp | tee usb_kbd.log
           grep -q "tb_usb_kbd: PASS" usb_kbd.log
+
+          # F3, re-expressed at module level. It had a cocotb test in the ASIC
+          # configuration; that configuration was removed on 2026-08-08 when
+          # koti became FPGA-only, and the defect did not retire with it. A
+          # video refill that has been granted must finish even if software
+          # disables the display, or the arbiter parks holding a grant for a
+          # request that no longer exists and the CPU stalls forever.
+          iverilog -g2012 -I ../src -o tb_vga_grant.vvp             ../src/vga_text.sv ../src/vga_timing.sv tb_vga_grant.v
+          vvp tb_vga_grant.vvp | tee vga_grant.log
+          grep -q "tb_vga_grant: PASS" vga_grant.log
 
       # PLIC standalone, same pure-Verilog pattern. An interrupt controller is
       # another block that can be wrong by being QUIET: one that never asserts
@@ -172,7 +174,7 @@ jobs:
         run: |
           mkdir -p fpga/ulx3s/build
           python3 fpga/ulx3s/mkflashhex.py sw/bringup.bin fpga/ulx3s/build/flash.hex
-          iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_FLASH_BRAM \
+          iverilog -g2012 -I src -DKOTI_FLASH_BRAM \
             -o tb_fpga_bram.vvp src/*.sv src/usb_hid_host_rom.v vendor/*.sv vendor/*.v \
             fpga/ulx3s/bram_flash.sv fpga/ulx3s/ulx3s_top.sv \
             test/sdram_model.sv test/sd_card_model.sv \
@@ -192,7 +194,7 @@ jobs:
         run: |
           mkdir -p fpga/ulx3s/build
           python3 fpga/ulx3s/mkflashhex.py sw/sdraw.bin fpga/ulx3s/build/flash.hex
-          iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_FLASH_BRAM \
+          iverilog -g2012 -I src -DKOTI_FLASH_BRAM \
             -o tb_sdraw.vvp src/*.sv src/usb_hid_host_rom.v vendor/*.sv vendor/*.v \
             fpga/ulx3s/bram_flash.sv fpga/ulx3s/ulx3s_top.sv \
             test/sdram_model.sv test/sd_card_model.sv \
@@ -217,7 +219,7 @@ jobs:
           python3 tools/sdkernel.py build fake_kernel.bin --hex boot.hex
           python3 fpga/ulx3s/mkflashhex.py sw/sbi/sbi_sd.bin \
             fpga/ulx3s/build/flash.hex
-          iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_FLASH_BRAM \
+          iverilog -g2012 -I src -DKOTI_FLASH_BRAM \
             -o tb_sdboot.vvp src/*.sv src/usb_hid_host_rom.v vendor/*.sv vendor/*.v \
             fpga/ulx3s/bram_flash.sv fpga/ulx3s/ulx3s_top.sv \
             test/sdram_model.sv test/sd_card_model.sv \

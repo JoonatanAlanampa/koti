@@ -8,7 +8,7 @@
  * millions of clocks and out of iverilog's reach). That is the same reason
  * tb_icache.v and tb_plic.v are plain Verilog, one scale up.
  *
- * It builds with -DKOTI_FPGA -DKOTI_SIMMEM, so the machine is the ULX3S one —
+ * It builds with -DKOTI_SIMMEM, so the machine is the ULX3S one —
  * I-cache, 16 MB window, the real core, CLINT, PLIC and UART — with
  * test/sim_mem.sv standing in for qspi_ctrl and sdram_ctrl. What that costs is
  * written down in sim_mem.sv; the short version is that this bench proves

@@ -43,9 +43,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 
-# Modules compiled only into the ULX3S build (`ifdef KOTI_FPGA`). A TinyTapeout
-# tile has no block RAM and no pins for a card or a keyboard, so the ASIC lists
-# correctly leave these out.
+# Kept for the record: these five were once compiled only into the ULX3S build,
+# behind `ifdef KOTI_FPGA`, because a TinyTapeout tile had no block RAM and no
+# pins for a card or a keyboard. koti became FPGA-only on 2026-08-08, the second
+# configuration was deleted, and every list must now name every module — so this
+# set no longer excludes anything. It is left here because the NEXT question
+# about a source list is usually "why would a file be missing from one?".
 FPGA_ONLY = {"sdram_ctrl.sv", "icache.sv", "dcache.sv", "sd_ctrl.sv",
              "usb_kbd.sv"}
 
@@ -66,10 +69,6 @@ def main():
             names_in(ROOT / "fpga/ulx3s/sources.txt", r"src/(\w+\.sv)"), True),
         "test/run_fpga.py": (
             names_in(ROOT / "test/run_fpga.py", r'SRC_DIR / "(\w+\.sv)"'), True),
-        "test/run.py": (
-            names_in(ROOT / "test/run.py", r'SRC_DIR / "(\w+\.sv)"'), False),
-        "test/Makefile": (
-            names_in(ROOT / "test/Makefile", r"(\w+\.sv)"), False),
     }
 
     bad = []

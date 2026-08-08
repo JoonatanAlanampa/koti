@@ -562,37 +562,23 @@ module koti_core #(
     // banner over and over" symptom this block's comment already warns about.
     wire pa_lowmap   = (d_pa[25:24] == 2'b00);
     wire pa_dev      = pa_lowmap && ((d_pa[23:16] >= 8'h01
-`ifdef KOTI_FPGA
                                    && d_pa[23:16] <= 8'h06)   // 05 = SD, 06 = USB
-`else
-                                   && d_pa[23:16] <= 8'h04)
-`endif
                                   || d_pa[23:22] == 2'b11);
     wire pa_flash_ro = pa_lowmap && !pa_dev;
 
-    // The RAM-high check is about a MIRROR, not about a size limit, which is
-    // why it is not the same on both builds.
-`ifdef KOTI_FPGA
-    // ULX3S: the RAM half of the map is the board's soldered 32 MB SDRAM, and
-    // the whole 32 MB is now genuinely there — project.sv hands sdram_ctrl
-    // {m_addr[23], m_addr[21:0]}, which is a bijection from the two quarters
-    // PA[25:24] ∈ {01,10} onto the part's 8M words, so every address in the
-    // window reaches a distinct location and nothing mirrors.
-    // ⚠️ PA[25:24] == 11 (0x0300_0000+) is NOT memory: it is past the end of
-    // the part, and it is the only quarter left over. Faulting it is what keeps
-    // the change honest — without this, an address one bit too high would alias
-    // silently onto real RAM, which is the exact failure this item existed to
-    // remove rather than to move somewhere else.
+    // The RAM half is the board's soldered 32 MB SDRAM, and all of it is
+    // genuinely reachable — project.sv hands sdram_ctrl {m_addr[23],
+    // m_addr[21:0]}, a bijection from the two quarters PA[25:24] ∈ {01,10} onto
+    // the part's 8M words, so every address in the window reaches a distinct
+    // location and nothing mirrors.
+    // ⚠️ PA[25:24] == 11 (0x0300_0000+) is NOT memory: it is past the end of the
+    // part, and it is the only quarter left over. Faulting it is what keeps the
+    // 32 MB change honest — without it, an address one bit too high would alias
+    // silently onto real RAM, which is the exact failure that change existed to
+    // remove rather than to relocate.
+    // (Until 2026-08-08 this had a second arm for the ASIC build's 8 MiB QSPI
+    // PSRAM, whose address space mirrored above 8 MiB. koti is FPGA-only now.)
     wire pa_ram_hi = (d_pa[25:24] == 2'b11);
-`else
-    // QSPI Pmod: the APS6404 is 8 MiB and its address space MIRRORS above
-    // that, so an access with addr[23] set silently lands on a location it was
-    // never meant to touch. An access fault is the only way software finds
-    // out; silently aliasing is far worse than trapping.
-    // The ASIC build keeps an 8 MiB part, so everything above 0x0180_0000 in
-    // the (now larger) RAM window is a mirror, including the whole new quarter.
-    wire pa_ram_hi = !pa_lowmap && (d_pa[25] || d_pa[23]);
-`endif
     wire dacc_fault  = dmem_op_e
                     && ((d_isstore && pa_flash_ro) || pa_ram_hi);
 

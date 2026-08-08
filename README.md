@@ -53,9 +53,14 @@ genuinely read those bytes back off the card.
 - **No PS/2 keyboard.** Superseded by USB, and as of 2026-08-08 the RTL,
   firmware, pins and tests are gone too — the condition for removing it was
   that USB had typed on real hardware, and it had.
-- **This is an FPGA project.** Koti-1 is not going to a shuttle; see
-  [PLAN.md](PLAN.md). The ASIC path (8x2 tiles, a DFFRAM regfile macro) is
-  parked, not deleted.
+- **This is an FPGA project, and since 2026-08-08 it is ONLY an FPGA
+  project.** Koti-1 is not going to a shuttle, and the ASIC apparatus has been
+  removed rather than parked: the TinyTapeout flow files (`info.yaml`,
+  `src/config.json`, `docs/info.md`), the `gds`/`docs`/`fpga` workflows, and the
+  second RTL configuration behind `KOTI_FPGA` are all gone. There is one build
+  now, and it is the board.
+  ⚠️ Two guards from the retired ASIC test suite were re-expressed rather than
+  dropped — see `test/tb_vga_grant.v`. One was not; `PLAN.md` says which.
 
 ## Boot, end to end
 

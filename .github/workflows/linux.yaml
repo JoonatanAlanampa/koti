@@ -461,7 +461,7 @@ jobs:
           # error rather than a missing feature. It was left out when the SD
           # rung landed and killed this bench — and therefore the standing
           # userspace gate — from 05430e7 until it was noticed.
-          iverilog -g2012 -I src -DKOTI_FPGA -DKOTI_SIMMEM \
+          iverilog -g2012 -I src -DKOTI_SIMMEM \
             -o tb_boot.vvp src/*.sv vendor/sd_spi.sv vendor/spi_master.sv \
             test/sim_mem.sv test/tb_boot.v \
             2>&1 | grep -v "sorry:" || true
@@ -728,7 +728,7 @@ jobs:
         run: |
           verilator --binary --timing -j 0 -Wno-fatal \
             --timescale 1ns/1ps \
-            -Isrc -DKOTI_FPGA -DKOTI_SIMMEM \
+            -Isrc -DKOTI_SIMMEM \
             --top-module tb_boot -o tb_boot_vl \
             src/*.sv vendor/sd_spi.sv vendor/spi_master.sv \
             test/sim_mem.sv test/tb_boot.v

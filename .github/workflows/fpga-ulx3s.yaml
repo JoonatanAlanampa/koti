@@ -62,6 +62,20 @@ on:
         default: 'bringup'
         type: choice
         options: ['bringup', 'memtest', 'sdtest', 'sdraw', 'usbtest', 'sbi', 'hello']
+      # Extra `define`s for the synthesis, so that a bitstream which differs
+      # from main by one feature can be built WITHOUT a commit that changes what
+      # main means. It exists because of the D-cache: the cache is enabled by
+      # KOTI_FPGA, so the only way to get the OTHER half of an A/B onto the
+      # bench is `-DKOTI_NO_DCACHE`, and hand-editing RTL to get a comparison
+      # bitstream is how two variables end up in one experiment.
+      #
+      # ⚠️ A bitstream built with this is NOT what main builds. The name is in
+      # the artifact and in the run title for exactly that reason — do not flash
+      # one persistently and then forget which one is on the board.
+      defines:
+        description: 'extra synthesis defines, e.g. -DKOTI_NO_DCACHE (blank = what main builds)'
+        default: ''
+        type: string
 
 env:
   OSS_TAG: '2026-07-17'
@@ -158,6 +172,27 @@ jobs:
           else
             extra=""
           fi
+          # Whitelisted rather than interpolated straight into the yosys line:
+          # this string is dispatch input and it lands inside a shell command.
+          # A typo should stop the build, not silently synthesise something
+          # else — a bitstream that quietly ignored its define would be the
+          # worst possible outcome for an A/B.
+          user_def="${{ inputs.defines }}"
+          if [ -n "$user_def" ]; then
+            case "$user_def" in
+              *[!A-Za-z0-9_\ -]* | *-D[!A-Za-z_]* )
+                echo "::error::defines must be plain -DNAME tokens: '$user_def'"
+                exit 1 ;;
+            esac
+            for tok in $user_def; do
+              case "$tok" in
+                -D*) ;;
+                *) echo "::error::not a define: '$tok'"; exit 1 ;;
+              esac
+            done
+            extra="$extra $user_def"
+            echo "::notice::EXTRA DEFINES: $user_def — this bitstream is NOT what main builds"
+          fi
           echo "variant=${{ matrix.variant }} extra=$extra"
           # -DKOTI_FPGA serves the RAM half of the memory map from the board's
           # onboard 32 MB SDRAM rather than the QSPI Pmod's PSRAM. Must match
@@ -216,11 +251,27 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # A bitstream is an opaque blob and the bench cannot tell two apart by
+      # looking. This travels with it and says what it is.
+      - name: label the bitstream
+        run: |
+          {
+            echo "commit:  ${{ github.sha }}"
+            echo "variant: ${{ matrix.variant }}"
+            echo "image:   ${{ inputs.image || 'bringup' }}"
+            echo "defines: ${{ inputs.defines }}"
+            echo "run:     ${{ github.run_id }}"
+          } > fpga/ulx3s/build/BUILDINFO.txt
+          cat fpga/ulx3s/build/BUILDINFO.txt
+
+      # The artifact NAME changes when defines do, so a custom build cannot be
+      # downloaded by muscle memory and mistaken for what main builds.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: koti-fpga-${{ matrix.variant }}
+          name: koti-fpga-${{ matrix.variant }}${{ inputs.defines != '' && '-custom' || '' }}
           path: |
+            fpga/ulx3s/build/BUILDINFO.txt
             fpga/ulx3s/build/koti-${{ matrix.variant }}.bit
             fpga/ulx3s/build/yosys.log
             fpga/ulx3s/build/nextpnr.log

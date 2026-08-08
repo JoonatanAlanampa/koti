@@ -60,7 +60,18 @@
 // ⛔ NOT ENABLED — and the reason is NOT in this file. `KOTI_DCACHE` is
 // defined nowhere, so project.sv takes the bypass.
 //
-// ⭐ DIAGNOSED 2026-08-08. THE CACHE IS CORRECT; THE CORE'S ACK ROUTING IS NOT.
+// ⚠️ STATUS 2026-08-08: one real defect found and FIXED in the core, and it was
+// NOT ENOUGH. The cache still produces 0 characters with a kernel. So there is
+// at least one more problem; do not assume the remaining one is the same shape.
+//
+// ⭐ WHAT WAS FIXED (koti_core.sv, and it stands on its own merits): the data
+// ack was routed by who is asking NOW rather than by who ISSUED. `dw_req` is
+// `(dw_state != 0) && !m_port_busy`, so an M-stage memory op appearing mid-walk
+// WITHDRAWS the walker's request — the same dropped-requester shape as the
+// arbiter deadlock. It is now routed by a latched owner.
+// ✅ Verified neutral: Linux still boots without the cache, and tb_fpga_bram is
+// bit-for-bit 135401 clocks, unchanged.
+// ❌ Verified insufficient: with the cache, still 0 characters.
 //
 // koti_core.sv routes the data-port acknowledgement by who is asking AT THE
 // MOMENT THE ACK ARRIVES:

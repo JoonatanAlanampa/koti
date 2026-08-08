@@ -105,6 +105,10 @@ module koti_core #(
     logic [31:0] target_ex;
     logic        tlb_flush;              // sfence.vma / satp write (EX)
     logic        m_port_busy;            // M owns the data port (M below)
+    // Who owns the data transaction currently in flight. Forward-declared
+    // here because both consumers of it sit hundreds of lines apart and this
+    // file is read by a simulator that rejects declare-after-use.
+    logic        d_inflight, d_owner_dw;
 
     // MMU context from csr0 (instance in EX)
     logic [31:0] csr_satp;
@@ -586,7 +590,27 @@ module koti_core #(
     logic [1:0]  dw_state;
     logic [22:0] dw_addr;
     wire dw_req  = (dw_state != 2'd0) && !m_port_busy;
-    wire dw_ack  = d_ack && dw_req;
+    // ⛔ THE ACK BELONGS TO WHOEVER ISSUED THE TRANSACTION, not to whoever is
+    // asking now. The data port's requester CAN change while a transaction is
+    // outstanding: dw_req is `(dw_state != 0) && !m_port_busy`, so an M-stage
+    // memory op appearing mid-walk WITHDRAWS the walker's request.
+    //
+    // With a zero-latency path that was harmless by coincidence — the address
+    // followed the requester and so did the ack, so the walker's read was
+    // simply abandoned and re-issued later. Anything that LATCHES the address
+    // breaks the coincidence: a data cache is still servicing the walker's
+    // PTE read, and a live `!dw_req` hands that PTE to the M stage as a load
+    // result. The kernel then builds a translation out of someone else's data,
+    // faults, walks again, and storms traps the moment the MMU comes on
+    // (measured 2026-08-08: 100% of samples in handle_exception).
+    //
+    // ⚠️ This is the same shape as the arbiter's dropped-request deadlock —
+    // a request signal that IS the requester's own live condition — and it was
+    // latent here before any cache existed: the arbiter gives video absolute
+    // priority and can delay a data ack, so the window is real even today,
+    // just narrow enough never to have been hit.
+    wire d_owner_is_dw = d_inflight ? d_owner_dw : dw_req;
+    wire dw_ack  = d_ack && d_owner_is_dw;
     assign dpte = d_rdata;
     wire        dpte_bad = !dpte[0] || (!dpte[1] && dpte[2]);
     wire        dpte_leaf = dpte[1] || dpte[3];
@@ -835,7 +859,18 @@ module koti_core #(
     wire d_active = valid_m && !io_m && (mem_write_m || is_load_m)
                  && !halted && !d_seen && !(sc_m && !sc_ok);
     assign m_port_busy = d_active;
-    wire m_ack_here = d_ack && !dw_req;       // else the walker owns it
+    // Routed by the LATCHED owner — see the block at dw_ack above.
+    wire m_ack_here = d_ack && !d_owner_is_dw;
+    always_ff @(posedge clk)
+        if (rst) begin
+            d_inflight <= 1'b0;
+            d_owner_dw <= 1'b0;
+        end else if (d_ack) begin
+            d_inflight <= 1'b0;
+        end else if (d_req && !d_inflight) begin
+            d_inflight <= 1'b1;
+            d_owner_dw <= dw_req;
+        end
     assign mstall = d_active && !m_ack_here;
     // port muxes: the EX-side page walker borrows the port only while
     // the M stage is quiet

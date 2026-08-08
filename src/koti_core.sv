@@ -51,6 +51,16 @@ module koti_core #(
     output logic        if_ptw,
     output logic        icache_flush,
 
+    //   d_ptw        the same thing for the DATA port: 1 while the transaction
+    //                belongs to the EX-side page walker rather than to a load
+    //                or a store. A data cache must not retain a PTE for exactly
+    //                the reason above — page tables are retired by sfence.vma,
+    //                which a physically-tagged cache correctly does not flush
+    //                on, so a cached PTE would outlive the flush meant to kill
+    //                it and the machine would translate through a stale entry.
+    //                The walker only ever READS, so bypassing reads is enough.
+    output logic        d_ptw,
+
     // data port (same protocol)
     output logic        d_req,
     output logic        d_we,
@@ -830,6 +840,7 @@ module koti_core #(
     // port muxes: the EX-side page walker borrows the port only while
     // the M stage is quiet
     assign d_req   = (d_active && !m_ack_here) || dw_req;
+    assign d_ptw   = dw_req;
     assign d_we    = !dw_req && (mem_write_m || amo_wr || (sc_m && sc_ok));
     assign d_addr  = dw_req ? dw_addr : addr_m[24:2];
     assign d_wdata = amo_wr ? amo_new : st_data;

@@ -65,6 +65,19 @@ jobs:
           vvp tb_icache.vvp | tee icache.log
           grep -q "tb_icache: PASS" icache.log
 
+      # D-cache, same pattern and for a sharper reason. This one is WRITE-
+      # THROUGH because the video DMA reads the charbuf out of the same SDRAM
+      # the CPU writes; a write-back cache would pass every hit-rate check and
+      # silently leave text off the screen. So the bench counts memory WRITES
+      # as carefully as it counts hits, and it also pins the page-table bypass —
+      # a cached PTE would outlive the sfence.vma meant to retire it.
+      - name: D-cache
+        run: |
+          cd test
+          iverilog -g2012 -o tb_dcache.vvp ../src/dcache.sv tb_dcache.v
+          vvp tb_dcache.vvp | tee dcache.log
+          grep -q "tb_dcache: PASS" dcache.log
+
       # PLIC standalone, same pure-Verilog pattern. An interrupt controller is
       # another block that can be wrong by being QUIET: one that never asserts
       # eip breaks nothing visible in a polling system, it just means

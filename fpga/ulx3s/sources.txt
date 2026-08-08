@@ -51,6 +51,7 @@ src/uart_tx.sv
 # part; icache needs block RAM (3 of the 85F's 208, and koti used none before).
 src/sdram_ctrl.sv
 src/icache.sv
+src/dcache.sv
 
 # microSD, and the vendored engine it wraps. FPGA-only for the same reason: a
 # TinyTapeout tile has no pin for a card. vendor/ files are verbatim copies from

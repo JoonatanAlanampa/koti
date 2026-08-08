@@ -107,6 +107,7 @@ module tt_um_koti (
   // rejects declare-after-use (the same constraint that produced koti_core's
   // forward-declaration block).
   wire        usb_kb_irq;  // USB keyboard has something queued -> PLIC source 1
+  wire        d_ptw;       // the data port is carrying a page-table read
   wire        plic_eip;    // PLIC -> the core's S-level external interrupt
 
   wire        if_req, if_ack;
@@ -157,7 +158,7 @@ module tt_um_koti (
       .if_rdata(if_rdata), .if_rdata2(if_rdata2),
       .if_ptw(if_ptw), .icache_flush(icache_flush),
       .d_req(d_req), .d_we(d_we), .d_addr(d_addr), .d_wdata(d_wdata),
-      .d_be(d_be), .d_ack(d_ack), .d_rdata(d_rdata)
+      .d_be(d_be), .d_ack(d_ack), .d_rdata(d_rdata), .d_ptw(d_ptw)
   );
 
   // SoC MMIO intercepts on the data port. d_addr = byte_addr[24:2], so
@@ -331,7 +332,7 @@ module tt_um_koti (
                  : vga_ack   ? vga_rdata_q
                  : plic_ack  ? plic_rdata_q
                  : sd_ack    ? sd_rdata
-                 : usb_ack   ? usb_rdata    : m_rdata;
+                 : usb_ack   ? usb_rdata    : ad_rdata;
 
   // ---- video DMA + text pipeline ----
   wire        v_req, v_ack, vt_hs, vt_vs, vt_act, vt_pix;
@@ -369,13 +370,47 @@ module tt_um_koti (
   wire _unused_ic  = &{if_ptw, icache_flush, 1'b0};
 `endif
 
+  // ---- data cache (FPGA only) --------------------------------------------
+  // Sits between the data port and the arbiter. MMIO is already excluded here
+  // — the request below is d_req minus every device window — which is what
+  // makes caching safe at all: a cached UART status register would spin
+  // forever. That filtering existed for the arbiter's benefit and this reuses
+  // it rather than repeating the decode, so a new MMIO window cannot become
+  // cacheable by being forgotten in a second place.
+  wire dc_req = d_req && !clint_range && !vga_range && !plic_range
+                      && !sd_range && !usb_range;
+  wire        am_req, am_we;
+  wire [22:0] am_addr;
+  wire [31:0] am_wdata;
+  wire [3:0]  am_be;
+  wire        am_ack;
+  wire [31:0] ad_rdata;
+`ifdef KOTI_FPGA
+  dcache dc (
+      .clk(clk), .rst(rst),
+      .c_req(dc_req), .c_we(d_we), .c_ptw(d_ptw), .c_addr(d_addr),
+      .c_wdata(d_wdata), .c_be(d_be), .c_ack(ad_ack), .c_rdata(ad_rdata),
+      .m_req(am_req), .m_we(am_we), .m_addr(am_addr), .m_wdata(am_wdata),
+      .m_be(am_be), .m_ack(am_ack), .m_rdata(m_rdata)
+  );
+`else
+  // A TinyTapeout tile has no block RAM, so the ASIC build is unchanged: the
+  // data port goes straight at the arbiter as it always did.
+  assign am_req   = dc_req;
+  assign am_we    = d_we;
+  assign am_addr  = d_addr;
+  assign am_wdata = d_wdata;
+  assign am_be    = d_be;
+  assign ad_ack   = am_ack;
+  assign ad_rdata = m_rdata;
+`endif
+
   mem_arbiter3 arb (
       .clk(clk), .rst(rst),
       .v_req(v_req), .v_addr(v_addr), .v_ack(v_ack),
       .f_req(fc_req), .f_addr(fc_addr), .f_ack(fc_ack),
-      .d_req(d_req && !clint_range && !vga_range && !plic_range && !sd_range
-                   && !usb_range), .d_we(d_we),
-      .d_addr(d_addr), .d_wdata(d_wdata), .d_be(d_be), .d_ack(ad_ack),
+      .d_req(am_req), .d_we(am_we),
+      .d_addr(am_addr), .d_wdata(am_wdata), .d_be(am_be), .d_ack(am_ack),
       .m_req(m_req), .m_we(m_we), .m_burst(m_burst), .m_addr(m_addr),
       .m_wdata(m_wdata), .m_be(m_be), .m_ack(m_ack)
   );

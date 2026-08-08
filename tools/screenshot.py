@@ -36,7 +36,12 @@ import argparse
 import re
 from pathlib import Path
 
-from PIL import Image
+# ⚠️ PIL is imported INSIDE render(), not here. `load_font()` and `fold()` are
+# pure parsing of src/font_rom.svh and src/vga_text.sv, and test/test_font.py
+# uses exactly those two to check that the committed ROM still matches its
+# generator. Importing an imaging library at module scope made that test
+# unrunnable anywhere Pillow is not installed — which is the `test` CI job, so
+# it went red on a machine that had nothing to do with images.
 
 ROOT = Path(__file__).resolve().parent.parent
 FONT = ROOT / "src" / "font_rom.svh"
@@ -108,6 +113,8 @@ def lay_out(text):
 
 
 def render(buf, glyphs, zoom):
+    from PIL import Image          # see the note at the top of the file
+
     w, h = COLS * CELL * SCALE, ROWS * CELL * SCALE
     img = Image.new("RGB", (w, h), BG)
     px = img.load()

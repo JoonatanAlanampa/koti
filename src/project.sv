@@ -86,6 +86,26 @@ module tt_um_koti (
     // encoder needs to know where the visible box is. console had to build a
     // timing replica to re-derive it; koti's vga_timing already produces
     // `active`, so it is exported here instead and the replica is unnecessary.
+    // ---- Liveness, for the harness's lamps. Added 2026-08-09. ----
+    // ⛔ WHY THIS IS A PORT AND NOT A COMMENT SAYING "USE LED1".
+    // `uo_out = vga_en ? uo_vga : {led[5:0], halted, uart_txd}` — so the HALTED
+    // lamp EXISTS ONLY IN HEADLESS MODE, and vanishes the moment software turns
+    // the display on. That is precisely backwards: headless is the mode where
+    // the UART already tells you everything, and VGA mode is where you are
+    // running an OS with no other way in. On 2026-08-09 that gap cost a wrong
+    // diagnosis — LED1 was read as HALTED on a machine in VGA mode, where it is
+    // a green video bit.
+    //   dbg_halted  the core hit EBREAK in M-MODE. In S/U mode EBREAK traps
+    //               (koti_core: `ebreak_halt_e` requires csr_priv==2'b11), so
+    //               this fires for the FIRMWARE stopping, never for a kernel
+    //               BUG(). Solid = the machine is stopped, not merely quiet.
+    //   dbg_fetch   one pulse per instruction-fetch ack. This is the core's own
+    //               port, upstream of the icache, so it ticks on cache HITS too
+    //               — it is "the CPU is executing", not "the CPU is missing".
+    //               Frozen with dbg_halted low = looping in something that does
+    //               not fetch, or stalled on memory.
+    output wire        dbg_halted,
+    output wire        dbg_fetch,
     output wire [5:0]  video_rgb,      // RGB222, {R1,R0,G1,G0,B1,B0}
     output wire        video_hs,       // active low
     output wire        video_vs,       // active low
@@ -593,6 +613,10 @@ module tt_um_koti (
   assign uo_vga[7] = vt_hs;                         // HSync
 
   assign uo_out = vga_en ? uo_vga : {led[5:0], halted, uart_txd};
+
+  // The same two facts, on pins that do not depend on the video personality.
+  assign dbg_halted = halted;
+  assign dbg_fetch  = if_req && if_ack;
 
   // The same pixels the VGA personality packs into `uo`, unpacked. Deliberately
   // NOT gated on `vga_en`: the HDMI link must keep running whatever the SoC is

@@ -201,6 +201,8 @@ module ulx3s_top (
       .sd_miso    (sd_d[0]),
       .sd_miso_drv(soc_sd_miso_drv),
       .sd_miso_oe (soc_sd_miso_oe),
+      .dbg_halted (cpu_halted),
+      .dbg_fetch  (cpu_fetch),
       .video_rgb  (video_rgb),
       .video_hs   (video_hs),
       .video_vs   (video_vs),
@@ -404,11 +406,19 @@ module ulx3s_top (
   // shell needs the keyboard, and reading the status register needs a shell.
   // A lamp needs none of them.
   //
-  // `report` fires on every HID interrupt-IN transfer — ~125/s for a boot
-  // keyboard, whether or not a key is down — so these bits ROLL CONTINUOUSLY
-  // while the core is talking to a device and FREEZE the instant it is not.
-  // That is exactly the distinction that cost a session of guessing: "the USB
-  // core lost the keyboard" versus "the keystrokes stop somewhere after it".
+  // ⚠️ READ THIS BEFORE INTERPRETING THE LAMPS. `report` pulses when a report
+  // is RECEIVED (the falling edge of `data_rdy` in vendor/usb_hid_host.v), and
+  // a HID keyboard NAKs the host's poll when nothing has changed. So these bits
+  // move WHILE KEYS ARE PRESSED and sit still when the keyboard is idle:
+  // **a frozen counter on an untouched keyboard is normal, not a fault.**
+  // The test is to mash keys and watch. (The first version of this comment
+  // claimed ~125 reports/s regardless of typing, which would have made an idle
+  // board look like a dead core — corrected 2026-08-09 after reading the core.)
+  //
+  // What it does answer, and nothing else could: on 2026-08-09 the keyboard
+  // appeared dead while these bits still counted under a keypress, with typ=01
+  // and conerr clear — which cleared the USB core outright and moved the hunt
+  // downstream, where it belonged.
   logic [7:0] usb_rep_cnt = 8'd0;
   always_ff @(posedge clk_usb) if (usb_report) usb_rep_cnt <= usb_rep_cnt + 8'd1;
 
@@ -420,7 +430,25 @@ module ulx3s_top (
       usb_rep_q  <= usb_rep_cnt[7:4];
       usb_rep_qq <= usb_rep_q;
   end
-  wire [7:0] usb_diag = {usb_conerr, usb_typ, usb_pll_lock, usb_rep_qq};
+  // ---- CPU liveness, the other half of the lamp ----
+  // `dbg_fetch` is one clock wide per fetch ack, far too fast to see, so it is
+  // divided down. A CPU that is executing rolls these bits; a CPU that has
+  // stopped freezes them. Together with `cpu_halted` that separates the three
+  // states this board could not tell apart on 2026-08-09:
+  //   halted lit                      -> EBREAK in M-mode; the firmware stopped
+  //   halted dark, activity ROLLING   -> the CPU runs; the fault is above it
+  //                                      (a loop, an IRQ storm, stuck userspace)
+  //   halted dark, activity FROZEN    -> not fetching at all: stalled on memory
+  wire cpu_halted, cpu_fetch;
+  logic [23:0] cpu_act = 24'd0;
+  always_ff @(posedge clk_25mhz) if (cpu_fetch) cpu_act <= cpu_act + 24'd1;
+
+  // LED7 halted | LED6 conerr | LED5 kbd present | LED4 PLL lock
+  // LED3:2 CPU activity (rolling = executing) | LED1:0 USB reports (typing)
+  // usb_rep_qq is report_count[7:4]; its LOW two bits are taken so the lamp
+  // moves within a second of typing rather than needing 64 reports.
+  wire [7:0] usb_diag = {cpu_halted, usb_conerr, usb_typ[0], usb_pll_lock,
+                         cpu_act[23:22], usb_rep_qq[1:0]};
 
   // ------------------------------------------------------------ GPDI / HDMI
   // koti's standard video output (user directive 2026-08-07). The encoder trio
@@ -464,18 +492,23 @@ module ulx3s_top (
   // means the CPU hit EBREAK), LED2-7 are the software-driven LEDs at
   // MMIO 0x10000.
   //
-  // SW4 on = USB liveness (changed 2026-08-09; it used to be the frame
-  // counter). The frame counter answered "is video running?" — a question the
-  // HDMI monitor now answers by being lit. Nothing else can answer "is the USB
-  // host still talking to the keyboard?", and that one costs a whole debugging
-  // session when it is unobservable. Reading it:
-  //   LED7      conerr    — solid = the core reports a connection error
-  //   LED6:5    typ       — 01 = keyboard, 00 = nothing enumerated
-  //   LED4      pll_lock  — the 12 MHz USB clock; dark = nothing works
-  //   LED3:0    activity  — ROLLING while HID reports arrive, frozen if not
-  // A frozen LED3:0 with LED6:5 = 00 means the core lost the device. Rolling
-  // LED3:0 with a keyboard that types nothing means the fault is after the
-  // core, which is where the 2026-08-09 FIFO stall lived.
+  // SW4 on = LIVENESS (changed 2026-08-09; it used to be the frame counter).
+  // The frame counter answered "is video running?" — a question the HDMI
+  // monitor now answers by being lit. These answer the two that nothing else
+  // could, and each cost a wrong diagnosis on the day they were added:
+  //   LED7  HALTED    — the core hit EBREAK in M-mode. ⭐ Works in VGA mode,
+  //                     unlike uo[1], whose HALTED lamp is replaced by a video
+  //                     bit the moment software enables the display — i.e. it
+  //                     was missing in exactly the mode that runs the OS.
+  //   LED6  conerr    — the USB core reports a connection error
+  //   LED5  keyboard  — usb_typ[0]: a keyboard is enumerated right now
+  //   LED4  pll_lock  — the 12 MHz USB clock; dark = nothing USB works
+  //   LED3:2 CPU      — rolling = instructions are being fetched
+  //   LED1:0 USB      — rolling WHILE KEYS ARE PRESSED = reports arriving
+  // ⚠️ LED1:0 frozen on an untouched keyboard is NORMAL — see the counter's
+  // own note. Read the pair: LED3:2 frozen with LED7 dark means the CPU is
+  // STALLED rather than stopped; LED1:0 rolling while nothing types puts the
+  // fault above the USB core, which is where 2026-08-09 ended up.
 `ifdef KOTI_FLASH_BRAM
   // led[7] carries the fabric flash's `bad_cmd` instead of uo[7]. uo[7] is the
   // top LED bit in headless mode and carries nothing a person watches, whereas

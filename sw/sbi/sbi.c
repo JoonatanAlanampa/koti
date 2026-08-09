@@ -160,10 +160,57 @@ static int rd_slot(uint32_t rd) {
     return -1;
 }
 
+// ---- SAMPLING PROFILER (KOTI_PROFILE builds only) -------------------------
+// koti wedged on 2026-08-09 in a way nothing inside Linux could report: the
+// kernel kept servicing interrupts (the keyboard ISR drained its queue on every
+// keypress) while both consoles went silent and userspace stopped. The kernel
+// is built CONFIG_PREEMPT_NONE, so a loop in kernel context starves userspace
+// forever while interrupts carry on — exactly that shape — and with no
+// hung-task or softlockup detector configured it prints nothing at all.
+//
+// ⭐ THIS RUNS UNDERNEATH LINUX. The M-mode timer interrupt fires 100 times a
+// second (HZ=100) whatever the kernel is doing, `mepc` is the PC it interrupted,
+// and `mstatus.MPP` is the privilege it interrupted. Writing that to the UART
+// from here needs no console, no lock and no scheduler — the three things a
+// wedged kernel takes away.
+//
+// Read the output as:
+//   mpp=0  it interrupted USER mode -> userspace IS running
+//   mpp=1  supervisor -> the kernel. A pc that stops changing is the loop, and
+//          the address goes straight into System.map.
+#ifdef KOTI_PROFILE
+static uint32_t prof_ticks;
+
+static void prof_hex32(uint32_t v) {
+    for (int i = 28; i >= 0; i -= 4)
+        uart_putc("0123456789abcdef"[(v >> i) & 0xFu]);
+}
+
+static void prof_sample(void) {
+    uint32_t pc  = csr_read(mepc);
+    uint32_t mpp = (csr_read(mstatus) >> 11) & 3u;
+
+    // Every 100th tick = once a second. Rate-limited rather than every tick
+    // because at 115200 baud a line per tick would itself change the timing of
+    // the thing being measured.
+    if (++prof_ticks < 100u)
+        return;
+    prof_ticks = 0;
+    uart_puts("\r\n[prof pc=");
+    prof_hex32(pc);
+    uart_puts(" mpp=");
+    uart_putc((char)('0' + mpp));
+    uart_puts("]\r\n");
+}
+#endif
+
 void sbi_trap(uint32_t cause, uint32_t *r) {
     if (cause == 0x80000007u) {          // M timer: inject S timer
         csr_set(mip, 1u << 5);           // STIP
         csr_clear(mie, 1u << 7);         // mask MTIE until set_timer
+#ifdef KOTI_PROFILE
+        prof_sample();
+#endif
         return;
     }
     if (cause == 9u) {                   // ecall from S = SBI call

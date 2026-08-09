@@ -61,7 +61,7 @@ on:
         description: 'bram variant: which software to bake into the fabric flash'
         default: 'bringup'
         type: choice
-        options: ['bringup', 'memtest', 'sdtest', 'sdraw', 'usbtest', 'sbi', 'hello']
+        options: ['bringup', 'memtest', 'sdtest', 'sdraw', 'usbtest', 'sbi', 'sbiprof', 'hello']
       # Extra `define`s for the synthesis, so that a bitstream which differs
       # from main by one feature can be built WITHOUT a commit that changes what
       # main means. It exists because of the D-cache: the cache is enabled by
@@ -153,7 +153,13 @@ jobs:
           # `sbi` is the odd one out: it is the SBI FIRMWARE, which lives in
           # sw/sbi/ rather than sw/, and it is the image that actually boots
           # Linux — it loads the kernel off the microSD into RAM and enters it.
-          if [ "$img" = "sbi" ]; then bin="sw/sbi/sbi_sd.bin"; else bin="sw/$img.bin"; fi
+          # sbiprof = sbi + the M-mode sampling profiler. Same machine, but the
+          # firmware prints [prof pc=... mpp=...] once a second from the timer
+          # interrupt, underneath Linux — the only instrument that still works
+          # when the kernel stops scheduling userspace.
+          if   [ "$img" = "sbi" ];     then bin="sw/sbi/sbi_sd.bin"
+          elif [ "$img" = "sbiprof" ]; then bin="sw/sbi/sbi_prof.bin"
+          else bin="sw/$img.bin"; fi
           echo "baking $bin into the fabric flash"
           python3 fpga/ulx3s/mkflashhex.py "$bin" fpga/ulx3s/build/flash.hex
           wc -l fpga/ulx3s/build/flash.hex

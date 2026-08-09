@@ -44,9 +44,16 @@ def main():
     # change the image, and the point of the no-SD binary is that the ASIC bench
     # runs against exactly the firmware it ran against before the microSD
     # existed — provable by comparing bytes, not by reading the source.
+    # sbi_prof is sbi_sd plus the M-mode sampling profiler (see sbi.c). It is a
+    # SEPARATE binary rather than a flag on sbi_sd because the firmware image is
+    # committed and baked into bitstreams by $readmemh: a profiler quietly added
+    # to sbi_sd.bin would ship in the machine that boots normally, printing a
+    # line a second into the console for ever.
     for name, extra, srcs in (
             ("sbi_test", [],            []),
-            ("sbi_sd",   ["-DKOTI_ULX3S"], ["sdboot.c", "../usbkbd.c"])):
+            ("sbi_sd",   ["-DKOTI_ULX3S"], ["sdboot.c", "../usbkbd.c"]),
+            ("sbi_prof", ["-DKOTI_ULX3S", "-DKOTI_PROFILE"],
+                         ["sdboot.c", "../usbkbd.c"])):
         run([GCC, "-march=rv32ima_zicsr", "-mabi=ilp32", "-O2",
              "-ffreestanding", "-nostdlib", "-nostartfiles", "-static",
              *extra,
@@ -64,7 +71,7 @@ def main():
     # Checked on BOTH binaries. -DKOTI_ULX3S moves code around, and the one that
     # boots the board is sbi_sd.bin — checking only the other would be checking
     # the image that never meets a kernel.
-    for name in ("sbi_test", "sbi_sd"):
+    for name in ("sbi_test", "sbi_sd", "sbi_prof"):
         img = (SBI / f"{name}.bin").read_bytes()
         got = img[0x6000:0x6004]
         if got != b"\xd0\x0d\xfe\xed":

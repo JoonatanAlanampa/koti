@@ -96,6 +96,10 @@ jobs:
           # only the Linux-stalls-console direction was tested, and the bug was
           # in the untested one: a stalled console stalled the WRITER, so the
           # whole keyboard died. Test 6b is that converse (added 2026-08-09).
+          iverilog -g2012 -o tb_usb_kbd.vvp ../src/usb_kbd.sv tb_usb_kbd.v
+          vvp tb_usb_kbd.vvp | tee usb_kbd.log
+          grep -q "tb_usb_kbd: PASS" usb_kbd.log
+
           # mip.SEIP through a read-modify-write. csr.sv used to feed the
           # OR of the PLIC pin and the software bit back into CSRRS/CSRRC, so a
           # set/clear of ANY OTHER mip bit latched the live pin permanently --
@@ -106,10 +110,6 @@ jobs:
           iverilog -g2012 -o tb_csr_seip.vvp ../src/csr.sv tb_csr_seip.v
           vvp tb_csr_seip.vvp | tee csr_seip.log
           grep -q "tb_csr_seip: PASS" csr_seip.log
-
-          iverilog -g2012 -o tb_usb_kbd.vvp ../src/usb_kbd.sv tb_usb_kbd.v
-          vvp tb_usb_kbd.vvp | tee usb_kbd.log
-          grep -q "tb_usb_kbd: PASS" usb_kbd.log
 
           # F3, re-expressed at module level. It had a cocotb test in the ASIC
           # configuration; that configuration was removed on 2026-08-08 when

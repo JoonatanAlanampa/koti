@@ -92,7 +92,10 @@ jobs:
           # 2026-08-08: it was compiled only into whole-SoC builds, which
           # notice a keyboard that is dead and notice nothing about a second
           # reader that steals the first one's keystrokes. The property it
-          # guards is that a stalled Linux driver cannot starve the console.
+          # guards is that NEITHER reader can starve the other — originally
+          # only the Linux-stalls-console direction was tested, and the bug was
+          # in the untested one: a stalled console stalled the WRITER, so the
+          # whole keyboard died. Test 6b is that converse (added 2026-08-09).
           iverilog -g2012 -o tb_usb_kbd.vvp ../src/usb_kbd.sv tb_usb_kbd.v
           vvp tb_usb_kbd.vvp | tee usb_kbd.log
           grep -q "tb_usb_kbd: PASS" usb_kbd.log

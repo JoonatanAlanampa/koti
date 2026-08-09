@@ -165,6 +165,32 @@ module tb_usb_kbd;
     check("port2 overflow flag set after being lapped", v[9], 1);
     check("port2 still returns a real entry, not garbage", v[8], 1);
 
+    // ---- 6b. ⛔ AND THE CONVERSE: A STALLED PORT 1 MUST NOT STARVE PORT 2 -
+    // The mirror of test 5, and the direction the design got wrong. Port 1 is
+    // never read in this loop, standing in for the SBI firmware when hvc0 has
+    // no tty attached — which is not a hypothetical: the UART is transmit-only
+    // and the screen is the console Linux actually owns, so hvc0's consumer is
+    // the one that can quietly go away.
+    //
+    // ⚠️ WHY THIS IS THE WORSE DIRECTION, not merely the missing one. If the
+    // writer stalls on port 1's fullness the KEYBOARD DIES ENTIRELY — both
+    // consoles at once, permanently, and draining port 2 does not bring it
+    // back because the entries were never enqueued. Test 5 protects the path
+    // that no longer has to work from the one that does.
+    rd(2'd0, v); while (v[8]) rd(2'd0, v);        // drain port 1
+    rd(2'd2, v); while (v[8]) rd(2'd2, v);        // drain port 2
+    got2 = 0;
+    for (i = 0; i < 40; i = i + 1) begin
+        report(8'h10 + i[7:0], 0, 0, 0);
+        rd(2'd2, v);
+        if (v[8] && v[7:0] == (8'h10 + i[7:0])) got2 = got2 + 1;
+    end
+    check("port2 not starved by a stalled port1 (want 40)", got2, 40);
+    // Leave port 1 as this test found it. Skipping this drain does not fail
+    // HERE — it fails in tests 7 and 8, which then read the stale entries this
+    // loop left behind and look like two unrelated bugs.
+    rd(2'd0, v); while (v[8]) rd(2'd0, v);
+
     // ---- 7. the status register has NO side effects ----------------------
     // Reading register 1 must not eat a keystroke: a "is a keyboard attached?"
     // check that consumed the key it was asked about would be a bug nobody

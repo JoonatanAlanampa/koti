@@ -54,11 +54,12 @@
 //             firmware feeds hvc0 from +0x00 and sw/linux/koti_kbd.c feeds
 //             /dev/input/eventN from here, exactly as a PC delivers a keypress
 //             to the console and to evdev at the same time.
-//             ⛔ Port 2 is PASSIVE: it cannot stall the writer or disturb
-//             +0x00. If it falls more than 8 entries behind it is lapped, its
-//             entries are gone, and ovf2 says so. That trade is on purpose —
-//             a Linux driver that stopped reading must never be able to starve
-//             the console the login prompt depends on.
+//             ⛔ NEITHER PORT CAN STALL THE WRITER, and both are told when
+//             they lose entries. A reader more than 8 behind is lapped (port 2)
+//             or has its oldest entry dropped (port 1); ovf2/ovf says so.
+//             ⚠️ Port 1 was NOT like this until 2026-08-09 — a full port 1
+//             blocked the enqueue, so a firmware that stopped reading killed
+//             the keyboard for BOTH consoles. See the `drop1` block below.
 //             ⚠️ The PLIC interrupt follows THIS port, not +0x00.
 //   +0x04  R  {conerr, typ[1:0], modifiers[7:0]} — no side effects at all.
 //             `modifiers` is LIVE, not queued. Shift and ctrl are levels,
@@ -170,6 +171,27 @@ module usb_kbd (
   wire sel_rd = sel && !we;
   wire pop    = sel_rd && (reg_a == 2'd0) && !f_empty;
 
+  // ⛔ A FULL PORT 1 MUST NOT STALL THE WRITER — fixed 2026-08-09.
+  // `f_full` used to gate the enqueue itself, so a firmware that stopped
+  // reading filled the queue and then blocked every further keystroke for BOTH
+  // readers. That is not a corner case: hvc0's consumer only runs while hvc0
+  // has a tty attached, and hvc0 is a console nothing needs any more, because
+  // the UART is transmit-only and the screen is what Linux owns. The symptom
+  // on the bench was a keyboard that worked for a dozen keys and then died
+  // completely, on both consoles at once, permanently, and was not revived by
+  // unplugging the keyboard — because the keystrokes were never enqueued.
+  //
+  // The policy is now the one PORT 2 ALREADY HAD and states in its own header:
+  // a reader that has stopped loses events and is told so through `ovf`,
+  // rather than stalling the machine for the other reader. Test 5 guaranteed
+  // this in one direction only; test 6b is the converse, and it fails on the
+  // old behaviour with exactly 8 keystrokes delivered — the FIFO depth.
+  //
+  // Dropping is suppressed on a cycle that also pops: the pop frees the slot,
+  // so there is nothing to drop and `rptr` must move only once.
+  wire enq1   = diff_run && !new_report && is_new(cand);
+  wire drop1  = enq1 && f_full && !pop;
+
   // ---- port 2: a SECOND, INDEPENDENT READER (added 2026-08-08) ------------
   // WHY. Reading register 0 POPS, and koti's M-mode SBI firmware is its
   // consumer — that is what feeds `hvc0` and makes the login prompt typeable.
@@ -180,15 +202,20 @@ module usb_kbd (
   //
   // ⛔ PORT 2 IS STRICTLY PASSIVE AND MUST STAY THAT WAY. It has its own
   // pointer and its own overflow flag, and it CANNOT influence `wptr`, `rptr`,
-  // `ovf` or `f_full`. Port 1's behaviour is bit-identical to before this
-  // existed — which matters because port 1 is the path that has typed on real
-  // hardware.
+  // `ovf` or `f_full`.
   // The hazard this avoids is specific and would have been nasty: if "full"
   // were computed against the laggier of the two readers, then a Linux driver
   // that stopped draining (nothing has the evdev node open, say) would fill
   // the FIFO and starve the FIRMWARE — and the symptom would be a login prompt
   // that stops accepting keys because of a feature that was supposed to be
   // additive.
+  //
+  // ⚠️ THIS WAS ONLY HALF THE PROPERTY, AND THE MISSING HALF WAS THE BUG.
+  // Port 1 could still stall the writer by filling up, which killed BOTH
+  // consoles — a worse outcome than the one guarded against here, and the more
+  // likely one, since hvc0's consumer is the one with no reason to keep
+  // running. Fixed 2026-08-09 at the `drop1` block above; test 5 and test 6b
+  // in test/tb_usb_kbd.v now pin both directions.
   //
   // The cost is that port 2 can be LAPPED: the writer may overwrite entries it
   // has not read. That is the correct trade — a slow observer loses events and
@@ -217,12 +244,14 @@ module usb_kbd (
               diff_i   <= 2'd0;
           end else if (diff_run) begin
               if (is_new(cand)) begin
-                  if (f_full) begin
-                      ovf <= 1'b1;       // record it; do NOT overwrite
-                  end else begin
-                      fifo[wptr[2:0]] <= cand;
-                      wptr <= wptr + 4'd1;
-                  end
+                  // ALWAYS enqueue. When the queue is full the OLDEST entry is
+                  // dropped instead (`drop1` advances `rptr` below), which is
+                  // safe to write here because f_full means wptr[2:0] and
+                  // rptr[2:0] are equal — the slot being overwritten IS the
+                  // oldest one, and the reader is moved past it in the same
+                  // cycle.
+                  fifo[wptr[2:0]] <= cand;
+                  wptr <= wptr + 4'd1;
               end
               if (diff_i == 2'd3) begin
                   diff_run <= 1'b0;
@@ -234,10 +263,9 @@ module usb_kbd (
               diff_i <= diff_i + 2'd1;
           end
 
-          if (pop) begin
-              rptr <= rptr + 4'd1;
-              ovf  <= 1'b0;              // sticky until read
-          end
+          if (pop || drop1) rptr <= rptr + 4'd1;
+          if (drop1)   ovf <= 1'b1;      // and it is told, like port 2
+          else if (pop) ovf <= 1'b0;     // sticky until read
 
           // Port 2, kept entirely separate from the block above on purpose.
           // Resync BEFORE the pop so a lapped reader cannot also consume a

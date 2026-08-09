@@ -34,7 +34,7 @@
 //   J1 gp/gn0-3  -> uio[7:0] QSPI memory Pmod  (SW1 flips rows)
 //   J2 gp/gn4-7  -> uo[7:0]  Tiny VGA Pmod     (SW2 flips rows)
 //   ftdi_rxd     -> uo[0] or uo[6]             (SW3 selects)
-//   led[7:0]     -> uo[7:0] raw, or a frame counter (SW4 selects)
+//   led[7:0]     -> uo[7:0] raw, or USB liveness (SW4 selects)
 //
 // Copyright (c) 2026 Joonatan Alanampa
 // SPDX-License-Identifier: Apache-2.0
@@ -340,6 +340,12 @@ module ulx3s_top (
   // uo_out[3] is VSync in VGA mode, so counting it gives a free liveness
   // signal: blinking LEDs mean video timing is running. Useless while the
   // chip is headless (uo[3] is just LED1 there), hence the strap.
+  //
+  // ⚠️ NOT CURRENTLY DISPLAYED — SW4 shows USB liveness instead (2026-08-09),
+  // because a working HDMI monitor already answers "is video running?" and
+  // nothing else answered "is the USB host still there?". Kept, and cheap
+  // (yosys prunes it), so re-pointing SW4 at `frames` is a one-line change if
+  // video ever needs watching without a monitor.
   wire vsync = uo_out[3];
   logic vsync_q;
   logic [7:0] frames;
@@ -392,6 +398,30 @@ module ulx3s_top (
   logic usb_report_tog = 1'b0;
   always_ff @(posedge clk_usb) if (usb_report) usb_report_tog <= ~usb_report_tog;
 
+  // ---- USB liveness on the LEDs, because a dead keyboard cannot be asked ----
+  // The instrument this design lacked on 2026-08-09. When the keyboard stops
+  // responding there is no way in: the UART is transmit-only, the screen's
+  // shell needs the keyboard, and reading the status register needs a shell.
+  // A lamp needs none of them.
+  //
+  // `report` fires on every HID interrupt-IN transfer — ~125/s for a boot
+  // keyboard, whether or not a key is down — so these bits ROLL CONTINUOUSLY
+  // while the core is talking to a device and FREEZE the instant it is not.
+  // That is exactly the distinction that cost a session of guessing: "the USB
+  // core lost the keyboard" versus "the keystrokes stop somewhere after it".
+  logic [7:0] usb_rep_cnt = 8'd0;
+  always_ff @(posedge clk_usb) if (usb_report) usb_rep_cnt <= usb_rep_cnt + 8'd1;
+
+  // Brought into the SoC domain for display only. The four bits are NOT
+  // sampled coherently and do not need to be — this drives lamps, and the
+  // question is "is this counting?", not "what is the count?".
+  logic [3:0] usb_rep_q, usb_rep_qq;
+  always_ff @(posedge clk_25mhz) begin
+      usb_rep_q  <= usb_rep_cnt[7:4];
+      usb_rep_qq <= usb_rep_q;
+  end
+  wire [7:0] usb_diag = {usb_conerr, usb_typ, usb_pll_lock, usb_rep_qq};
+
   // ------------------------------------------------------------ GPDI / HDMI
   // koti's standard video output (user directive 2026-08-07). The encoder trio
   // is vendored VERBATIM from console, which drove this exact board's HDMI on
@@ -432,16 +462,29 @@ module ulx3s_top (
   // SW4 off = the raw chip personality, which is the view you want at first
   // power: LED0 flickers with UART traffic, LED1 is HALTED (a solid LED1
   // means the CPU hit EBREAK), LED2-7 are the software-driven LEDs at
-  // MMIO 0x10000. SW4 on = the frame counter.
+  // MMIO 0x10000.
+  //
+  // SW4 on = USB liveness (changed 2026-08-09; it used to be the frame
+  // counter). The frame counter answered "is video running?" — a question the
+  // HDMI monitor now answers by being lit. Nothing else can answer "is the USB
+  // host still talking to the keyboard?", and that one costs a whole debugging
+  // session when it is unobservable. Reading it:
+  //   LED7      conerr    — solid = the core reports a connection error
+  //   LED6:5    typ       — 01 = keyboard, 00 = nothing enumerated
+  //   LED4      pll_lock  — the 12 MHz USB clock; dark = nothing works
+  //   LED3:0    activity  — ROLLING while HID reports arrive, frozen if not
+  // A frozen LED3:0 with LED6:5 = 00 means the core lost the device. Rolling
+  // LED3:0 with a keyboard that types nothing means the fault is after the
+  // core, which is where the 2026-08-09 FIFO stall lived.
 `ifdef KOTI_FLASH_BRAM
   // led[7] carries the fabric flash's `bad_cmd` instead of uo[7]. uo[7] is the
   // top LED bit in headless mode and carries nothing a person watches, whereas
   // an opcode this model does not implement is the difference between "the SoC
   // is broken" and "the memory refused a command" — and that is worth a lamp
   // rather than a waveform. With SW4 on, the frame counter still wins.
-  always_comb led = sw[3] ? frames : {flash_bad_cmd, uo_out[6:0]};
+  always_comb led = sw[3] ? usb_diag : {flash_bad_cmd, uo_out[6:0]};
 `else
-  always_comb led = sw[3] ? frames : uo_out;
+  always_comb led = sw[3] ? usb_diag : uo_out;
 `endif
 
 endmodule

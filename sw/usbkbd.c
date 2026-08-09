@@ -156,10 +156,28 @@ int usb_kbd_present(void) {
 // Returns -1 when nothing is waiting. Non-blocking, because the legacy SBI
 // console_getchar it feeds is specified that way, and because a blocking read
 // in M-mode firmware would stop the machine on a keyboard that is unplugged.
+#ifdef KOTI_PROFILE
+// The RAW word of the last non-empty pop, for the M-mode profiler to print.
+// This is the only place it can be recorded: reading USB_KBD POPS, so nothing
+// else may look. Guarded so sbi_sd.bin stays byte-identical.
+//
+// WHY IT IS WORTH FOUR BYTES. On 2026-08-09 both consoles stopped showing
+// characters at the same instant while the lamps proved keystrokes were still
+// being enqueued and drained. Both consumers silently DROP usages they cannot
+// map -- this returns -1 outside 0x04..0x38, and koti_kbd.c does `continue` --
+// so a usage code that turns to junk, or merely shifts out of the letter range,
+// silences both at once and looks exactly like a dead keyboard.
+volatile unsigned prof_last_kbd;
+#endif
+
 int usb_getchar(void) {
     unsigned v = USB_KBD;              // ⚠️ this POPS when USB_AVAIL is set
     if (!(v & USB_AVAIL))
         return -1;
+#ifdef KOTI_PROFILE
+    prof_last_kbd = v;                 // AFTER the avail test: an empty pop is
+                                       // not a keystroke and would erase one
+#endif
 
     unsigned usage = v & 0xFFu;
     unsigned mods  = USB_MODS(USB_STAT);

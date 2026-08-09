@@ -179,6 +179,7 @@ static int rd_slot(uint32_t rd) {
 //   mpp=1  supervisor -> the kernel. A pc that stops changing is the loop, and
 //          the address goes straight into System.map.
 #ifdef KOTI_PROFILE
+extern volatile unsigned prof_last_kbd;   // recorded in sw/usbkbd.c
 static uint32_t prof_ticks;
 
 static void prof_hex32(uint32_t v) {
@@ -215,6 +216,16 @@ static void prof_sample(void) {
     // st should read 000001xx while nothing is held (typ=1, no modifiers).
     uart_puts(" st=");
     prof_hex32(USB_STAT);
+    // ⭐ The last raw word POPPED from the keyboard queue: {ovf, avail, usage}.
+    // The usage byte is the point. 04..1d are the letters, 1e..27 the digits,
+    // 2c space, 28 enter. Anything outside 04..38 (bar 64) is DROPPED BY BOTH
+    // CONSUMERS — usb_getchar returns -1 and koti_kbd.c does `continue` — so
+    // usages that turn to junk, or merely shift out of the letter range,
+    // silence hvc0 and tty1 at the same instant while the queue keeps filling
+    // and draining exactly as a healthy one would. That is the last mechanism
+    // standing that fits every measurement taken on 2026-08-09.
+    uart_puts(" kb=");
+    prof_hex32(prof_last_kbd);
     uart_puts("]\r\n");
 }
 #endif

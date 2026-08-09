@@ -34,10 +34,13 @@ else
     cat >> "$INITTAB" <<'EOF'
 
 # koti: a shell on the screen (PLAN.md item 9b). The VT is driven by
-# sw/linux/koticon.c over the 40x30 character buffer; keystrokes arrive from
+# sw/linux/koticon.c over the 80x60 character buffer; keystrokes arrive from
 # the USB keyboard through sw/linux/koti_kbd.c and drivers/tty/vt/keyboard.c.
-# This is IN ADDITION to the hvc0 getty above: hvc0 is /dev/console and stays
-# the serial login, because koti's UART can be read and never typed at.
+# This is now the ONLY getty. Buildroot's own is disabled
+# (BR2_TARGET_GENERIC_GETTY_PORT="") because it landed on hvc0, and every
+# keystroke reaches both consoles — so one login typed once logged in twice and
+# ran every command twice. hvc0 remains /dev/console for the boot log; it just
+# has no shell, which costs nothing on a UART that cannot be typed at.
 tty1::respawn:/sbin/getty -L tty1 0 linux
 EOF
     echo "post-build: added a getty on tty1"

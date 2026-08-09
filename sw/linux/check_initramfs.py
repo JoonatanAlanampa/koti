@@ -369,26 +369,44 @@ def main():
     # symptom is that you cannot log in at it. Assert the RESULT, in the
     # artifact, for the same reason the network check above does.
     #
-    # ⚠️ hvc0 must ALSO still be there. koti's UART is transmit-only, so the
-    # serial login is read-only in practice, but it is /dev/console and the
-    # bench and every bring-up session watch it. A change that moved the getty
-    # instead of adding one would pass a naive "is there a getty" check.
+    # ⛔ AND hvc0 MUST NOT HAVE ONE (changed 2026-08-09). Every keystroke
+    # reaches BOTH consoles by design — the firmware pops the keyboard queue for
+    # hvc0, koti_kbd.c pops it for tty1 — so a getty on each meant one `root`
+    # and one Enter logged in twice and every command afterwards ran twice.
+    # Measured on hardware: `login[72] ... on 'hvc0'` and `login[73] ... on
+    # 'tty1'` from a single login.
+    #
+    # Asserting hvc0 is ABSENT is deliberately the stronger check: the failure
+    # it guards against is a future change re-adding it (the obvious way being
+    # to set BR2_TARGET_GENERIC_GETTY_PORT back to a port), and the symptom —
+    # commands running twice — is easy to misread as a shell problem.
+    #
+    # ⚠️ This is about the LOGIN, not the console. `console=hvc0` stays on the
+    # kernel command line and the boot log still goes out the UART.
     inittab = by_name.get("etc/inittab")
     if inittab is not None:
         text = inittab.data.decode("utf-8", "replace")
         ports = re.findall(r"^(\S+)::respawn:.*getty", text, re.MULTILINE)
-        for want, why in (("tty1", "a login on the screen (koticon)"),
-                          ("hvc0", "the serial login, which is /dev/console")):
-            if want in ports:
-                print(f"  ok   getty on {want}")
-            else:
-                print(f"  FAIL no getty on {want}")
-                bad.append(
-                    f"/etc/inittab has no getty on {want} - {why}. Gettys "
-                    f"found: {ports or 'none'}. tty1 comes from "
-                    f"sw/linux/post-build.sh (BR2_ROOTFS_POST_BUILD_SCRIPT); "
-                    f"hvc0 from BR2_TARGET_GENERIC_GETTY_PORT. Neither may "
-                    f"replace the other.")
+        if "tty1" in ports:
+            print("  ok   getty on tty1")
+        else:
+            print("  FAIL no getty on tty1")
+            bad.append(
+                f"/etc/inittab has no getty on tty1 - that is the login on "
+                f"koti's own screen. Gettys found: {ports or 'none'}. It comes "
+                f"from sw/linux/post-build.sh (BR2_ROOTFS_POST_BUILD_SCRIPT); "
+                f"a post-build script that silently did not run is invisible "
+                f"until you try to log in.")
+        if "hvc0" in ports:
+            print("  FAIL getty on hvc0 (should be gone)")
+            bad.append(
+                f"/etc/inittab has a getty on hvc0. Every keystroke reaches "
+                f"both consoles, so this logs in twice and runs every command "
+                f"twice. Set BR2_TARGET_GENERIC_GETTY_PORT=\"\" in "
+                f"sw/linux/buildroot_koti.fragment. `console=hvc0` on the "
+                f"kernel command line is unaffected and should stay.")
+        else:
+            print("  ok   no getty on hvc0 (one keystroke, one login)")
 
     # ---- 5. freshness: the overlay, byte for byte ----------------------------
     for p in overlay_files():

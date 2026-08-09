@@ -367,7 +367,21 @@ module usb_kbd (
           // POPS. A "is a keyboard attached?" check that silently ate the
           // keystroke it was asked about would be a bug nobody would find by
           // reading the caller. Nothing in this register has a side effect.
-          2'd1:    rmux = {21'd0, usb_conerr, usb_typ, mods_live};
+          // ⭐ THE POINTERS RIDE IN THE SPARE BITS, and they answer the question
+          // left standing on 2026-08-09: with the producer provably idle
+          // (nq frozen) the queue still held entries nobody took, so WHO is not
+          // moving? Reading them here costs nothing — this register already has
+          // 21 unused bits and no side effects, and the profiler already prints
+          // it as `st=`, so no new register and no new print.
+          //   [14:11] wptr   the writer. Frozen == the source really has stopped.
+          //   [18:15] rptr2  LINUX's reader. **Frozen while wptr is ahead means
+          //                  koti_kbd is not popping at all** — and given how
+          //                  prominent __irq_resolve_mapping is in the storm's
+          //                  PC profile, that would mean the interrupt is being
+          //                  dispatched but never reaching our handler.
+          //   [22:19] rptr   the firmware's reader, for comparison.
+          2'd1:    rmux = {9'd0, rptr, rptr2, wptr,
+                           usb_conerr, usb_typ, mods_live};
           // Port 2 — the Linux input driver's own view of the same keystrokes.
           // Same layout as register 0 and it POPS the same way, but its own
           // pointer and its own overflow bit. See the port-2 block above for

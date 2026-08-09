@@ -205,7 +205,34 @@ module usb_kbd (
   // Dropping is suppressed on a cycle that also pops: the pop frees the slot,
   // so there is nothing to drop and `rptr` must move only once.
   wire enq1   = diff_run && !new_report && is_new(cand);
-  wire drop1  = enq1 && f_full && !pop;
+
+  // ⚗️ KOTI_KBD_STALL_ON_FULL restores the PRE-2026-08-09 behaviour: the writer
+  // stalls when port 1 is full instead of dropping the oldest entry. It exists
+  // for one experiment, and the experiment is a suspicion about the fix above.
+  //
+  // A stalled writer lets port 2 DRAIN TO EMPTY, which drops `kb_avail_irq` and
+  // makes an interrupt storm impossible — the keyboard dies but the machine
+  // keeps running. Drop-oldest never stops the writer, so if entries arrive
+  // faster than the driver drains, that level line never falls and the kernel
+  // cycles through the PLIC handler for ever, starving userspace. Both look
+  // identical from the chair; only one kills the machine.
+  //
+  // ⚖️ Neither policy is right on its own. Stalling lets a console nobody reads
+  // kill the keyboard for BOTH consumers (test 6b fails on it, at exactly the
+  // FIFO depth). Dropping cannot stall but cannot stop a storm either. "The
+  // writer must never stall" and "a level-triggered queue must never stay
+  // non-empty" cannot both be satisfied here, which is the signal that the real
+  // fix is UPSTREAM: stop enqueuing keystrokes nobody pressed.
+  //
+  // ⛔ Diagnostic only. CI builds and tb_usb_kbd run WITHOUT it, so test 6b
+  // keeps guarding the shipped behaviour.
+`ifdef KOTI_KBD_STALL_ON_FULL
+  wire enq_allowed = !f_full;
+  wire drop1       = 1'b0;
+`else
+  wire enq_allowed = 1'b1;
+  wire drop1       = enq1 && f_full && !pop;
+`endif
 
   // ---- port 2: a SECOND, INDEPENDENT READER (added 2026-08-08) ------------
   // WHY. Reading register 0 POPS, and koti's M-mode SBI firmware is its
@@ -259,14 +286,18 @@ module usb_kbd (
               diff_i   <= 2'd0;
           end else if (diff_run) begin
               if (is_new(cand)) begin
-                  // ALWAYS enqueue. When the queue is full the OLDEST entry is
-                  // dropped instead (`drop1` advances `rptr` below), which is
-                  // safe to write here because f_full means wptr[2:0] and
-                  // rptr[2:0] are equal — the slot being overwritten IS the
-                  // oldest one, and the reader is moved past it in the same
-                  // cycle.
-                  fifo[wptr[2:0]] <= cand;
-                  wptr <= wptr + 4'd1;
+                  // Enqueue. When the queue is full the OLDEST entry is dropped
+                  // instead (`drop1` advances `rptr` below), which is safe to
+                  // write here because f_full means wptr[2:0] and rptr[2:0] are
+                  // equal — the slot being overwritten IS the oldest one, and
+                  // the reader is moved past it in the same cycle.
+                  // Under KOTI_KBD_STALL_ON_FULL `enq_allowed` is `!f_full` and
+                  // this becomes the old refuse-and-flag behaviour instead.
+                  if (enq_allowed) begin
+                      fifo[wptr[2:0]] <= cand;
+                      wptr <= wptr + 4'd1;
+                  end else
+                      ovf <= 1'b1;
               end
               if (diff_i == 2'd3) begin
                   diff_run <= 1'b0;

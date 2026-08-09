@@ -1,11 +1,11 @@
-// console.c — 40x30 VGA text console over the PSRAM charbuf: cursor,
+// console.c — 80x60 VGA text console over the PSRAM charbuf: cursor,
 // newline, scroll. This grows into the SBI console putchar.
 #include "koti.h"
 #include "console.h"
 
 #define CHARBUF 0x01008000u
-#define COLS 40
-#define ROWS 30
+#define COLS 80
+#define ROWS 60
 
 static volatile uint8_t *const cb = (volatile uint8_t *)CHARBUF;
 static int cur_x, cur_y;

@@ -76,9 +76,12 @@
 #include <linux/vt_buffer.h>	/* scr_memmovew / scr_memsetw */
 #include <linux/vt_kern.h>
 
-#define KOTI_COLS	40
-#define KOTI_ROWS	30
+#define KOTI_COLS	80
+#define KOTI_ROWS	60
 #define KOTI_CELLS	(KOTI_COLS * KOTI_ROWS)
+/* 4800 bytes needs two pages, and they must be PHYSICALLY CONTIGUOUS because
+ * the raster fetches the charbuf by physical address. */
+#define KOTI_CB_ORDER	1
 
 /* VGA register block, offsets as in sw/koti.h. Only BASE is written. */
 #define KOTI_VGA_BASE	0x04
@@ -337,12 +340,21 @@ static int koticon_probe(struct platform_device *pdev)
 		return PTR_ERR(koti_regs);
 
 	/*
-	 * A whole page for 1200 bytes, because the hardware reads this by
+	 * ⚠️ TWO pages, and the ORDER matters rather than just the size: at
+	 * 80x60 the charbuf is 4800 bytes, which no longer fits one page, and
+	 * the raster reads it by PHYSICAL address — so the pages must be
+	 * physically contiguous. __get_free_pages(order 1) guarantees that;
+	 * two separate page allocations would look fine to the driver and
+	 * render the bottom half of the screen from whatever else happened to
+	 * live in the next frame.
+	 *
+	 * Whole pages for 4800 bytes, because the hardware reads this by
 	 * physical address and it must not move or be swapped. get_zeroed_page
 	 * gives page alignment, which more than satisfies the register's
 	 * word-address granularity.
 	 */
-	koti_cb = (u8 *)get_zeroed_page(GFP_KERNEL);
+	koti_cb = (u8 *)__get_free_pages(GFP_KERNEL | __GFP_ZERO,
+					KOTI_CB_ORDER);
 	if (!koti_cb)
 		return -ENOMEM;
 
@@ -353,7 +365,7 @@ static int koticon_probe(struct platform_device *pdev)
 	ret = do_take_over_console(&koti_con, 0, MAX_NR_CONSOLES - 1, 1);
 	console_unlock();
 	if (ret) {
-		free_page((unsigned long)koti_cb);
+		free_pages((unsigned long)koti_cb, KOTI_CB_ORDER);
 		koti_cb = NULL;
 		return dev_err_probe(dev, ret, "could not take over the console\n");
 	}

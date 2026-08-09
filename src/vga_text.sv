@@ -1,6 +1,17 @@
-// vga_text.sv — 40x30 text-mode video: 640x480@60, 8x8 font rendered
-// into 16x16 cells (pixels doubled both ways — C64-class density,
-// chosen by the 8x2 area budget: 40 columns halves the line buffers).
+// vga_text.sv — 80x60 text-mode video: 640x480@60, 8x8 font rendered
+// 1:1 into 8x8 cells.
+//
+// ⭐ IT WAS 40x30 UNTIL 2026-08-09, with pixels doubled both ways — a
+// C64-class density chosen when koti was an 8x2 TinyTapeout tile and 40
+// columns halved the line buffers. On a real monitor running a real shell it
+// is unusable: `ls -l`, `dmesg` and `ps` wrap on every single line, which is
+// most of why the machine felt cramped. 80 columns is what every unix tool
+// assumes.
+//
+// ⚠️ The cost is 4x the character fetches (twice per row, twice as many rows)
+// and it is still nothing: a row is 10 transactions per 8 scanlines, and 8
+// scanlines is ~6400 clocks, so video takes well under 2% of the bus. The
+// arbiter was never the constraint here — measure before believing otherwise.
 // Lowercase renders as lowercase since 2026-08-08: the fold that mapped
 // 0x60+ onto 0x40+ is gone, and the ROM carries all 96 glyphs of
 // 0x20..0x7F (768 B as logic, up from 512). The character buffer lives
@@ -44,18 +55,18 @@ module vga_text (
         .hblank_start(hblank_start), .frame_start(frame_start)
     );
 
-    // ping-pong line buffers: 2 x 40 characters
-    logic [7:0] lb [2][40];
+    // ping-pong line buffers: 2 x 80 characters
+    logic [7:0] lb [2][80];
     logic       cur;                    // buffer being displayed
 
     // row fetch FSM: 5 transactions x 8 chars into lb[!cur]
     logic        f_busy;
-    logic [3:0]  f_txn;                 // 0..4
-    logic [4:0]  f_row;                 // text row being fetched (0..29)
+    logic [3:0]  f_txn;                 // 0..9
+    logic [5:0]  f_row;                 // text row being fetched (0..59)
     logic [23:0] f_base;                // charbuf base latched at fetch start
 
-    // 10 words per row: base + row*10 + txn*2  (row*10 = row*8 + row*2)
-    wire [23:0] row_off = ({19'd0, f_row} << 3) + ({19'd0, f_row} << 1);
+    // 20 words per row: base + row*20 + txn*2  (row*20 = row*16 + row*4)
+    wire [23:0] row_off = ({18'd0, f_row} << 4) + ({18'd0, f_row} << 2);
     // Once a refill is accepted for arbitration it must finish even if
     // software clears `en` (or moves `base`) mid-row: withdrawing v_req
     // after a grant but before the ACK parks the arbiter forever (F3).
@@ -64,15 +75,15 @@ module vga_text (
     assign v_addr = f_base + row_off + {19'd0, f_txn, 1'b0};
 
     wire fetch_trigger = hblank_start
-                      && ((y[3:0] == 4'd0 && y < 10'd464)   // next row
+                      && ((y[2:0] == 3'd0 && y < 10'd472)   // next row
                           || y == 10'd508);                 // row 0
-    wire [4:0] fetch_row = (y < 10'd464) ? y[8:4] + 5'd1 : 5'd0;
+    wire [5:0] fetch_row = (y < 10'd472) ? y[8:3] + 6'd1 : 6'd0;
     wire swap = hblank_start
-             && ((y[3:0] == 4'd15 && y < 10'd480) || y == 10'd524);
+             && ((y[2:0] == 3'd7 && y < 10'd480) || y == 10'd524);
 
     always_ff @(posedge clk)
         if (rst) begin
-            f_busy <= 1'b0; f_txn <= 4'd0; f_row <= 5'd0;
+            f_busy <= 1'b0; f_txn <= 4'd0; f_row <= 6'd0;
             f_base <= 24'd0; cur <= 1'b0;
         end else begin
             if (fetch_trigger && en && !f_busy) begin
@@ -85,7 +96,7 @@ module vga_text (
                     lb[!cur][{f_txn, 3'd0} + i]     <= v_rdata[8*i +: 8];
                     lb[!cur][{f_txn, 3'd0} + i + 4] <= v_rdata2[8*i +: 8];
                 end
-                if (f_txn == 4'd4) f_busy <= 1'b0;
+                if (f_txn == 4'd9) f_busy <= 1'b0;
                 else               f_txn  <= f_txn + 4'd1;
             end
             if (swap && ce) cur <= !cur;
@@ -94,9 +105,9 @@ module vga_text (
     // pixel pipeline, registered: linebuf mux + font ROM was both a
     // long path and a slew source straight onto the pads. One pixel
     // (40 ns) of delay against the syncs is invisible on a monitor.
-    // Pixels double both ways; lowercase folds to uppercase.
+    // Pixels are 1:1 now — see the header.
     `include "font_rom.svh"
-    wire [7:0] ch   = lb[cur][x[9:4]];
+    wire [7:0] ch   = lb[cur][x[9:3]];
     // ⭐ NO FOLD. Until 2026-08-08 this read
     //     chf = (ch[6:5] == 2'b11) ? ch - 8'h20 : ch;
     // which mapped lowercase onto uppercase so the font ROM only had to carry
@@ -104,10 +115,10 @@ module vga_text (
     // FPGA-only now, the ROM carries all 96 glyphs, and a terminal that cannot
     // show lowercase is not a terminal anyone would use.
     wire [7:0] chf  = ch;
-    wire [7:0] grow = font_row(chf, y[3:1]);
+    wire [7:0] grow = font_row(chf, y[2:0]);
     always_ff @(posedge clk)
         if (rst)     pix <= 1'b0;
-        else if (ce) pix <= en && active && grow[x[3:1]];
+        else if (ce) pix <= en && active && grow[x[2:0]];
 
     wire _unused = &{frame_start, 1'b0};
 endmodule

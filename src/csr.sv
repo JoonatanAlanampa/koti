@@ -122,9 +122,42 @@ module csr (
             default: rval = 32'd0;
         endcase
 
+    // ⛔ mip.SEIP IS A READ-MODIFY-WRITE SPECIAL CASE, AND GETTING IT WRONG
+    // COST 2026-08-09. The privileged spec:
+    //
+    //   the value read from mip.SEIP is the logical-OR of the software-writable
+    //   bit and the interrupt signal from the external interrupt controller.
+    //   HOWEVER, the value used in the read-modify-write sequences of
+    //   CSRRS/CSRRC is only the software-writable SEIP bit, ignoring the
+    //   interrupt value from the external interrupt controller.
+    //
+    // Using the OR'd value here LATCHES THE PLIC'S PIN INTO `seip_sw`, and
+    // nothing ever clears it: SEIP then reads as pending for ever, long after
+    // the device has gone quiet. koti's firmware does `csr_set(mip, 1<<5)` in
+    // the timer handler and `csr_clear(mip, 1<<5)` in sbi_set_timer — a
+    // read-modify-write on mip ONE HUNDRED TIMES A SECOND — so any tick that
+    // coincided with the keyboard line being high wedged the machine.
+    //
+    // What that looked like on the bench, and why it took a day: Linux takes an
+    // external interrupt that will never go away, claims from the PLIC, is told
+    // nothing is pending (because nothing IS), fails to resolve hwirq 0, handles
+    // nothing, returns, and takes it again — for ever. Userspace is never
+    // scheduled, both consoles go silent, and every device instrument reads
+    // perfectly healthy, because every device IS healthy. The FIFO was measured
+    // EMPTY (wptr == rptr2) with SEIP still pending, which is the observation
+    // that finally pinned it here.
+    // ⚠️ It also explains why keeping the queue non-empty made things worse:
+    // it held the pin high for far more of the time, so far more ticks latched.
+    //
+    // Only the modify path is special-cased. A plain CSRRW writes wval and is
+    // already correct, and the READ still returns the OR, as it must.
+    wire [31:0] rval_rmw = (addr == 12'h344)
+                         ? {rval[31:10], seip_sw, rval[8:0]}
+                         : rval;
+
     wire [31:0] wnew = (op == 2'b01) ? wval
-                     : (op == 2'b10) ? (rval | wval)
-                     :                 (rval & ~wval);
+                     : (op == 2'b10) ? (rval_rmw | wval)
+                     :                 (rval_rmw & ~wval);
 
     // ---- interrupt selection: pending & enabled, split by
     // delegation; the M level wins ----

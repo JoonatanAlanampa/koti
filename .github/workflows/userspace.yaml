@@ -126,7 +126,8 @@ jobs:
           echo "checking ${#bins[@]} files"
           python3 sw/linux/check_rootfs.py \
             --cpio buildroot/output/images/rootfs.cpio \
-            buildroot-config.txt "${bins[@]}"
+            buildroot-config.txt
+            koti-fi.bmap "${bins[@]}"
 
       # The overlay reached the rootfs, and the marker string inside it is the
       # one the bench waits for. check_rootfs.py asserts BR2_ROOTFS_OVERLAY is
@@ -208,6 +209,30 @@ jobs:
           ls -l buildroot/output/images/rootfs.cpio
           find buildroot/output/target -type f -printf '%10s  %P\n' \
             | sort -rn | head -15
+
+      # ---- the Finnish keymap, generated rather than hand-written -----------
+      # koti's screen types a US layout: koti_kbd.c reports a KEYCODE and LINUX
+      # decides the character, and the kernel's built-in keymap is US. So `-`
+      # comes out as `/` -- HID usage 0x38 is "the key right of period", which
+      # differs between boards. That is item 9 working as designed (the keymap
+      # became changeable); it just has not been changed yet.
+      #
+      # ⛔ WHY THIS IS GENERATED IN CI AND NOT WRITTEN BY HAND. busybox's
+      # `loadkmap` loads WHOLE TABLES, not individual keys, so a keymap has to
+      # be complete for every keycode in plain/shift/AltGr -- and every mistake
+      # is a key that silently does the wrong thing, findable only by typing it
+      # on the hardware. `loadkeys --bkeymap` emits exactly that file from the
+      # kbd project's own upstream data, which is correct by construction.
+      #
+      # ⚠️ It is NOT the kbd package in the rootfs: that would be megabytes
+      # against a budget check_rootfs.py enforces, for a ~2 KB data file. Only
+      # the file ships; busybox already has loadkmap built in.
+      - name: Generate the Finnish keymap
+        run: |
+          sudo apt-get install -y --no-install-recommends kbd console-data
+          loadkeys --bkeymap fi > koti-fi.bmap
+          ls -l koti-fi.bmap
+          head -c 7 koti-fi.bmap | od -c | head -1     # expect "bkeymap"
 
       - uses: actions/upload-artifact@v7
         if: success() || failure()

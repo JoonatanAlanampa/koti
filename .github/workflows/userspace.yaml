@@ -126,8 +126,7 @@ jobs:
           echo "checking ${#bins[@]} files"
           python3 sw/linux/check_rootfs.py \
             --cpio buildroot/output/images/rootfs.cpio \
-            buildroot-config.txt
-            koti-fi.bmap "${bins[@]}"
+            buildroot-config.txt "${bins[@]}"
 
       # The overlay reached the rootfs, and the marker string inside it is the
       # one the bench waits for. check_rootfs.py asserts BR2_ROOTFS_OVERLAY is
@@ -243,3 +242,4 @@ jobs:
             buildroot/output/images/rootfs.provenance
             buildroot/output/images/rootfs.ext2
             buildroot-config.txt
+            koti-fi.bmap

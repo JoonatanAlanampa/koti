@@ -276,6 +276,30 @@ static void prof_sample(void) {
     // standing that fits every measurement taken on 2026-08-09.
     uart_puts(" kb=");
     prof_hex32(prof_last_kbd);
+    // ⭐ THE SUPERVISOR'S OWN INTERRUPT STATE, which is the one thing M-mode can
+    // see and Linux cannot report once it has stopped scheduling.
+    //
+    // arch/riscv/kernel/time.c masks STIE on EVERY tick and relies on the
+    // clockevent handler reprogramming the next event to turn it back on:
+    //
+    //     csr_clear(CSR_IE, IE_TIE);   evdev->event_handler(evdev);
+    //
+    // If that reprogram ever fails to happen, STIE stays clear and the timer is
+    // masked FOR EVER — and this firmware's fallback becomes useless, because
+    // it injects STIP into a supervisor that is not listening. M-mode keeps
+    // getting ticks (this line keeps printing) while Linux gets none: jiffies
+    // stop, every timeout dies, sleep() never returns, nothing is ever woken,
+    // and the machine idles with perfectly healthy hardware. That is exactly
+    // the state observed on 2026-08-09 — userspace stopped entirely while the
+    // profiler carried on.
+    //
+    // sie bit5 = STIE (timer), bit9 = SEIE (external), bit1 = SSIE (software).
+    //   sie=...220 with sip=...020  -> STIP pending but MASKED: the theory.
+    //   sie=...222                  -> the timer is enabled and this is wrong.
+    uart_puts(" sie=");
+    prof_hex32(csr_read(sie));
+    uart_puts(" sip=");
+    prof_hex32(csr_read(sip));
     uart_puts("]\r\n");
 }
 #endif

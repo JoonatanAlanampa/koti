@@ -318,7 +318,20 @@ Software, in order:
        Pmod plus a MAC in fabric, or USB Ethernet through the soft host — by
        far the largest lift.
 
-11d. [ ] 🖥️ **80 columns. 40x30 is too coarse to use** (user, 2026-08-09).
+11d. [x] 🖥️ **80 COLUMNS — DONE AND CONFIRMED ON HARDWARE 2026-08-09.**
+       8x8 glyphs 1:1 in 640x480: 80x60, four times the text. Four places
+       had to agree — `vga_text.sv`, `sw/console.c` (the FIRMWARE's console,
+       which still writes that buffer for hvc0), `koticon.c`, and
+       `tools/screenshot.py`.
+       ⚠️ The charbuf changed KIND, not just size: 4800 bytes needs
+       `__get_free_pages(order 1)` because the raster reads it by PHYSICAL
+       address and two separate pages would render the bottom half of the
+       screen from whatever else lived in the next frame.
+       ⚠️ Timing margin fell from ~29 to **26.27 MHz** post-route (PASS at
+       25) — real cost, still passing.
+       ⛔ The arbiter was NOT the constraint. Video is under 2% of the bus
+       even at 4x the fetches; I flagged it as a risk and was wrong.
+       [superseded] 40x30 was too coarse to use (user, 2026-08-09).
        The raster is 640x480 and the font is 8x8 **doubled to 16x16**, which is
        where 40x30 comes from. Drawing 1:1 gives **80x60** in the same mode, or
        80x30 with double-height rows only.
@@ -335,7 +348,17 @@ Software, in order:
          (`sw/console.c`), which still writes the text buffer for hvc0. A
          stride mismatch means two writers scribbling over each other.
 
-11c. [ ] 🇫🇮 **The screen types a US layout now — load a Finnish keymap.**
+11c. [x] 🇫🇮 **FINNISH KEYMAP — DONE AND CONFIRMED ON HARDWARE 2026-08-09.**
+       `koti: fi keymap loaded`, and `-` types `-`. AltGr works, which is
+       the bigger win: `@ $ { } [ ] \ |` are all AltGr on a Finnish board
+       and none of them reached the screen before.
+       ⛔ NOT hand-written. busybox `loadkmap` loads WHOLE TABLES, so a
+       keymap is complete or it is wrong; `loadkeys --bkeymap fi` in CI
+       emits it from kbd's upstream data. Only the 2311-byte file ships.
+       ⚠️ tty1 ONLY — hvc0 still uses the FIRMWARE's own Finnish table in
+       `sw/usbkbd.c`. Two tables, in two languages; changing one does not
+       change the other.
+       [superseded] the screen types a US layout — load a Finnish keymap.
        Noticed on hardware 2026-08-09: `-` comes out as `/`. **Expected, not a
        regression**, and it is the price of PLAN item 9. HID usage `0x38` is
        "the key right of period" — `/` on a US board, `-` on a Finnish one —

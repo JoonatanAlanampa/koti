@@ -8,6 +8,11 @@
 *.bin binary
 *.cpio binary
 *.dtb binary
+# The busybox binary keymap (loadkmap). Same reasoning: it is loaded byte for
+# byte by `loadkmap`, and a 0x0A that became 0x0D 0x0A shifts every table after
+# it — every key past the damage then types the wrong character, on hardware,
+# with nothing failing at build time.
+*.bmap binary
 *.elf binary
 *.fst binary
 *.bit binary

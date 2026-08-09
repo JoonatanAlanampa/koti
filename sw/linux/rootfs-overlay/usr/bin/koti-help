@@ -1,0 +1,57 @@
+#!/bin/sh
+# koti-help — the manual, on the machine.
+#
+# ⛔ WHY THIS EXISTS RATHER THAN JUST docs/MANUAL.md: koti has no networking.
+# A machine that cannot fetch anything needs its documentation locally, or the
+# documentation is only useful to someone sitting at a different computer. This
+# is the short form; docs/MANUAL.md is the long one and they are kept in step
+# by hand -- if you add a section there, add its heading here.
+#
+# Copyright (c) 2026 Joonatan Alanampa
+# SPDX-License-Identifier: Apache-2.0
+
+exec more <<'EOF'
+koti - a computer built from the transistor up.
+RV32IMA + Zicsr, sv32 MMU, 32 MB SDRAM, Linux 6.12, on an ULX3S 85F at 25 MHz.
+
+WHAT IS HERE
+  Userspace is busybox on musl, statically linked: about 280 commands. The
+  usual ones behave the way you expect -- ls cd cp mv rm mkdir cat less more
+  grep sed awk find head tail sort wc du df mount umount ps top kill free
+  uname dmesg date vi.
+
+  vi is the editor. `less` and `more` page. `tree` is here. `bc` and `dc` do
+  arithmetic. `tar`, `gzip`, `xz`, `unzip` handle archives.
+
+STORAGE
+  /            RAM (initramfs). ANYTHING WRITTEN HERE IS LOST AT POWER-OFF.
+  /dev/kotisd2 the microSD's second partition, ext2, and it is writable:
+                   mount /dev/kotisd2 /mnt
+                   ... work ...
+                   sync ; umount /mnt
+  ⚠️ ext2 has NO JOURNAL. `sync` before pulling the power or you will lose
+  whatever was still in the page cache.
+
+THE TWO CONSOLES
+  The monitor (tty1) is the one you type at. The serial line (hvc0) is a
+  MIRROR: it receives the same keystrokes, so a single login logs you in on
+  both and every command runs twice. That is deliberate -- the serial echo is
+  how the machine is debugged -- but it is why you may see doubled output.
+
+KEYBOARD
+  Finnish layout, loaded at boot (`koti: fi keymap loaded`). AltGr reaches
+  @ $ { } [ ] \ | -- all of which a shell needs.
+
+WHAT IS NOT HERE
+  NO NETWORKING. No CONFIG_NET, no MAC, no interface but loopback. ip, ping
+  and wget exist as busybox applets and will fail with
+  "socket: Function not implemented". That is expected, not a fault.
+  NO package manager, no compiler, no floating point (koti has no FPU).
+
+SHUTTING DOWN
+  sync, then pull the power. `poweroff` and `halt` stop the CPU (the firmware
+  halts on the SBI reset call); there is no power controller to switch off.
+
+MORE
+  docs/MANUAL.md in the repository, which this summarises.
+EOF

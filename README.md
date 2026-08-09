@@ -23,9 +23,9 @@ Every line below has been seen on the bench, not only in simulation.
 | **CPU** | RV32IMA + Zicsr, M/S/U privilege, **sv32 MMU**, CLINT, PLIC, precise traps |
 | **Memory** | 32 MB onboard SDRAM, all of it addressable since 2026-08-08; full window walked with an address-derived pattern, 0 errors |
 | **Storage** | microSD, **read and write**, ext2 — files survive a reboot |
-| **Screen** | HDMI (GPDI), 640x480, 40x30 text console |
+| **Screen** | HDMI (GPDI), 640x480, **80x60** text console |
 | **Keyboard** | USB HID on US2, Finnish layout |
-| **OS** | mainline **Linux 6.12** riscv32, busybox userspace, ~250 applets |
+| **OS** | mainline **Linux 6.12** riscv32, busybox userspace, ~280 applets |
 | **Boot** | own M-mode SBI firmware loads the kernel off the card into RAM |
 
 ```
@@ -41,6 +41,17 @@ koti wrote this
 
 The unmount in there is the point: it drops the page cache, so the last `cat`
 genuinely read those bytes back off the card.
+
+## Using it
+
+**[docs/MANUAL.md](docs/MANUAL.md)** is the user manual: how to log in, what the
+two consoles are and why output sometimes doubles, how storage works and how to
+avoid losing a file to a journal-less ext2, the full command list, and the
+things that are present but cannot work.
+
+A short version lives **on the machine** — type `koti-help`. That is not
+redundancy: koti has no networking, so a manual you can only read on another
+computer is one you cannot read while using it.
 
 ## What does not work yet
 

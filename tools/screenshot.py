@@ -10,7 +10,7 @@
 #   1. src/font_rom.svh   the ACTUAL glyph bitmaps the hardware scans out,
 #                         parsed here rather than redrawn
 #   2. src/vga_text.sv    the cell geometry and the character folding
-#   3. sw/console.c       the 40x30 wrap and scroll rules
+#   3. sw/console.c       the 80x60 wrap and scroll rules
 #
 # and the TEXT is the real UART capture from the machine, which carries exactly
 # the same bytes as the screen because SBI console_putchar calls putc_both().
@@ -23,8 +23,10 @@
 #     0x60..0x7F onto 0x40..0x5F, for die area on an 8x2 tile.
 #     koti's screen genuinely has no lowercase glyphs.
 #   * A CELL IS 16x16 SCREEN PIXELS, not 8x8: the scan-out indexes the font with
-#     x[3:1] and y[3:1], i.e. every font pixel is doubled. 40x16 = 640,
-#     30x16 = 480.
+#     x[2:0] and y[2:0], i.e. every font pixel is 1:1. 80x8 = 640,
+#     60x8 = 480. ⚠️ It was 40x30 with pixels DOUBLED until 2026-08-09;
+#     a reconstruction still assuming that renders half a screen at twice
+#     the size and looks entirely plausible.
 #   * BIT 0 IS THE LEFTMOST PIXEL (font_rom.svh says so in its header), and row
 #     `fr` is g[fr*8 +: 8].
 #
@@ -46,7 +48,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FONT = ROOT / "src" / "font_rom.svh"
 
-COLS, ROWS = 40, 30
+COLS, ROWS = 80, 60
 CELL = 8            # font pixels
 SCALE = 2           # the hardware doubles every pixel: x[3:1], y[3:1]
 
@@ -84,8 +86,8 @@ def fold(ch):
 
 
 def lay_out(text):
-    """sw/console.c's con_putc, exactly: \\n moves down, \\r homes, wrap at 40,
-    scroll at 30. Anything else is dropped rather than guessed at."""
+    """sw/console.c's con_putc, exactly: \\n moves down, \\r homes, wrap at 80,
+    scroll at 60. Anything else is dropped rather than guessed at."""
     buf = [[0x20] * COLS for _ in range(ROWS)]
     x = y = 0
 
@@ -141,7 +143,7 @@ def render(buf, glyphs, zoom):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Render koti's 40x30 text screen from captured console text.")
+        description="Render koti's 80x60 text screen from captured console text.")
     ap.add_argument("text", help="a file of console text (a real UART capture)")
     ap.add_argument("out")
     ap.add_argument("--zoom", type=int, default=1,

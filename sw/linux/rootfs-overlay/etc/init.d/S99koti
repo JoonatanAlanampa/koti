@@ -31,38 +31,6 @@ case "$1" in
 		/bin/busybox uname -a
 		/bin/busybox grep -E '^MemTotal|^MemFree' /proc/meminfo
 		echo "koti: userspace is alive"
-
-		# ---- PROCESS WATCH (debug, 2026-08-09) --------------------------
-		# The open bug: after a burst of typing, BOTH consoles stop showing
-		# characters while the kernel stays healthy -- ticks flowing, the
-		# keyboard ISR still draining its queue, the machine idle in
-		# do_idle. Everything in hardware was cleared by measurement, and
-		# what is left is that neither getty is reading its console any
-		# more, with init never respawning one.
-		#
-		# ⛔ WHY NOT CONFIG_DETECT_HUNG_TASK: it only reports tasks in
-		# UNINTERRUPTIBLE (D) sleep. A getty blocked on an ordinary read()
-		# is in INTERRUPTIBLE (S) sleep, which that detector ignores by
-		# design -- it would have cost a 26 minute build to learn nothing.
-		#
-		# This works instead because the timer fix (sbi.c, 0551bc8) means
-		# userspace still gets scheduled during the failure. It writes to
-		# /dev/console, which is hvc0 -> the UART, proven alive and
-		# transmitting throughout. So the machine reports on its own
-		# processes while the bug is happening.
-		#
-		# What to read: whether the two getty processes still EXIST, and
-		# their state letter -- S is a live blocked reader, Z a zombie
-		# nobody reaped, and absent means they exited and init did not put
-		# them back. Those are three different bugs.
-		(
-			while : ; do
-				/bin/busybox sleep 20
-				echo "--- koti procwatch ---" > /dev/console
-				/bin/busybox ps -o pid,stat,comm,args \
-					> /dev/console 2>&1
-			done
-		) &
 		;;
 	stop)
 		;;

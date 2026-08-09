@@ -200,6 +200,21 @@ static void prof_sample(void) {
     prof_hex32(pc);
     uart_puts(" mpp=");
     uart_putc((char)('0' + mpp));
+    // ⭐ AND THE MODIFIER LEVEL, which is the prime suspect as of the run that
+    // proved the machine merely IDLE rather than wedged. USB_STAT is
+    // side-effect free by design (that is why status does not live in the
+    // popping register), so sampling it here cannot eat a keystroke.
+    //
+    // The bits are the HID boot-protocol modifiers, live from the USB core:
+    //   bit0 LCTRL  bit1 LSHIFT  bit2 LALT  bit3 LGUI
+    //   bit4 RCTRL  bit5 RSHIFT  bit6 RALT  bit7 RGUI
+    // A bit that STAYS SET with no key held is the bug: usb_getchar() folds
+    // ctrl to 0x01..0x1A and returns -1 outright for AltGr on a key with no
+    // AltGr form, so one stuck bit silences hvc0 completely — and koti_kbd.c
+    // brackets every keystroke with the same level, so it silences tty1 too.
+    // st should read 000001xx while nothing is held (typ=1, no modifiers).
+    uart_puts(" st=");
+    prof_hex32(USB_STAT);
     uart_puts("]\r\n");
 }
 #endif

@@ -54,15 +54,21 @@
 //             firmware feeds hvc0 from +0x00 and sw/linux/koti_kbd.c feeds
 //             /dev/input/eventN from here, exactly as a PC delivers a keypress
 //             to the console and to evdev at the same time.
-//             ⚠️ A FULL PORT 1 STALLS THE WRITER, and that is the SHIPPED
-//             policy as of 2026-08-09 — deliberately, after measuring both.
-//             It has a real cost (a console nobody reads can kill the keyboard
-//             for both consumers; test 6b) and it BOUNDS THE QUEUE, which is
-//             what stops a phantom-keystroke flood from holding the PLIC line
-//             high for ever and starving userspace. Measured A/B: stalling
-//             loses the keyboard, dropping loses the MACHINE. Until the flood
-//             itself is fixed, losing the keyboard is the better failure.
-//             `KOTI_KBD_DROP_OLDEST` selects the other policy. See `drop1`.
+//             ⛔ NEITHER PORT CAN STALL THE WRITER. A reader more than 8 behind
+//             is lapped (port 2) or has its oldest entry dropped (port 1), and
+//             ovf2/ovf says so. That is the shipped policy; the point is that a
+//             console nobody reads must not be able to kill the keyboard for
+//             the other consumer, which is what test 6b guards.
+//             ⚠️ HISTORY, because it will look like flip-flopping otherwise.
+//             Stalling was briefly restored on 2026-08-09 to contain what looked
+//             like a keystroke flood holding the PLIC line high and starving
+//             userspace. It was not a flood: the real cause was `mip.SEIP` in
+//             csr.sv latching the PLIC pin through a read-modify-write, so the
+//             interrupt never went away no matter what this FIFO did. With that
+//             fixed (def5699, verified: 253 keystrokes, 705/705 samples with
+//             SEIP clear) the containment is unnecessary and the stronger
+//             property is back. `KOTI_KBD_STALL_ON_FULL` still selects the old
+//             behaviour, for A/B use. See `drop1`.
 //             ⚠️ The PLIC interrupt follows THIS port, not +0x00.
 //   +0x0C  R  keystrokes OFFERED since reset, free-running, no side effects.
 //             Sample it twice a second apart and the difference is the SOURCE
@@ -233,12 +239,12 @@ module usb_kbd (
   //
   // ⛔ Diagnostic only. CI builds and tb_usb_kbd run WITHOUT it, so test 6b
   // keeps guarding the shipped behaviour.
-`ifdef KOTI_KBD_DROP_OLDEST
-  wire enq_allowed = 1'b1;
-  wire drop1       = enq1 && f_full && !pop;
-`else
+`ifdef KOTI_KBD_STALL_ON_FULL
   wire enq_allowed = !f_full;
   wire drop1       = 1'b0;
+`else
+  wire enq_allowed = 1'b1;
+  wire drop1       = enq1 && f_full && !pop;
 `endif
 
   // The source rate, counted whether or not the entry is stored. See register 3.

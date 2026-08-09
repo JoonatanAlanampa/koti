@@ -185,9 +185,7 @@ module tb_usb_kbd;
         rd(2'd2, v);
         if (v[8] && v[7:0] == (8'h10 + i[7:0])) got2 = got2 + 1;
     end
-`ifdef KOTI_KBD_DROP_OLDEST
-    check("port2 not starved by a stalled port1 (want 40)", got2, 40);
-`else
+`ifdef KOTI_KBD_STALL_ON_FULL
     // ⚠️ THE SHIPPED POLICY DELIBERATELY DOES NOT HOLD THE STRONGER PROPERTY,
     // and this pins the exact number rather than deleting the test — a change
     // in either direction still fails here.
@@ -199,7 +197,9 @@ module tb_usb_kbd;
     // never falls, and userspace starves — the machine dies. Until whatever is
     // offering keystrokes nobody pressed is fixed, BOUNDING THE QUEUE is worth
     // more than never stalling, so the stall ships and this is its cost.
-    check("port2 starves at the FIFO depth (shipped trade)", got2, 8);
+    check("port2 starves at the FIFO depth (this policy's cost)", got2, 8);
+`else
+    check("port2 not starved by a stalled port1 (want 40)", got2, 40);
 `endif
     // Leave port 1 as this test found it. Skipping this drain does not fail
     // HERE — it fails in tests 7 and 8, which then read the stale entries this

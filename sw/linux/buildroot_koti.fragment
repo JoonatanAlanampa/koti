@@ -102,6 +102,17 @@ BR2_TARGET_ROOTFS_EXT2_LABEL="kotiroot"
 # WRITER, removing it would have killed the keyboard for tty1 as well, with no
 # visible connection to the change. src/usb_kbd.sv drops the oldest entry
 # instead now, so no reader can stall the other.
+#
+# 🔦 WHAT REMOVING IT COSTS, because it is not nothing and it will be wanted
+# again. A getty ECHOES what it reads, so with one on hvc0 every character you
+# type appears in a UART capture. That was the single most useful instrument in
+# the 2026-08-09 keyboard hunt — it is where "28 characters got through, then
+# it died", "46 the next run", and finally "40+ characters reached a live login
+# process" all came from. Without it the UART shows kernel printk and says
+# nothing about what you typed.
+# ⇒ SET THIS BACK TO "hvc0" FOR A DEBUG ROOTFS whenever a keyboard-shaped bug
+# turns up. It is one symbol and a rootfs rebuild, and it turns an invisible
+# input path into a logged one.
 BR2_TARGET_GENERIC_GETTY_PORT=""
 
 # ⭐ AND A SECOND GETTY, ON tty1 — the screen. sw/linux/post-build.sh appends it

@@ -318,6 +318,40 @@ Software, in order:
        Pmod plus a MAC in fabric, or USB Ethernet through the soft host — by
        far the largest lift.
 
+11d. [ ] 🖥️ **80 columns. 40x30 is too coarse to use** (user, 2026-08-09).
+       The raster is 640x480 and the font is 8x8 **doubled to 16x16**, which is
+       where 40x30 comes from. Drawing 1:1 gives **80x60** in the same mode, or
+       80x30 with double-height rows only.
+       Why 80 specifically: every unix tool assumes it. At 40, `ls -l`, `dmesg`
+       and `ps` wrap on every line, which is most of why the shell feels unusable.
+       - cheap: the text buffer is 1200 → 4800 bytes, and `koticon` is mostly
+         `KOTI_COLS`/`KOTI_ROWS` constants.
+       - ⚠️ the real question: **`vga_text`'s fetch rate DOUBLES**, and the video
+         DMA shares the memory bus with the CPU through `arbiter3`. Failure mode
+         is flicker or CPU stalls, not a clean error, so measure the arbiter
+         rather than assuming 32 MB of SDRAM makes it free.
+       - ⚠️ THREE things must agree on the geometry: `vga_text.sv`, the
+         `koticon` node in `sw/linux/koti.dts`, and the FIRMWARE's own console
+         (`sw/console.c`), which still writes the text buffer for hvc0. A
+         stride mismatch means two writers scribbling over each other.
+
+11c. [ ] 🇫🇮 **The screen types a US layout now — load a Finnish keymap.**
+       Noticed on hardware 2026-08-09: `-` comes out as `/`. **Expected, not a
+       regression**, and it is the price of PLAN item 9. HID usage `0x38` is
+       "the key right of period" — `/` on a US board, `-` on a Finnish one —
+       and the thing that maps position→character MOVED when Linux took the
+       keyboard:
+       - before: `sw/usbkbd.c`'s **Finnish** table drew the screen;
+       - now: `koti_kbd.c` reports a KEYCODE and **Linux's keymap** decides,
+         and the kernel's built-in default is **US**.
+       ⇒ The screen (tty1) is US; hvc0 is still Finnish, because the firmware
+       still translates for it. Two layouts on one machine.
+       Fix: a Finnish keymap in the rootfs overlay loaded at boot (busybox
+       `loadkmap` takes a binary map; `loadkeys` is the full kbd package).
+       Rootfs rebuild, ~26 min. ⚠️ Do NOT "fix" this by putting the Finnish
+       table back in the driver — that would undo item 9 and make the keymap
+       unchangeable again, which is the thing item 9 bought.
+
 11b. [ ] ⌨️ **Drop the getty on `hvc0` — one keystroke should not log you in
        twice.** The rootfs inittab has BOTH `hvc0::respawn:/sbin/getty` and
        `tty1::respawn:/sbin/getty`, and every keystroke reaches both consumers

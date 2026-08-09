@@ -82,38 +82,27 @@ BR2_TARGET_ROOTFS_EXT2_SIZE="16M"
 BR2_TARGET_ROOTFS_EXT2_LABEL="kotiroot"
 # BR2_TARGET_ROOTFS_TAR is not set
 
-# ⛔ NO GETTY FROM BUILDROOT AT ALL — the login lives on tty1, added by
-# post-build.sh. It used to be hvc0 and that was wrong in a way that only shows
-# on hardware: EVERY KEYSTROKE REACHES BOTH CONSOLES, because the firmware pops
-# the keyboard queue for hvc0 and koti_kbd.c pops it for tty1. So one `root` and
-# one Enter logged in TWICE (login[72] on hvc0, login[73] on tty1, measured
-# 2026-08-09) and every command afterwards ran twice.
+# ⚠️ The console is hvc0 — the SBI console sw/sbi/sbi.c implements — and NOT a
+# ttyS. koti has no 16550 and koti.dts has no serial node, so a getty spawned
+# on ttyS0 would open nothing, respawn, and fill the log while the machine
+# looked alive but unusable.
 #
-# hvc0 could never be a usable login anyway: koti's UART is TRANSMIT-ONLY, so
-# nobody can type at it from the host. It only appeared to work because it was
-# mirroring the physical keyboard.
+# 🔦 IT IS KEPT DELIBERATELY, AND NOT AS A LOGIN. Nobody can type at it: koti's
+# UART is TRANSMIT-ONLY. It is kept because a getty ECHOES what it reads, and
+# the firmware mirrors the keyboard queue to hvc0 — so every character typed on
+# the physical keyboard appears in a UART capture. That was the single most
+# useful instrument in the 2026-08-09 keyboard hunt: "28 characters got through
+# then it died", "46 the next run", and finally "40+ reached a live login
+# process" all came from this echo. Without it the UART carries kernel printk
+# and says nothing about what you typed.
 #
-# ⚠️ `console=hvc0` STAYS on the kernel command line — the boot log over the
-# UART is the main remote instrument and losing it would be a bad trade. This
-# removes the LOGIN, not the console.
-#
-# ⚠️ AND IT WAS UNSAFE UNTIL 2026-08-09: hvc0's getty was the only thing
-# draining the firmware's FIFO port, and back when a full port stalled the
-# WRITER, removing it would have killed the keyboard for tty1 as well, with no
-# visible connection to the change. src/usb_kbd.sv drops the oldest entry
-# instead now, so no reader can stall the other.
-#
-# 🔦 WHAT REMOVING IT COSTS, because it is not nothing and it will be wanted
-# again. A getty ECHOES what it reads, so with one on hvc0 every character you
-# type appears in a UART capture. That was the single most useful instrument in
-# the 2026-08-09 keyboard hunt — it is where "28 characters got through, then
-# it died", "46 the next run", and finally "40+ characters reached a live login
-# process" all came from. Without it the UART shows kernel printk and says
-# nothing about what you typed.
-# ⇒ SET THIS BACK TO "hvc0" FOR A DEBUG ROOTFS whenever a keyboard-shaped bug
-# turns up. It is one symbol and a rootfs rebuild, and it turns an invisible
-# input path into a logged one.
-BR2_TARGET_GENERIC_GETTY_PORT=""
+# ⚠️ THE COST IS REAL AND ACCEPTED (user decision, 2026-08-09). Every keystroke
+# reaches BOTH consoles by design — the firmware pops the queue for hvc0,
+# koti_kbd.c pops it for tty1 — so one `root` and one Enter logs in TWICE
+# (measured: login[72] on hvc0, login[73] on tty1) and every command afterwards
+# runs on two shells that can then diverge. PLAN item 11b proposed removing this
+# for that reason; the diagnostic window was judged worth more.
+BR2_TARGET_GENERIC_GETTY_PORT="hvc0"
 
 # ⭐ AND A SECOND GETTY, ON tty1 — the screen. sw/linux/post-build.sh appends it
 # to the generated inittab, which is the only way to ADD one: this symbol takes

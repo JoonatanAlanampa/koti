@@ -352,28 +352,6 @@ Software, in order:
        table back in the driver — that would undo item 9 and make the keymap
        unchangeable again, which is the thing item 9 bought.
 
-11b. [ ] ⌨️ **Drop the getty on `hvc0` — one keystroke should not log you in
-       twice.** The rootfs inittab has BOTH `hvc0::respawn:/sbin/getty` and
-       `tty1::respawn:/sbin/getty`, and every keystroke reaches both consumers
-       by design (firmware pops `+0x00`→hvc0, `koti_kbd` pops `+0x08`→tty1). So
-       `root`+Enter logs in on both and **every command runs twice** — confirmed
-       on hardware 2026-08-09:
-       ```
-       login[72]: root login on 'hvc0'
-       login[73]: root login on 'tty1'
-       ```
-       The hvc0 login cannot ever be used as a login: **the UART is
-       transmit-only**, so nobody can type at it from the PC. It only appears
-       to work because it mirrors the physical keyboard.
-       ⇒ Remove the `hvc0` getty, **KEEP `console=hvc0`** so the boot log still
-       reaches the UART — that capture is the main remote instrument and losing
-       it would be a bad trade. Rootfs change, so ~26 min of CI.
-       ⚠️ **This was UNSAFE before 2026-08-09 (`a42bf4c`)**: hvc0's getty was
-       the only thing draining port 1, and a full port 1 stalled the FIFO's
-       WRITER, killing the keyboard on both consoles. Deleting the getty would
-       have bricked input with no visible connection to the change. The
-       drop-oldest fix is what makes this a tidy-up rather than a trap.
-
 12. [x] 🧠 **Double the RAM — DONE 2026-08-08 in simulation, `MemTotal: 8780 →
        25004 kB`** (`Memory: 23996K/28672K available`, MemFree 3296 → 19452 kB),
        userspace still reached. **NOT yet run on hardware** — see the end of

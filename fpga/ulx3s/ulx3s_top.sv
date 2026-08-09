@@ -441,9 +441,18 @@ module ulx3s_top (
   //                                      (a loop, an IRQ storm, stuck userspace)
   //   halted dark, activity FROZEN    -> not fetching at all: stalled on memory
   wire cpu_halted, cpu_fetch;
-  wire [2:0] irq_state;         // {fifo_has_data, plic_pending, inflight}
+  wire [4:0] irq_state;   // {keyrep, enq, fifo_has_data, pending, inflight}
+  // Two COUNTERS, because the levels below them are microsecond pulses on a
+  // healthy machine and therefore read the same as a dead one.
+  //   kb_enq  rolls when usb_kbd turns a report into a queued keystroke
+  //   kb_key  rolls when a report arrives that CONTAINS a key at all
+  logic [17:0] kb_enq = 18'd0, kb_key = 18'd0;
   logic [23:0] cpu_act = 24'd0;
   always_ff @(posedge clk_25mhz) if (cpu_fetch) cpu_act <= cpu_act + 24'd1;
+  always_ff @(posedge clk_25mhz) begin
+      if (irq_state[3]) kb_enq <= kb_enq + 18'd1;
+      if (irq_state[4]) kb_key <= kb_key + 18'd1;
+  end
 
   // ⚠️ `cpu_act` rolling means the CPU is EXECUTING. It does NOT mean the CPU
   // is spinning — a healthy idle Linux fetches instructions too. It separates
@@ -459,8 +468,10 @@ module ulx3s_top (
   // With a dead keyboard: LED4 lit + LED6 lit = claim without complete.
   // LED4 DARK while keys are pressed = the keystrokes never reached the queue,
   // so the fault is in usb_kbd's diff and not in the interrupt path at all.
-  wire [7:0] usb_diag = {cpu_halted, irq_state, cpu_act[23:22],
-                         usb_rep_qq[1:0]};
+  // LED7 halted | LED6:5 ENQUEUED keystrokes | LED4:3 KEYED reports
+  // LED2 fifo occupied | LED1:0 all USB reports
+  wire [7:0] usb_diag = {cpu_halted, kb_enq[1:0], kb_key[1:0],
+                         irq_state[2], usb_rep_qq[1:0]};
 
   // ------------------------------------------------------------ GPDI / HDMI
   // koti's standard video output (user directive 2026-08-07). The encoder trio

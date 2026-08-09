@@ -96,7 +96,22 @@ module usb_kbd (
     input  wire [7:0]  usb_key_modifiers,
     input  wire [7:0]  usb_key1, usb_key2, usb_key3, usb_key4,
 
-    output logic       kb_avail_irq       // level: something is queued
+    output logic       kb_avail_irq,      // level: something is queued
+    // One pulse per keystroke actually ENQUEUED. A level says whether the
+    // queue is occupied right now, which on a healthy machine is a microsecond
+    // per key and invisible; this says whether keystrokes are being produced
+    // AT ALL. Counting it outside is what tells "the diff dropped the key"
+    // apart from "the driver took it and Linux lost it later".
+    output logic       dbg_enq,
+    // One pulse per report that CONTAINS AT LEAST ONE KEY. Paired with dbg_enq
+    // this splits the only two ways the enqueue can stop while the USB core is
+    // still delivering reports:
+    //   keyed reports arriving, nothing enqueued -> is_new() is rejecting
+    //      everything, i.e. the p1..p4 baseline is stuck holding keys that are
+    //      no longer held, so every press looks like a repeat.
+    //   no keyed reports at all -> the core is sending EMPTY reports while keys
+    //      are down, and the fault is in the vendored host, not in the diff.
+    output logic       dbg_keyrep
 );
 
   // ------------------------------------------------- 1. the domain crossing
@@ -287,6 +302,13 @@ module usb_kbd (
   // Tying it to port 1 would mean the firmware draining its own queue lowered
   // the interrupt line for a driver whose queue was still full.
   assign kb_avail_irq = !f_empty2;
+
+  // Observation only. `dbg_keyrep` samples the RAW inputs at the crossing edge
+  // rather than k1..k4, which are latched by this very edge and therefore still
+  // hold the previous report on the cycle new_report is high.
+  assign dbg_enq    = enq1;
+  assign dbg_keyrep = new_report
+                   && |{usb_key1, usb_key2, usb_key3, usb_key4};
 
   // ---------------------------------------------------------- the registers
   // Captured on the select cycle and served on the ack cycle, the same

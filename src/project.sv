@@ -86,6 +86,10 @@ module tt_um_koti (
     // encoder needs to know where the visible box is. console had to build a
     // timing replica to re-derive it; koti's vga_timing already produces
     // `active`, so it is exported here instead and the replica is unnecessary.
+    output wire [5:0]  video_rgb,      // RGB222, {R1,R0,G1,G0,B1,B0}
+    output wire        video_hs,       // active low
+    output wire        video_vs,       // active low
+    output wire        video_de,       // high inside the visible box
     // ---- Liveness, for the harness's lamps. Added 2026-08-09. ----
     // ⛔ WHY THIS IS A PORT AND NOT A COMMENT SAYING "USE LED1".
     // `uo_out = vga_en ? uo_vga : {led[5:0], halted, uart_txd}` — so the HALTED
@@ -106,11 +110,7 @@ module tt_um_koti (
     //               not fetch, or stalled on memory.
     output wire        dbg_halted,
     output wire        dbg_fetch,
-    output wire [2:0]  dbg_irq,        // {fifo_has_data, plic_pending, inflight}
-    output wire [5:0]  video_rgb,      // RGB222, {R1,R0,G1,G0,B1,B0}
-    output wire        video_hs,       // active low
-    output wire        video_vs,       // active low
-    output wire        video_de,       // high inside the visible box
+    output wire [4:0]  dbg_irq,        // see the assign for the bit meanings
     // USB HID keyboard, from vendor/usb_hid_host.v in the harness. The core
     // needs its own 12 MHz domain, so it lives out there and only its results
     // come in here; src/usb_kbd.sv does the crossing.
@@ -139,6 +139,7 @@ module tt_um_koti (
   wire        d_ptw;       // the data port is carrying a page-table read
   wire        plic_eip;    // PLIC -> the core's S-level external interrupt
   wire [4:1]  plic_dbg_ip, plic_dbg_inflight;   // observation only, to the lamps
+  wire        usb_dbg_enq, usb_dbg_keyrep;      // ditto, from usb_kbd
 
   wire        if_req, if_ack;
   wire [23:0] if_addr;
@@ -338,7 +339,8 @@ module tt_um_koti (
       .usb_conerr(usb_conerr), .usb_key_modifiers(usb_key_modifiers),
       .usb_key1(usb_key1), .usb_key2(usb_key2),
       .usb_key3(usb_key3), .usb_key4(usb_key4),
-      .kb_avail_irq(usb_kb_irq)
+      .kb_avail_irq(usb_kb_irq),
+      .dbg_enq(usb_dbg_enq), .dbg_keyrep(usb_dbg_keyrep)
   );
 
   wire ad_ack;
@@ -623,14 +625,22 @@ module tt_um_koti (
 
   // The whole keyboard interrupt path, in three bits. Read together they say
   // WHERE a keystroke stopped, which no amount of staring from the outside can:
-  //   dbg_irq[2]  usb_kb_irq   the FIFO has something for Linux
+  //   dbg_irq[4]  keyrep       a report arrived CONTAINING A KEY  (pulse)
+  //   dbg_irq[3]  enq          a keystroke was ENQUEUED           (pulse)
+  //   dbg_irq[2]  usb_kb_irq   the FIFO has something for Linux   (level)
   //   dbg_irq[1]  plic ip[1]   the PLIC is offering it to the hart
   //   dbg_irq[0]  inflight[1]  claimed and NOT yet completed — the wedge state
+  //
+  // ⚠️ THE LEVELS ARE NEARLY USELESS ON A HEALTHY MACHINE and that cost a round
+  // on 2026-08-09: the driver drains within microseconds, so [2:0] read dark
+  // whether the path is working perfectly or producing nothing at all. The
+  // PULSES are the ones to count — they say whether keystrokes exist.
   // [2] high with [1] low and [0] high is a claim that never completed: the
   // source is pinned off and only a reset brings it back.
   // [2] low while keys are being pressed means the keystrokes never reached
   // the queue at all, which puts the fault in usb_kbd's diff, not here.
-  assign dbg_irq = {usb_kb_irq, plic_dbg_ip[1], plic_dbg_inflight[1]};
+  assign dbg_irq = {usb_dbg_keyrep, usb_dbg_enq,
+                    usb_kb_irq, plic_dbg_ip[1], plic_dbg_inflight[1]};
 
   // The same pixels the VGA personality packs into `uo`, unpacked. Deliberately
   // NOT gated on `vga_en`: the HDMI link must keep running whatever the SoC is

@@ -1,9 +1,10 @@
 {
-  "cpio_bytes": 1198592,
-  "cpio_sha256": "0bf51cd31331875257acf1e75f57ee909f87d1885a64526316fe7e036ea9319f",
-  "fragment_sha256": "bad54b2dceab84337281a7ba0c8df59bd4c3ca3dc058463418ccb79ca07f1f0f",
+  "cpio_bytes": 1202176,
+  "cpio_sha256": "88e70a60967308e4b7e16c291443c87b866a66d02f4653f12ee64944f96791a1",
+  "fragment_sha256": "56070b170ffa35c0071241978c1638728823a4c32869d83cc53709df4d58bc82",
   "overlay_sha256": {
-    "etc/init.d/S99koti": "ad8a02addd9e0dca194781c21eda162a6628c13e7a75830b15700b3ac5f5f12e",
+    "etc/init.d/S99koti": "8e6fab9b6c53aee8f7449d54893ff908d5f43121ee558078a41c0f15a3204ac0",
+    "etc/koti-fi.bmap": "99ca38c2a4ffb8ab26caed81de32565479d87511b739bca76c1d6b3d7b46ea38",
     "init": "7d49f487ff94967ad07f6efa3f0773dd4adb5b021b50d851d4fc9de661b6cbd6"
   }
 }

@@ -8,11 +8,6 @@
 *.bin binary
 *.cpio binary
 *.dtb binary
-# The busybox binary keymap (loadkmap). Same reasoning: it is loaded byte for
-# byte by `loadkmap`, and a 0x0A that became 0x0D 0x0A shifts every table after
-# it — every key past the damage then types the wrong character, on hardware,
-# with nothing failing at build time.
-*.bmap binary
 *.elf binary
 *.fst binary
 *.bit binary
@@ -28,3 +23,22 @@
 sw/linux/rootfs-overlay/** text eol=lf
 *.sh text eol=lf
 *.S text eol=lf
+
+# ---- files whose CONTENT IS HASHED, so a line ending is a content change ----
+# sw/linux/rootfs.provenance records the sha256 of the fragment and of every
+# overlay file, and check_initramfs.py compares the working tree against it. On
+# a Windows checkout with core.autocrlf those files come back with CRLF, the
+# hashes differ from what CI built, and the failure reads as "the committed
+# initramfs is stale" when nothing about it is. That cost two round trips on
+# 2026-08-09 before the cause was spotted, both times mid-way through a build
+# chain. Pinning them to LF makes the working tree and CI agree by construction.
+sw/linux/buildroot_koti.fragment text eol=lf
+sw/linux/rootfs-overlay/** text eol=lf
+sw/linux/post-build.sh text eol=lf
+
+# ⚠️ AFTER the rule above, because later rules win: the keymap lives inside the
+# overlay and must NOT be touched. It is loaded byte for byte by `loadkmap`, and
+# a 0x0A that became 0x0D 0x0A shifts every table after it -- every key past the
+# damage then types the wrong character, on hardware, with nothing failing at
+# build time.
+*.bmap binary

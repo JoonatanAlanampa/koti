@@ -54,13 +54,20 @@
 //             firmware feeds hvc0 from +0x00 and sw/linux/koti_kbd.c feeds
 //             /dev/input/eventN from here, exactly as a PC delivers a keypress
 //             to the console and to evdev at the same time.
-//             ⛔ NEITHER PORT CAN STALL THE WRITER, and both are told when
-//             they lose entries. A reader more than 8 behind is lapped (port 2)
-//             or has its oldest entry dropped (port 1); ovf2/ovf says so.
-//             ⚠️ Port 1 was NOT like this until 2026-08-09 — a full port 1
-//             blocked the enqueue, so a firmware that stopped reading killed
-//             the keyboard for BOTH consoles. See the `drop1` block below.
+//             ⚠️ A FULL PORT 1 STALLS THE WRITER, and that is the SHIPPED
+//             policy as of 2026-08-09 — deliberately, after measuring both.
+//             It has a real cost (a console nobody reads can kill the keyboard
+//             for both consumers; test 6b) and it BOUNDS THE QUEUE, which is
+//             what stops a phantom-keystroke flood from holding the PLIC line
+//             high for ever and starving userspace. Measured A/B: stalling
+//             loses the keyboard, dropping loses the MACHINE. Until the flood
+//             itself is fixed, losing the keyboard is the better failure.
+//             `KOTI_KBD_DROP_OLDEST` selects the other policy. See `drop1`.
 //             ⚠️ The PLIC interrupt follows THIS port, not +0x00.
+//   +0x0C  R  keystrokes OFFERED since reset, free-running, no side effects.
+//             Sample it twice a second apart and the difference is the SOURCE
+//             RATE: ~125/s is a real keyboard, tens of thousands is the core
+//             free-running. That number is what decides where the bug is.
 //   +0x04  R  {conerr, typ[1:0], modifiers[7:0]} — no side effects at all.
 //             `modifiers` is LIVE, not queued. Shift and ctrl are levels,
 //             not events, so queueing them would pair a character with whatever
@@ -226,13 +233,19 @@ module usb_kbd (
   //
   // ⛔ Diagnostic only. CI builds and tb_usb_kbd run WITHOUT it, so test 6b
   // keeps guarding the shipped behaviour.
-`ifdef KOTI_KBD_STALL_ON_FULL
-  wire enq_allowed = !f_full;
-  wire drop1       = 1'b0;
-`else
+`ifdef KOTI_KBD_DROP_OLDEST
   wire enq_allowed = 1'b1;
   wire drop1       = enq1 && f_full && !pop;
+`else
+  wire enq_allowed = !f_full;
+  wire drop1       = 1'b0;
 `endif
+
+  // The source rate, counted whether or not the entry is stored. See register 3.
+  logic [31:0] enq_count;
+  always_ff @(posedge clk)
+      if (rst)       enq_count <= 32'd0;
+      else if (enq1) enq_count <= enq_count + 32'd1;
 
   // ---- port 2: a SECOND, INDEPENDENT READER (added 2026-08-08) ------------
   // WHY. Reading register 0 POPS, and koti's M-mode SBI firmware is its
@@ -361,6 +374,16 @@ module usb_kbd (
           // why it cannot disturb register 0.
           2'd2:    rmux = {22'd0, ovf2, !f_empty2,
                            f_empty2 ? 8'd0 : fifo[rptr2[2:0]]};
+          // ⭐ KEYSTROKES OFFERED, free-running, no side effects. The number the
+          // whole 2026-08-09 hunt turned on and never had: how FAST is the USB
+          // path producing keystrokes? A lamp can say "rolling"; only a counter
+          // sampled twice can say 125/s (a real keyboard, so the fault is
+          // elsewhere) or 50000/s (the core free-running, which is the theory).
+          //
+          // ⚠️ It counts ATTEMPTS (`enq1`), not successful writes, on purpose:
+          // under the stall policy the writes stop at a full queue while the
+          // SOURCE keeps producing, and the source is what is being measured.
+          2'd3:    rmux = enq_count;
           default: rmux = 32'd0;
       endcase
 

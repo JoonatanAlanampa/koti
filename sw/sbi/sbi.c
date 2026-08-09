@@ -296,6 +296,13 @@ static void prof_sample(void) {
     // sie bit5 = STIE (timer), bit9 = SEIE (external), bit1 = SSIE (software).
     //   sie=...220 with sip=...020  -> STIP pending but MASKED: the theory.
     //   sie=...222                  -> the timer is enabled and this is wrong.
+    // Keystrokes OFFERED since reset. The DIFFERENCE between consecutive
+    // lines is the source rate — one line a second, so it reads directly in
+    // keystrokes/second. ~125 means a real keyboard and the fault is elsewhere;
+    // tens of thousands means the vendored host is free-running, which is the
+    // standing theory for what floods the queue and storms the PLIC.
+    uart_puts(" nq=");
+    prof_hex32(USB_KBD_CNT);
     uart_puts(" sie=");
     prof_hex32(csr_read(sie));
     uart_puts(" sip=");

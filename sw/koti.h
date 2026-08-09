@@ -92,6 +92,14 @@
 // firmware must never read it and sw/linux/koti_kbd.c must never read USB_KBD:
 // that is the whole point of there being two.
 #define USB_KBD_LINUX 0x00060008u
+
+// +0x0C: keystrokes OFFERED since reset. Free-running, READ-ONLY, NO side
+// effects — unlike +0x00 and +0x08, this one may be read as often as you like.
+// The difference between two samples a second apart is the rate at which the
+// USB path is producing keystrokes, which is the measurement the 2026-08-09
+// hunt lacked: a real keyboard cannot exceed ~125/s, so anything far above
+// that is the host core free-running rather than a person typing.
+#define USB_KBD_CNT REG32(0x0006000C)
 #define USB_AVAIL  0x100u
 #define USB_OVF    0x200u             // sticky; cleared by the read that sees it
 // From USB_STAT only. Status is in the other register on purpose: a "is a

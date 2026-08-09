@@ -185,7 +185,22 @@ module tb_usb_kbd;
         rd(2'd2, v);
         if (v[8] && v[7:0] == (8'h10 + i[7:0])) got2 = got2 + 1;
     end
+`ifdef KOTI_KBD_DROP_OLDEST
     check("port2 not starved by a stalled port1 (want 40)", got2, 40);
+`else
+    // ⚠️ THE SHIPPED POLICY DELIBERATELY DOES NOT HOLD THE STRONGER PROPERTY,
+    // and this pins the exact number rather than deleting the test — a change
+    // in either direction still fails here.
+    //
+    // Measured on hardware 2026-08-09, same board, one define apart: with the
+    // writer STALLING, a keyboard failure costs the keyboard and the machine
+    // keeps running (process dumps continue, both gettys alive). With the
+    // writer DROPPING, the queue never empties, the level-triggered PLIC line
+    // never falls, and userspace starves — the machine dies. Until whatever is
+    // offering keystrokes nobody pressed is fixed, BOUNDING THE QUEUE is worth
+    // more than never stalling, so the stall ships and this is its cost.
+    check("port2 starves at the FIFO depth (shipped trade)", got2, 8);
+`endif
     // Leave port 1 as this test found it. Skipping this drain does not fail
     // HERE — it fails in tests 7 and 8, which then read the stale entries this
     // loop left behind and look like two unrelated bugs.

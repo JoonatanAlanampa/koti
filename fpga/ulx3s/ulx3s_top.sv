@@ -203,6 +203,7 @@ module ulx3s_top (
       .sd_miso_oe (soc_sd_miso_oe),
       .dbg_halted (cpu_halted),
       .dbg_fetch  (cpu_fetch),
+      .dbg_irq    (irq_state),
       .video_rgb  (video_rgb),
       .video_hs   (video_hs),
       .video_vs   (video_vs),
@@ -440,15 +441,26 @@ module ulx3s_top (
   //                                      (a loop, an IRQ storm, stuck userspace)
   //   halted dark, activity FROZEN    -> not fetching at all: stalled on memory
   wire cpu_halted, cpu_fetch;
+  wire [2:0] irq_state;         // {fifo_has_data, plic_pending, inflight}
   logic [23:0] cpu_act = 24'd0;
   always_ff @(posedge clk_25mhz) if (cpu_fetch) cpu_act <= cpu_act + 24'd1;
 
-  // LED7 halted | LED6 conerr | LED5 kbd present | LED4 PLL lock
-  // LED3:2 CPU activity (rolling = executing) | LED1:0 USB reports (typing)
-  // usb_rep_qq is report_count[7:4]; its LOW two bits are taken so the lamp
-  // moves within a second of typing rather than needing 64 reports.
-  wire [7:0] usb_diag = {cpu_halted, usb_conerr, usb_typ[0], usb_pll_lock,
-                         cpu_act[23:22], usb_rep_qq[1:0]};
+  // ⚠️ `cpu_act` rolling means the CPU is EXECUTING. It does NOT mean the CPU
+  // is spinning — a healthy idle Linux fetches instructions too. It separates
+  // halted / stalled / executing and nothing finer. (Read as "spinning" on
+  // 2026-08-09, which sent the hunt after a hang that was not happening.)
+  //
+  // ⭐ THE THREE BITS THAT MATTER NOW, straight from the interrupt path:
+  //   LED6 inflight   claimed and not completed. STUCK HIGH = the wedge:
+  //                   ip[1] is pinned to 0 and the keyboard is never delivered
+  //                   again until reset.
+  //   LED5 pending    the PLIC is offering the interrupt to the hart
+  //   LED4 fifo       usb_kbd has a keystroke waiting for Linux
+  // With a dead keyboard: LED4 lit + LED6 lit = claim without complete.
+  // LED4 DARK while keys are pressed = the keystrokes never reached the queue,
+  // so the fault is in usb_kbd's diff and not in the interrupt path at all.
+  wire [7:0] usb_diag = {cpu_halted, irq_state, cpu_act[23:22],
+                         usb_rep_qq[1:0]};
 
   // ------------------------------------------------------------ GPDI / HDMI
   // koti's standard video output (user directive 2026-08-07). The encoder trio
@@ -500,15 +512,17 @@ module ulx3s_top (
   //                     unlike uo[1], whose HALTED lamp is replaced by a video
   //                     bit the moment software enables the display — i.e. it
   //                     was missing in exactly the mode that runs the OS.
-  //   LED6  conerr    — the USB core reports a connection error
-  //   LED5  keyboard  — usb_typ[0]: a keyboard is enumerated right now
-  //   LED4  pll_lock  — the 12 MHz USB clock; dark = nothing USB works
+  //   LED6  inflight  — PLIC source 1 claimed and NOT completed
+  //   LED5  pending   — PLIC source 1 offered to the hart
+  //   LED4  fifo      — usb_kbd has a keystroke queued for Linux
   //   LED3:2 CPU      — rolling = instructions are being fetched
   //   LED1:0 USB      — rolling WHILE KEYS ARE PRESSED = reports arriving
-  // ⚠️ LED1:0 frozen on an untouched keyboard is NORMAL — see the counter's
-  // own note. Read the pair: LED3:2 frozen with LED7 dark means the CPU is
-  // STALLED rather than stopped; LED1:0 rolling while nothing types puts the
-  // fault above the USB core, which is where 2026-08-09 ended up.
+  // ⚠️ LED1:0 frozen on an untouched keyboard is NORMAL, and LED3:2 rolling
+  // means EXECUTING, not spinning — an idle Linux rolls it too.
+  // The keyboard path reads left to right: reports arrive (LED1:0) -> a
+  // keystroke is queued (LED4) -> the PLIC offers it (LED5) -> a handler
+  // claims it (LED6 pulses and clears). LED6 stuck ON is the wedge; LED4 dark
+  // under typing means the queue never saw the key.
 `ifdef KOTI_FLASH_BRAM
   // led[7] carries the fabric flash's `bad_cmd` instead of uo[7]. uo[7] is the
   // top LED bit in headless mode and carries nothing a person watches, whereas

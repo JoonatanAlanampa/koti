@@ -64,8 +64,20 @@ module plic #(
     output logic [31:0]        rdata,
 
     // to the core's S-mode external interrupt input
-    output logic               eip
+    output logic               eip,
+
+    // ---- Observation only, for the harness's lamps. Added 2026-08-09. ----
+    // `inflight` is the one piece of state here that can WEDGE. A claim sets
+    // it and only a matching complete clears it, so a claim that never gets
+    // completed pins ip[j] at 0 and that source is never delivered again —
+    // silently, permanently, and recoverable only by reset. From outside that
+    // is indistinguishable from a dead device, which is what cost 2026-08-09.
+    output logic [SOURCES:1]   dbg_ip,
+    output logic [SOURCES:1]   dbg_inflight
 );
+
+  assign dbg_ip       = ip;
+  assign dbg_inflight = inflight;
 
   localparam int CTX = 0;   // the single context, serving S-mode. See below.
 

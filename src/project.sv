@@ -106,6 +106,7 @@ module tt_um_koti (
     //               not fetch, or stalled on memory.
     output wire        dbg_halted,
     output wire        dbg_fetch,
+    output wire [2:0]  dbg_irq,        // {fifo_has_data, plic_pending, inflight}
     output wire [5:0]  video_rgb,      // RGB222, {R1,R0,G1,G0,B1,B0}
     output wire        video_hs,       // active low
     output wire        video_vs,       // active low
@@ -137,6 +138,7 @@ module tt_um_koti (
   wire        usb_kb_irq;  // USB keyboard has something queued -> PLIC source 1
   wire        d_ptw;       // the data port is carrying a page-table read
   wire        plic_eip;    // PLIC -> the core's S-level external interrupt
+  wire [4:1]  plic_dbg_ip, plic_dbg_inflight;   // observation only, to the lamps
 
   wire        if_req, if_ack;
   wire [23:0] if_addr;
@@ -300,7 +302,8 @@ module tt_um_koti (
       .src(plic_src),
       .sel(plic_sel && !plic_ack), .we(d_we),
       .addr({d_addr[19:0], 2'b00}), .wdata(d_wdata), .rdata(plic_rdata),
-      .eip(plic_eip)
+      .eip(plic_eip),
+      .dbg_ip(plic_dbg_ip), .dbg_inflight(plic_dbg_inflight)
   );
 
   // Captured on the SELECT cycle, served on the ack cycle — the same hazard
@@ -617,6 +620,17 @@ module tt_um_koti (
   // The same two facts, on pins that do not depend on the video personality.
   assign dbg_halted = halted;
   assign dbg_fetch  = if_req && if_ack;
+
+  // The whole keyboard interrupt path, in three bits. Read together they say
+  // WHERE a keystroke stopped, which no amount of staring from the outside can:
+  //   dbg_irq[2]  usb_kb_irq   the FIFO has something for Linux
+  //   dbg_irq[1]  plic ip[1]   the PLIC is offering it to the hart
+  //   dbg_irq[0]  inflight[1]  claimed and NOT yet completed — the wedge state
+  // [2] high with [1] low and [0] high is a claim that never completed: the
+  // source is pinned off and only a reset brings it back.
+  // [2] low while keys are being pressed means the keystrokes never reached
+  // the queue at all, which puts the fault in usb_kbd's diff, not here.
+  assign dbg_irq = {usb_kb_irq, plic_dbg_ip[1], plic_dbg_inflight[1]};
 
   // The same pixels the VGA personality packs into `uo`, unpacked. Deliberately
   // NOT gated on `vga_en`: the HDMI link must keep running whatever the SoC is

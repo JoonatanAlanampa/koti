@@ -28,6 +28,9 @@ module koti_core #(
     output logic        halted,
     output logic [7:0]  led,
     output logic        uart_txd,
+    // ⭐ THE OTHER HALF, added 2026-08-09. Before this the console was
+    // transmit-only and nothing could ever be typed at koti over a wire.
+    input  wire         uart_rxd,
     input  logic [7:0]  gpio_in,
     output logic [1:0]  qspi_cfg,   // MMIO +C; resets 0 = 1-bit SPI
 
@@ -961,26 +964,77 @@ module koti_core #(
                 res_valid <= 1'b0;                     // clear wins
         end
 
-    // I/O sub-decode: +0 LED, +4 UART, +8 GPIO in, +C QSPI_CFG
+    // I/O sub-decode: +0 LED, +4 UART TX, +8 GPIO in, +C QSPI_CFG, +10 UART RX
+    //
+    // ⚠️ `io_hi_m` GATES THE FOUR BELOW, and that is not optional. They decode
+    // on bits [3:2] alone, so before this existed the address 0x1_0010 had
+    // [3:2] == 00 and therefore WROTE THE LED. Adding a register at +0x10
+    // without this line would have made every UART-RX access quietly hit
+    // another device — the same partial-compare aliasing PLAN.md records as
+    // finding F1 on the flash window.
+    wire io_hi_m   = addr_m[4];
     wire io_gpio_m = addr_m[3];
     wire io_uart_m = addr_m[2];
     always_ff @(posedge clk)
         if (rst)                                              led <= 8'd0;
-        else if (mem_write_m && valid_m && io_m && !io_gpio_m
+        else if (mem_write_m && valid_m && io_m && !io_hi_m && !io_gpio_m
                  && !io_uart_m && !halted)                    led <= st_data[7:0];
 
     // QSPI_CFG resets to 0 (plain SPI) so the chip always boots
     always_ff @(posedge clk)
         if (rst)                                              qspi_cfg <= 2'b00;
-        else if (mem_write_m && valid_m && io_m && io_gpio_m
+        else if (mem_write_m && valid_m && io_m && !io_hi_m && io_gpio_m
                  && io_uart_m && !halted)                     qspi_cfg <= st_data[1:0];
 
     logic uart_busy;
     uart_tx #(.DIV(UART_DIV)) u0
         (.clk(clk), .rst(rst),
-         .wr(mem_write_m && valid_m && io_m && !io_gpio_m && io_uart_m
-             && !halted),
+         .wr(mem_write_m && valid_m && io_m && !io_hi_m && !io_gpio_m
+             && io_uart_m && !halted),
          .data(st_data[7:0]), .tx(uart_txd), .busy(uart_busy));
+
+    // ---- UART RECEIVE, MMIO +0x10: {ovf, avail, data[7:0]} ----------------
+    // ⛔ IT IS A SEPARATE ADDRESS FROM +0x04 ON PURPOSE. Reading this POPS, and
+    // +0x04 is polled in a tight loop by uart_putc (`while (UART & 1)`) to wait
+    // for the transmitter. Folding receive into that register would make every
+    // busy-poll eat an incoming byte — a status check with a side effect, which
+    // src/usb_kbd.sv already carries a warning about for the same reason.
+    //
+    // ⭐ AND IT HAS AN OVERRUN BIT, unlike the PS/2 block this project regrets
+    // (see project.sv): a byte arriving before software took the last one is
+    // recorded rather than silently dropped. Without that a receiver that falls
+    // behind looks identical to a line that went quiet.
+    logic [7:0] rx_byte;
+    logic       rx_avail, rx_ovf;
+    wire [7:0]  rx_data_w;
+    wire        rx_valid_w, rx_frame_w;
+
+    uart_rx #(.DIV(UART_DIV)) u1
+        (.clk(clk), .rst(rst), .rx_pin(uart_rxd),
+         .data(rx_data_w), .valid(rx_valid_w), .frame_err(rx_frame_w));
+
+    // A load from +0x10 takes the byte. `is_load_m` is the same qualifier the
+    // read mux below uses, so the pop and the value can never disagree.
+    wire rx_pop = is_load_m && valid_m && io_m && io_hi_m && !halted && !pstall;
+
+    always_ff @(posedge clk)
+        if (rst) begin
+            rx_byte <= 8'd0; rx_avail <= 1'b0; rx_ovf <= 1'b0;
+        end else begin
+            if (rx_valid_w) begin
+                rx_byte  <= rx_data_w;
+                rx_avail <= 1'b1;
+                // Arriving on top of an untaken byte is an overrun. Keep the
+                // NEWEST: a stale byte is worse than a missing one on a console.
+                if (rx_avail && !rx_pop) rx_ovf <= 1'b1;
+            end else if (rx_pop) begin
+                rx_avail <= 1'b0;
+                rx_ovf   <= 1'b0;      // sticky until read, like usb_kbd's
+            end
+        end
+
+    wire [31:0] uart_rx_rd = {22'd0, rx_ovf, rx_avail, rx_byte};
+    wire _unused_frame = &{rx_frame_w, 1'b0};
 
     // loads: external word through the byte-extension path
     // An RMW always retires with d_seen set (see astall), and d_data_r then
@@ -1012,9 +1066,10 @@ module koti_core #(
             wb_w        <= rmw_m ? old_q                   // AMO: old value
                          : sc_m  ? {31'd0, !sc_ok}         // SC: 0 = success
                          : is_load_m
-                         ? (io_m ? (io_gpio_m ? (io_uart_m ? {30'd0, qspi_cfg}
-                                                           : {24'd0, gpio_in})
-                                              : {31'd0, uart_busy})
+                         ? (io_m ? (io_hi_m ? uart_rx_rd
+                                    : (io_gpio_m ? (io_uart_m ? {30'd0, qspi_cfg}
+                                                              : {24'd0, gpio_in})
+                                                 : {31'd0, uart_busy}))
                                  : ld_ext)                 // LR rides ld_ext
                          : value_m;
         end

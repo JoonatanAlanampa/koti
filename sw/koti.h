@@ -21,6 +21,14 @@
 #ifndef __ASSEMBLER__
 #define LED       REG32(LED_ADDR)
 #define UART      REG32(UART_ADDR)    // w: tx byte, r: bit0 = busy
+
+// +0x10: the RECEIVE side. {ovf, avail, data[7:0]} -- reading POPS.
+// ⛔ A SEPARATE ADDRESS FROM UART ON PURPOSE. uart_putc polls UART in a tight
+// loop waiting for `busy`, so folding receive into that register would make
+// every busy-poll eat an incoming byte.
+#define UART_RX   REG32(0x00010010)   // ⚠️ READING POPS when UART_RX_AVAIL set
+#define UART_RX_AVAIL 0x100u
+#define UART_RX_OVF   0x200u
 #endif
 #define GPIO_IN   REG32(0x00010008)
 #define QSPI_CFG  REG32(0x0001000C)   // bit0 flash quad, bit1 PSRAM quad

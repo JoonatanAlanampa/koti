@@ -71,6 +71,12 @@ IOBUF PORT "led[7]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
 # FPGA -> host serial. PULLMODE=UP so the line idles high (UART idle) even
 # while the FPGA is unconfigured, which stops the host seeing a break.
 LOCATE COMP "ftdi_rxd" SITE "L4";
+# The other direction: what the FTDI transmits and koti receives. Site from
+# upstream ulx3s_v20.lpf. PULLMODE=UP so an unplugged or idle line reads HIGH,
+# which is what a serial line idles at -- a floating input would look like an
+# endless stream of start bits.
+LOCATE COMP "ftdi_txd" SITE "M1";
+IOBUF  PORT "ftdi_txd" PULLMODE=UP IO_TYPE=LVCMOS33;
 IOBUF  PORT "ftdi_rxd" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
 
 # keep the ESP32 booted (it can power-cycle the board otherwise)

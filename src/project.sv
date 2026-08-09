@@ -90,6 +90,10 @@ module tt_um_koti (
     output wire        video_hs,       // active low
     output wire        video_vs,       // active low
     output wire        video_de,       // high inside the visible box
+    // The console's receive pin. koti was transmit-only until 2026-08-09; this
+    // is what makes the serial console typeable and is the same wire an ESP32
+    // link would use on wifi_txd.
+    input  wire        uart_rxd,
     // ---- Liveness, for the harness's lamps. Added 2026-08-09. ----
     // ⛔ WHY THIS IS A PORT AND NOT A COMMENT SAYING "USE LED1".
     // `uo_out = vga_en ? uo_vga : {led[5:0], halted, uart_txd}` — so the HALTED
@@ -183,7 +187,8 @@ module tt_um_koti (
       // delivery; with PS/2 gone there is no M-level interrupt source at all.
       // Every interrupt Linux sees arrives through seip and the PLIC.
       .mtip(mtip), .msip(msip), .meip(1'b0), .seip(plic_eip),
-      .halted(halted), .led(led), .uart_txd(uart_txd), .gpio_in(ui_in),
+      .halted(halted), .led(led), .uart_txd(uart_txd), .uart_rxd(uart_rxd),
+      .gpio_in(ui_in),
       .qspi_cfg(qspi_cfg),
       .if_req(if_req), .if_addr(if_addr), .if_ack(if_ack),
       .if_rdata(if_rdata), .if_rdata2(if_rdata2),

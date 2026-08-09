@@ -47,6 +47,15 @@ module ulx3s_top (
     input  wire  [3:0] sw,
     output logic [7:0] led,
     output logic       ftdi_rxd,
+    // ⭐ THE FTDI'S TRANSMIT, i.e. OUR RECEIVE — site M1, from upstream
+    // ulx3s_v20.lpf. Added 2026-08-09; before it koti could not be typed at
+    // over the serial line at all, which is why every note in this project
+    // calls the UART "transmit-only".
+    // ⚠️ The naming is from the FTDI's point of view, as upstream has it:
+    // ftdi_rxd is what the FTDI RECEIVES (we drive it) and ftdi_txd is what it
+    // TRANSMITS (we read it). Wiring them by the local meaning of rx/tx gets
+    // them backwards and produces a board that neither sends nor receives.
+    input  wire        ftdi_txd,
 
     // ---- US2: USB HID keyboard, straight onto the FPGA ----
     // The bidirectional pair, which is what a soft host needs. `usb_fpga_dp/dn`
@@ -201,6 +210,7 @@ module ulx3s_top (
       .sd_miso    (sd_d[0]),
       .sd_miso_drv(soc_sd_miso_drv),
       .sd_miso_oe (soc_sd_miso_oe),
+      .uart_rxd   (ftdi_txd),
       .dbg_halted (cpu_halted),
       .dbg_fetch  (cpu_fetch),
       .dbg_irq    (irq_state),

@@ -1,9 +1,9 @@
 {
-  "cpio_bytes": 1198592,
-  "cpio_sha256": "94445ccbb23671dd15051c9ef4b5b0f6a5e7ffe630791e25f5bacaed633e1556",
+  "cpio_bytes": 1200128,
+  "cpio_sha256": "6479b409899c710912190ee40fd683bdd3644c3fc48a2683eef7e7add0ef312c",
   "fragment_sha256": "bad54b2dceab84337281a7ba0c8df59bd4c3ca3dc058463418ccb79ca07f1f0f",
   "overlay_sha256": {
-    "etc/init.d/S99koti": "ad8a02addd9e0dca194781c21eda162a6628c13e7a75830b15700b3ac5f5f12e",
+    "etc/init.d/S99koti": "cf6c41d11a3289c00638af24bd9d6867742d50eb885a1371d97577344eadd7cb",
     "init": "7d49f487ff94967ad07f6efa3f0773dd4adb5b021b50d851d4fc9de661b6cbd6"
   }
 }

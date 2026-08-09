@@ -150,6 +150,56 @@ static void sbi_set_timer(uint32_t lo, uint32_t hi) {
     csr_set(mie, 1u << 7);       // re-arm MTIE, masked by the handler on entry
 }
 
+// ---- THE TIMER MUST NOT DEPEND ON LINUX ANSWERING EVERY TICK -------------
+// koti lost its scheduler on 2026-08-09 and looked, from every angle, like a
+// dead keyboard. What actually happened: the M-timer stopped firing, so no
+// tick reached Linux, so nothing was ever scheduled again — while DEVICE
+// interrupts kept waking the CPU out of wfi, so the keyboard ISR still ran and
+// still drained its queue. Every hardware lamp read healthy because the
+// hardware WAS healthy. The M-mode profiler proved it by going silent itself:
+// it lives in this very interrupt.
+//
+// The cause was the line that used to be here:
+//
+//     csr_clear(mie, 1u << 7);      // mask MTIE until set_timer
+//
+// That is OpenSBI's pattern and it is correct only while set_timer is
+// GUARANTEED to be called again. It makes every future tick depend on Linux
+// completing a round trip on this one, with no recovery if a single call is
+// missed — one lost tick disables the timer for ever. A scheduler that can be
+// switched off permanently by one missed message is a single point of failure,
+// whatever it is that misses it.
+//
+// So the firmware now keeps the timer alive on its own account: MTIE stays
+// enabled and mtimecmp is pushed a fallback period ahead. In normal operation
+// Linux reprograms it long before that expires and this is invisible. If Linux
+// ever misses a call, the machine gets a tick anyway and keeps running.
+//
+// ⚠️ The fallback is DELIBERATELY much longer than the 10 ms tick (HZ=100), so
+// it never races normal operation — it is a safety net, not a second timer. A
+// spurious STIP costs Linux one check of its own timer state.
+#define MTIME_HZ         25000000u
+#define TIMER_FALLBACK   (MTIME_HZ / 10u)      // 100 ms
+
+static void timer_fallback_arm(void) {
+    // mtime is 64 bits behind two 32-bit windows, so it has to be read with
+    // the standard hi/lo/hi retry or a carry between the halves is missed.
+    uint32_t hi, lo, hi2;
+    do { hi = MTIME_HI; lo = MTIME_LO; hi2 = MTIME_HI; } while (hi != hi2);
+
+    // 32-bit carry rather than uint64_t: this firmware links -nostdlib and a
+    // 64-bit helper call from a trap handler is not worth the risk.
+    uint32_t nlo = lo + TIMER_FALLBACK;
+    uint32_t nhi = hi + (nlo < lo ? 1u : 0u);
+
+    // Same LO/HI/LO order as sbi_set_timer, and for the same reason: parking
+    // the low half at all-ones first means the comparator cannot transiently
+    // match while the high half is half-written.
+    MTIMECMP_LO = 0xFFFFFFFFu;
+    MTIMECMP_HI = nhi;
+    MTIMECMP_LO = nlo;
+}
+
 // map an rd field onto its trap-frame slot (caller-saved regs only —
 // the payload/kernel receives rdtime results in those by ABI)
 static int rd_slot(uint32_t rd) {
@@ -233,7 +283,10 @@ static void prof_sample(void) {
 void sbi_trap(uint32_t cause, uint32_t *r) {
     if (cause == 0x80000007u) {          // M timer: inject S timer
         csr_set(mip, 1u << 5);           // STIP
-        csr_clear(mie, 1u << 7);         // mask MTIE until set_timer
+        // ⛔ MTIE IS DELIBERATELY *NOT* MASKED HERE ANY MORE. See
+        // timer_fallback_arm(): masking made every future tick depend on Linux
+        // completing a round trip on THIS one.
+        timer_fallback_arm();
 #ifdef KOTI_PROFILE
         prof_sample();
 #endif

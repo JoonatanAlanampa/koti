@@ -34,6 +34,7 @@ SOURCES = [
     SRC_DIR / "muldiv.sv",
     SRC_DIR / "csr.sv",
     SRC_DIR / "tlb.sv",
+    SRC_DIR / "uart_rx.sv",
     SRC_DIR / "uart_tx.sv",
     # The microSD stack. project.sv instantiates sd_ctrl under KOTI_FPGA, which
     # this bench defines, so leaving these out is not "not testing SD" — it is

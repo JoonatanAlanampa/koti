@@ -186,18 +186,27 @@ module tb_usb_kbd;
         if (v[8] && v[7:0] == (8'h10 + i[7:0])) got2 = got2 + 1;
     end
 `ifdef KOTI_KBD_STALL_ON_FULL
-    // ⚠️ THE SHIPPED POLICY DELIBERATELY DOES NOT HOLD THE STRONGER PROPERTY,
-    // and this pins the exact number rather than deleting the test — a change
-    // in either direction still fails here.
+    // ⛔ THIS BRANCH IS THE DIAGNOSTIC, NOT THE SHIPPED POLICY. Read the `else`
+    // arm below for what koti actually does: the writer never stalls, and port
+    // 2 gets all 40.
     //
-    // Measured on hardware 2026-08-09, same board, one define apart: with the
-    // writer STALLING, a keyboard failure costs the keyboard and the machine
-    // keeps running (process dumps continue, both gettys alive). With the
-    // writer DROPPING, the queue never empties, the level-triggered PLIC line
-    // never falls, and userspace starves — the machine dies. Until whatever is
-    // offering keystrokes nobody pressed is fixed, BOUNDING THE QUEUE is worth
-    // more than never stalling, so the stall ships and this is its cost.
-    check("port2 starves at the FIFO depth (this policy's cost)", got2, 8);
+    // ⚠️ This comment used to end "so the stall ships and this is its cost",
+    // and that was true for part of one day. It is kept, corrected, because a
+    // reader who finds a test asserting starvation will otherwise conclude
+    // starvation is intended.
+    //
+    // The reasoning it carried is also dead. Stalling was chosen on 2026-08-09
+    // to bound the queue against what looked like a flood of keystrokes nobody
+    // pressed holding the level-triggered PLIC line high. There was no flood:
+    // `mip.SEIP` in csr.sv latched the PLIC pin through a read-modify-write, so
+    // the interrupt never went away whatever this FIFO did — the FIFO measured
+    // EMPTY while SEIP was still pending. Fixed in def5699 and verified on
+    // hardware (253 keystrokes, 705/705 samples with SEIP clear).
+    //
+    // ⇒ Nothing needs bounding, so the stronger property ships and this arm
+    // exists only for an A/B. The number is pinned rather than the test
+    // deleted, so a change in either direction still fails here.
+    check("port2 starves at the FIFO depth (the diagnostic's cost)", got2, 8);
 `else
     check("port2 not starved by a stalled port1 (want 40)", got2, 40);
 `endif

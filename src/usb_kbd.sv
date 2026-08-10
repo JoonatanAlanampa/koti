@@ -224,18 +224,27 @@ module usb_kbd (
   // for one experiment, and the experiment is a suspicion about the fix above.
   //
   // A stalled writer lets port 2 DRAIN TO EMPTY, which drops `kb_avail_irq` and
-  // makes an interrupt storm impossible — the keyboard dies but the machine
-  // keeps running. Drop-oldest never stops the writer, so if entries arrive
-  // faster than the driver drains, that level line never falls and the kernel
-  // cycles through the PLIC handler for ever, starving userspace. Both look
-  // identical from the chair; only one kills the machine.
+  // was believed to make an interrupt storm impossible — the keyboard dies but
+  // the machine keeps running.
   //
-  // ⚖️ Neither policy is right on its own. Stalling lets a console nobody reads
-  // kill the keyboard for BOTH consumers (test 6b fails on it, at exactly the
-  // FIFO depth). Dropping cannot stall but cannot stop a storm either. "The
-  // writer must never stall" and "a level-triggered queue must never stay
-  // non-empty" cannot both be satisfied here, which is the signal that the real
-  // fix is UPSTREAM: stop enqueuing keystrokes nobody pressed.
+  // ⛔ THAT WHOLE ARGUMENT RESTED ON A CAUSE THAT TURNED OUT NOT TO EXIST, and
+  // it is left here only so nobody re-derives it. The storm was never this
+  // FIFO's doing: `mip.SEIP` in csr.sv fed the OR of the PLIC pin and the
+  // software bit into the CSRRS/CSRRC modify path, so the firmware's 100 Hz
+  // `csr_set(mip, ...)` latched the live pin permanently and the interrupt
+  // never went away no matter what any queue did. The observation that broke it
+  // open is the one that should have been decisive here too: THE FIFO MEASURED
+  // EMPTY (`wptr == rptr2`) WHILE SEIP WAS STILL PENDING. Fixed in def5699.
+  //
+  // ⇒ There is no storm to contain, so the stronger property — the writer never
+  // stalls, and a console nobody reads cannot kill the keyboard for the other
+  // consumer — ships unconditionally. Test 6b guards it; the `ifdef` arm below
+  // pins the diagnostic's cost so a silent flip either way still fails.
+  //
+  // ⚠️ Do NOT go looking for "keystrokes nobody pressed" on the strength of an
+  // older comment here. That was the phantom-keystroke theory the SEIP fix
+  // superseded, and `usb_typ=1`/`conerr=0` throughout was evidence the device
+  // was healthy all along.
   //
   // ⛔ Diagnostic only. CI builds and tb_usb_kbd run WITHOUT it, so test 6b
   // keeps guarding the shipped behaviour.

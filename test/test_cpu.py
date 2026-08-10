@@ -1054,3 +1054,54 @@ async def test_flash_does_not_alias_into_the_mmio_window(dut):
     await run_program(dut, li(4, ALIAS) + [lw(11, 4, 0)] + [EBREAK],
                       flash_poke=[((ALIAS >> 2) & 0x3FFF, SENTINEL)])
     assert reg(dut, 11) == SENTINEL,         f"load from {ALIAS:#x} returned {reg(dut, 11):#x}, want {SENTINEL:#x} "         f"— flash aliased into the MMIO window (it read a core register)"
+
+
+async def send_serial_byte(dut, byte, div=4, after=40):
+    """Shift `byte` into uart_rxd the way an FTDI would: 8N1, LSB first.
+
+    `div` must match the core's UART_DIV (4 in this bench, not the 217 the
+    board uses at 115200). `after` holds off until reset is well clear — a
+    start bit arriving during reset is absorbed by the synchroniser's 3'b111
+    reset state and the byte is simply lost, which looks like a receiver bug.
+    """
+    await ClockCycles(dut.clk, after)
+    for bit in [0] + [(byte >> i) & 1 for i in range(8)] + [1]:  # start, data, stop
+        dut.uart_rxd_r.value = bit
+        await ClockCycles(dut.clk, div)
+    dut.uart_rxd_r.value = 1
+
+
+@cocotb.test()
+async def test_uart_rx_reaches_the_cpu(dut):
+    """A byte sent at the pin must be readable at UART_RX (MMIO +0x10).
+
+    This is the path SBI console_getchar uses to make hvc0 two-way: until
+    2026-08-10 koti had no receiver at all and the serial console could not be
+    typed at. test/tb_uart_rx.v covers the receiver as a module; this covers
+    the part it cannot — that the CPU can actually GET the byte, through the
+    io_hi decode added alongside it.
+
+    ⚠️ The polling read is safe to repeat: reading +0x10 pops only when
+    UART_RX_AVAIL is set, so a loop that spins on an empty register cannot eat
+    the byte it is waiting for. That is the whole reason the receiver is at its
+    own address instead of folded into the transmitter's status word, which
+    uart_putc polls in a tight loop."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    UART_RX = 0x0001_0010
+    AVAIL = 0x100
+    BYTE = 0x6B  # 'k'
+
+    cocotb.start_soon(send_serial_byte(dut, BYTE))
+
+    # poll: x10 = [UART_RX]; loop while (x10 & AVAIL) == 0
+    prog = (li(1, UART_RX)
+            + [lw(10, 1, 0),
+               andi(11, 10, AVAIL),
+               beq(11, 0, -8),          # back to the lw
+               EBREAK])
+    await run_program(dut, prog, max_cycles=3000)
+
+    got = reg(dut, 10)
+    assert got & AVAIL, f"UART_RX read {got:#x} with no AVAIL bit"
+    assert got & 0xFF == BYTE, \
+        f"UART_RX delivered {got & 0xFF:#04x}, sent {BYTE:#04x}"

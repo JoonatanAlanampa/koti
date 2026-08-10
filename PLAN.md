@@ -322,6 +322,30 @@ Software, in order:
        table. Those roughly halve EVERY line fill — both caches — and they
        change one FSM rather than adding anything.
 
+10b.[x] ⌨️ **hvc0 IS TWO-WAY — DONE 2026-08-10 (simulation; not yet on hardware).**
+       koti had `uart_tx.sv` and no receiver at all until `2d0e911`, which is
+       where every "the UART is transmit-only" note in this repo came from. The
+       receiver landed then, wired to `ftdi_txd` (M1) at MMIO **+0x10**; this
+       item is the other half — SBI `console_getchar` now reads it when the USB
+       keyboard has nothing, so a character typed on the PC's serial console
+       reaches Linux.
+       ⚠️ **Each device is touched EXACTLY ONCE per call, and the order is
+       load-bearing.** Both reads POP: `usb_getchar()` consumes a report slot,
+       reading `UART_RX` consumes the byte. The UART is asked only after USB
+       comes up empty, so a keystroke is never read and discarded. The keyboard
+       wins a tie because it is the machine's own input device; nothing is lost,
+       since `UART_RX` holds its byte and flags `UART_RX_OVF` if a second
+       arrives first.
+       🧪 `test_uart_rx_reaches_the_cpu` in `test_cpu.py` drives a real 8N1 byte
+       at the pin and has a program poll +0x10 — the half `tb_uart_rx.v` cannot
+       cover, since it tests the receiver as a module and not the CPU's ability
+       to GET the byte. `tb_cpu.v`'s `uart_rxd` became a driven reg for it.
+       Proven able to fail: `io_hi_m = 1'b0` (the +0x10 decode gone) spins the
+       poll loop for ever, and shifting MSB-first delivers `0xd6` for `0x6b`.
+       🔴 **NOT on hardware.** No bitstream has been built with any of this, so
+       the receiver has still never met a real pin. It needs a place-and-route
+       and a reflash, because the firmware lives in the bitstream.
+
 11. [ ] 🌐 **Networking. There is none at all, and it is TWO absences.**
        (a) No stack: `grep -c CONFIG_NET koti_defconfig` = **0**, so no sockets,
        no TCP/IP, not even loopback. busybox ships `ip`/`ping`/`wget` as

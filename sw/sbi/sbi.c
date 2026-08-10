@@ -356,11 +356,30 @@ void sbi_trap(uint32_t cause, uint32_t *r) {
             // once per invocation. On a build without the USB host there is no
             // keyboard at all and this correctly returns -1 forever, which the
             // legacy SBI spec defines as "nothing ready".
+            // ⌨️ TWO INPUT DEVICES SINCE 2026-08-10, and the order matters
+            // less than the fact that each is touched EXACTLY ONCE. Both reads
+            // POP: usb_getchar() consumes a report slot, and reading UART_RX
+            // consumes the received byte. Asking the second one only after the
+            // first came up empty is what keeps a keystroke from being read and
+            // thrown away — the same hazard USB_STAT exists to avoid on the
+            // keyboard side.
+            //
+            // The UART is second because the keyboard is the machine's own
+            // input device and the serial line is the one a PC is holding; if
+            // both have a character waiting, the person at the board wins and
+            // the serial byte stays put. Nothing is lost by waiting: UART_RX
+            // holds its byte until it is read, and says so through UART_RX_OVF
+            // if a second arrives first.
             {
                 int ch = -1;
 #ifdef KOTI_ULX3S
                 ch = usb_getchar();
 #endif
+                if (ch < 0) {
+                    unsigned v = UART_RX;   // ⚠️ POPS when UART_RX_AVAIL is set
+                    if (v & UART_RX_AVAIL)
+                        ch = (int)(v & 0xFFu);
+                }
                 r[A0] = (uint32_t)ch;
             }
             csr_write(mepc, csr_read(mepc) + 4);

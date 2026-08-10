@@ -17,6 +17,12 @@ module tb_cpu ();
   reg rst;
   reg mtip, msip, meip;
 
+  // The serial receive line, drivable so a test can actually send koti a
+  // character. Initialised HIGH because that is what an idle serial line is,
+  // and what uart_rx's synchroniser resets to; starting low would look like a
+  // start bit at t=0. Tests that do not touch it simply leave it idle.
+  reg uart_rxd_r = 1'b1;
+
   wire        halted;
   wire [7:0]  led;
   wire        uart_txd;
@@ -39,11 +45,11 @@ module tb_cpu ();
       // decisions on an unknown.
       .mtip(mtip), .msip(msip), .meip(meip), .seip(1'b0),
       .halted(halted), .led(led), .uart_txd(uart_txd),
-      // Idle high, for the same reason seip is tied above and for one more:
-      // a serial line at rest IS high, and the receiver's synchroniser resets
-      // to 3'b111 to match. Left open it would be x, and x through the
-      // synchroniser makes rx_fall unknown for the whole run.
-      .uart_rxd(1'b1),
+      // Driven from uart_rxd_r above rather than tied, so a test can send a
+      // byte. It must not be left OPEN, for the same reason seip is tied: an
+      // open input reads as x, and x through the receiver's synchroniser makes
+      // rx_fall unknown for the whole run.
+      .uart_rxd(uart_rxd_r),
       .gpio_in(8'd0), .qspi_cfg(qspi_cfg),
       .if_req(if_req), .if_addr(if_addr), .if_ack(if_ack),
       .if_rdata(if_rdata), .if_rdata2(if_rdata2),

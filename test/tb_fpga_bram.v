@@ -165,6 +165,19 @@ module tb_fpga_bram ();
   //               enables VGA and the UART moves to uo[6].
   localparam integer MARKLEN3 = 21;
   localparam [8*MARKLEN3-1:0] MARKER3 = "sd: loading kernel ok";
+  //   4           sw/esptest.bin — its VERDICT line. That image is the
+  //               experiment gating PLAN item 11 (does an awake ESP32 break the
+  //               microSD it shares six GPIOs with), and it is the only image
+  //               in the repo that raises ESP_EN. It gates the line just
+  //               BEFORE the straps are raised, not the verdict, and for two
+  //               reasons: which answer the hardware gives is not something
+  //               simulation can know, and listening long enough for an ESP32
+  //               to boot is ~seconds at 25 MHz, far past any bench. So this
+  //               proves the image ran the card baseline, read ESP_CTRL and
+  //               reached the straps — and asserts nothing about a result
+  //               nobody has measured yet.
+  localparam integer MARKLEN4 = 9;
+  localparam [8*MARKLEN4-1:0] MARKER4 = "3. waking";
   integer sw3 = 0;
   initial if (!$value$plusargs("sw3=%d", sw3)) sw3 = 0;
 
@@ -202,6 +215,7 @@ module tb_fpga_bram ();
       if (mark == 1 && markbuf[8*MARKLEN1-1:0] == MARKER1)     saw_marker = 1'b1;
       if (mark == 2 && markbuf[8*MARKLEN2-1:0] == MARKER2)     saw_marker = 1'b1;
       if (mark == 3 && markbuf[8*MARKLEN3-1:0] == MARKER3)     saw_marker = 1'b1;
+      if (mark == 4 && markbuf[8*MARKLEN4-1:0] == MARKER4)     saw_marker = 1'b1;
     end
   end
 

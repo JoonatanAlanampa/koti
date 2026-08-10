@@ -346,6 +346,32 @@ Software, in order:
        the receiver has still never met a real pin. It needs a place-and-route
        and a reflash, because the firmware lives in the bitstream.
 
+11a.[x] 🔌 **The ESP32 PORT exists — 2026-08-10. The LINK does not.**
+       `src/esp_uart.sv` at **0x0007_0000**: a second serial port on the
+       ESP32's own pins (`wifi_rxd` **K3**, `wifi_txd` **K4**, verified against
+       upstream's v3.1.6 file and cross-checked against v2.0 — unlike `wifi_en`
+       and `wifi_gpio0`, these did not move between revisions). Reuses
+       `uart_tx.sv`/`uart_rx.sv` rather than a second implementation.
+       ⛔ **IT DOES NOT WAKE THE ESP32.** The control register resets to 0, so
+       both straps are driven low out of reset — bit for bit what
+       `ulx3s_top.sv` hardwired before. Waking is a write software makes on
+       purpose and can undo in one more write.
+       ⚠️ **WHY: THE ESP32's GPIOs ARE THE MICROSD BUS** — GPIO14/15/2/4/12/13
+       are `sd_clk`, `sd_cmd`, `sd_d[0..3]`, and koti loads its kernel off that
+       card. Whether an awake ESP32 actually drives them depends on the
+       firmware it boots. That is an experiment, not a thing to assume.
+       🧪 `tb_esp_uart.v` (17 checks; the FIRST is the safety property, proven
+       able to fail) and `sw/esptest.c` + `+mark=4`, which runs the card three
+       times for a stable baseline, reads `ESP_CTRL`, raises the straps in the
+       right order (gpio0 THEN enable), listens, re-reads the card, puts the
+       chip back and re-reads again — then prints a one-line VERDICT.
+       📌 Post-route with it in: **30.44 MHz (pmod) / 30.16 MHz (bram)**,
+       PASS at 25.
+       🔴 **NOTHING HAS RUN ON HARDWARE.** The link has never carried a byte
+       between two real chips, and the verdict is unmeasured. ▶️ **The bench
+       session is one bitstream**: `image: esptest`, watch COM3, read the
+       VERDICT line.
+
 11. [ ] 🌐 **Networking. There is none at all, and it is TWO absences.**
        (a) No stack: `grep -c CONFIG_NET koti_defconfig` = **0**, so no sockets,
        no TCP/IP, not even loopback. busybox ships `ip`/`ping`/`wget` as

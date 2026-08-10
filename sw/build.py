@@ -56,7 +56,17 @@ def main():
                        # whether it enumerates. The bring-up instrument
                        # for the keyboard rung, and the layer below any
                        # Linux plumbing that depends on it.
-                       ("usbtest", ["crt0.S", "usbtest.c"])):
+                       ("usbtest", ["crt0.S", "usbtest.c"]),
+                       # esptest.bin: the ESP32 link, and the experiment that
+                       # gates PLAN item 11. It is the ONLY image in this repo
+                       # that raises ESP_EN — every other build leaves
+                       # esp_uart.sv's control register at its reset value,
+                       # which holds the chip in reset. It has to be an image
+                       # rather than a note in a README because the question is
+                       # whether an awake ESP32 breaks the microSD it shares six
+                       # GPIOs with, and that needs the card read before, during
+                       # and after, which is not something to do by hand.
+                       ("esptest", ["crt0.S", "esptest.c"])):
         run([GCC, "-march=rv32ima_zicsr", "-mabi=ilp32", "-O2",
              "-nostdlib", "-nostartfiles", "-static",
              "-T", "link.ld", "-o", f"{name}.elf", *srcs])

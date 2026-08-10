@@ -61,7 +61,7 @@ on:
         description: 'bram variant: which software to bake into the fabric flash'
         default: 'bringup'
         type: choice
-        options: ['bringup', 'memtest', 'sdtest', 'sdraw', 'usbtest', 'sbi', 'sbiprof', 'hello']
+        options: ['bringup', 'memtest', 'sdtest', 'sdraw', 'usbtest', 'esptest', 'sbi', 'sbiprof', 'hello']
       # Extra `define`s for the synthesis, so that a bitstream which differs
       # from main by one feature can be built WITHOUT a commit that changes what
       # main means. It exists because of the D-cache: the cache is enabled by

@@ -32,7 +32,7 @@ koti has **two** consoles and they both receive **every keystroke**:
 | | where its output goes | who can type at it |
 |---|---|---|
 | **tty1** | the HDMI monitor | you |
-| **hvc0** | the serial line (UART) | nobody — it is transmit-only |
+| **hvc0** | the serial line (UART) | you, on a bitstream built after 2026-08-10 |
 
 The keyboard queue has two independent read ports: the firmware pops one to
 feed hvc0, the Linux driver pops the other to feed tty1. So one `root` + Enter
@@ -42,6 +42,14 @@ That is deliberate, and it is kept on purpose: the serial echo is how this
 machine gets debugged — it is what makes typed characters visible in a capture
 taken from another computer. But it is why you may see doubled output, and why
 two shells can drift into different states.
+
+⚠️ **hvc0 was transmit-only until 2026-08-10, and whether yours can be typed at
+depends on the bitstream, not the kernel.** koti had no UART receiver at all
+until then; `src/uart_rx.sv` added one and SBI `console_getchar` now reads it.
+But the firmware lives inside the bitstream, so a board still running an older
+`image: sbi` build has the one-way console described above. If typing at the
+serial port does nothing, that is which build you are on — re-route and reflash
+to change it. As of 2026-08-10 this has been verified in simulation only.
 
 ## Keyboard
 

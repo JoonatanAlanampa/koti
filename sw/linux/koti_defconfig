@@ -221,6 +221,12 @@ CONFIG_SLHC=y
 # and therefore no way to run any link protocol at all — this is the config
 # that makes /dev/ttyKOTI0 exist.
 CONFIG_SERIAL_KOTI_ESP=y
-# ⛔ NOT enabled, and worth saying why so nobody adds it by reflex:
-# CONFIG_INET_DIAG, IPV6 and the netfilter stack are all real memory on a
-# machine with 25 MB, and none of them is needed to fetch a page over HTTP.
+# ⛔ IPv6 OFF, EXPLICITLY. This comment used to claim it was not enabled and
+# that was wrong -- CONFIG_IPV6 defaults to y once NET is on, and the first
+# build after this file turned networking on duly compiled all of net/ipv6.
+# On a 25 MB machine that is real memory for a protocol koti cannot use: the
+# link is a point-to-point SLIP tunnel to an ESP32 with an IPv4 address.
+# Caught by reading the build log rather than by assuming the comment was true.
+# CONFIG_IPV6 is not set
+# Same reasoning, same reflex to resist.
+# CONFIG_INET_DIAG is not set

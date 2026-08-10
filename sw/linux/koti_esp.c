@@ -124,6 +124,15 @@ static void koti_esp_stop_rx(struct uart_port *port)
 static void koti_esp_tx_chars(struct uart_port *port)
 {
 	/*
+	 * ⚠️ THE CALLER DECLARES `ch`. uart_port_tx() takes it as the NAME of a
+	 * variable it assigns into — `(ch) = __port->x_char;` inside the macro —
+	 * not as a value. Omitting it fails with "'ch' undeclared" pointing at
+	 * the macro expansion, which reads like a kernel header problem and is
+	 * not. Every in-tree user does the same.
+	 */
+	u8 ch;
+
+	/*
 	 * uart_port_tx() is the 6.x helper: it handles the x_char case, the
 	 * stopped case, pops from the kfifo while the condition holds, and
 	 * calls ops->stop_tx() when it runs dry — which is our clear-the-

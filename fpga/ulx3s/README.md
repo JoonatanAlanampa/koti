@@ -632,14 +632,95 @@ calls `putc_both()`, which writes the UART *and* the 40x30 VGA text buffer, and
 Linux's console is `hvc0` over SBI. **Nothing in Linux knows the video hardware
 exists.** A real framebuffer is separate, later work.
 
-⛔ **You cannot type at that login prompt.** koti's UART is `uart_tx.sv` —
-transmit only — and SBI `console_getchar` reads the PS/2 block, for which there
-is no keyboard. Logging in needs the USB HID host, ladder item 8, unbuilt.
+✅ **You CAN type at that login prompt** — plug a USB keyboard into **US2**.
+That has been true since 2026-08-07, and since 2026-08-10 the **serial console
+can be typed at too**, on any bitstream built after that date.
+
+> ⛔ The paragraph that used to sit here said the opposite: "koti's UART is
+> `uart_tx.sv` — transmit only — and SBI `console_getchar` reads the PS/2 block,
+> for which there is no keyboard." Every clause of that is now wrong. PS/2 was
+> deleted on 2026-08-08 (PLAN item 8) once USB had typed on real hardware;
+> `console_getchar` reads the USB FIFO and, since 2026-08-10, `UART_RX` as well.
+> It is kept, struck through, because a reader who finds a bring-up guide
+> telling them the machine cannot accept input will not try.
 
 ### If the card is not found
 The firmware falls back to its built-in flash payload and prints `STK` — a
 missing card is not a brick. `image: sdtest` checks the card path on its own,
 and `image: sdraw` is the layer below that.
+
+## 🔴 2e. The ESP32 link — **THE EXPERIMENT. NOT YET RUN ON HARDWARE.**
+
+This is the one measurement standing between koti and a network, and it is one
+bitstream. **Do this before writing any more networking code**, because the
+answer decides whether the whole ESP32 route is viable.
+
+**The question.** koti's cheapest possible network link is the onboard ESP32
+over the serial pair on K3/K4 (`src/esp_uart.sv`, MMIO `0x0007_0000`). But the
+ESP32's GPIOs **are** the microSD bus:
+
+```
+sd_clk = GPIO14   sd_cmd = GPIO15   sd_d[0] = GPIO2
+sd_d[1] = GPIO4   sd_d[2] = GPIO12  sd_d[3] = GPIO13
+```
+
+and koti loads its kernel off that card. `wifi_en` has been held low since the
+beginning for exactly that reason. Whether an ESP32 that is awake actually
+drives those six wires depends on the firmware it boots — which cannot be
+reasoned out, only measured.
+
+```
+gh workflow run fpga-ulx3s.yaml -f image=esptest
+fujprog koti-bram.bit          # SRAM, ~60 s. SW3 OFF — this image never
+                               # enables VGA, so the UART stays on uo[0]
+```
+
+Open COM3 at 115200 **before** pressing BTN0, then read one pass:
+
+```
+=== koti esptest pass 0 ===
+1. microSD baseline: init OK, block 0 x3: stable <sum>
+2. link, ESP32 held in reset: ctrl=00000000 bytes=0
+3. waking: gpio0 first, then enable
+4. link, ESP32 awake: bytes=<n>  <- THE LINK CARRIES DATA
+5. microSD with ESP32 AWAKE: <sum>  same
+6. microSD after ESP32 back in reset: <sum>  same
+VERDICT: the card SURVIVES an awake ESP32; link carried data
+```
+
+**How to read it, line by line:**
+
+| line | what it tells you |
+| --- | --- |
+| 1 | the card works and the baseline is stable. If it says UNSTABLE, stop — nothing after it means anything |
+| 2 | `ctrl=00000000 bytes=0` is the healthy state: chip in reset, no noise on the receiver. **Bytes here would invalidate line 4** |
+| 4 | bytes > 0 proves the wire, the pin sites and the receiver |
+| 5 | the actual question: does the card still read the same with the ESP32 awake |
+| 6 | if it broke, does putting the chip back fix it, or is the machine wedged until power-cycle |
+
+⚠️ **EXPECT GARBAGE ON LINE 4, NOT TEXT.** An ESP32 leaving reset prints from
+its ROM bootloader at **74880 baud** and this port is 115200, so the bytes will
+not decode. That is why the image prints hex and counts. **Bytes arriving at all
+is the result**; legible text would be a bonus, not the test.
+
+⚠️ It is SRAM-loaded, so a power cycle removes it. Nothing here touches the
+config flash, and `ESP_CTRL = 0` on the way out puts the ESP32 back in reset.
+
+**What each verdict means for PLAN item 11:**
+
+- *the card SURVIVES* → the ESP32 route is open. Next is the ESP32's own
+  firmware and then a Linux driver — `CONFIG_NET` is still 0 and a UART is not
+  an Ethernet device.
+- *BREAKS the card, and it RECOVERS* → networking and storage are mutually
+  exclusive but switchable. The architecture then is: firmware loads the kernel
+  off the card, root stays in RAM, and only then does the ESP32 come up.
+- *BREAKS it and did NOT recover* → the ESP32 route costs the microSD. Reopen
+  the Ethernet-Pmod option.
+
+⛔ **`image: esptest` is the only build in this repo that raises `ESP_EN`.**
+Every other bitstream leaves `esp_uart.sv`'s control register at its reset value
+of 0, which holds the ESP32 in reset exactly as the old hardwired assignment
+did.
 
 ## 3. Memory Pmod on J1, orientation strap
 
@@ -733,7 +814,25 @@ screen full of confident-looking garbage.
 With SW4 on, the LEDs become a VSync frame counter; **counting LEDs means video
 timing is alive** even if the monitor shows nothing.
 
-## 7. PS/2 keyboard
+## ⛔ 7. PS/2 keyboard — **GONE. DO NOT WIRE THIS.**
+
+**There is no PS/2 receiver in koti any more.** `src/ps2_rx.sv`, `sw/ps2kbd.c`,
+the MMIO word at `0x0004000C` and the `gp[8]`/`gp[9]` constraints were all
+deleted on 2026-08-08 (PLAN item 8), once the USB keyboard had typed on real
+hardware — the condition the plan set for retiring it. Wiring a keyboard to
+those pins today connects it to nothing.
+
+**Use a USB keyboard in US2 instead.** That is section 2d, and it works.
+
+⚠️ `0x0004000C` still decodes and reads **zero**, deliberately: to a surviving
+PS/2 driver that means "no key waiting", so it idles rather than misbehaves.
+`gp[8]`/`gp[9]` (A4/A2) are free.
+
+The wiring notes below are kept because the **3.3 V hazard is real and general**
+— it applies to anything you hang off `gp` pins, not just a keyboard — and
+because this is the only place in the repo that records it.
+
+<details><summary>The old PS/2 procedure (for the electrical notes only)</summary>
 
 Clock on **gp[8]**, data on **gp[9]**, into `ui[1:0]`.
 
@@ -763,6 +862,8 @@ substitute a plain resistor divider: the keyboard's own pull-up to 5 V and a
 divider to ground fight each other and the high level lands around 1.6 V, below
 the LVCMOS33 input threshold. That combination looks reasonable and does not
 work.
+
+</details>
 
 ## Things that will look like bugs and are not
 

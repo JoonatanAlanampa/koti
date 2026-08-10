@@ -55,10 +55,31 @@ agree today because both are Finnish, not because they are linked.
 
 ## Storage — read this before you lose something
 
+**koti has two possible roots, and which one you got is decided at every boot.**
+The kernel command line says `root=/dev/kotisd2`, but `/init` treats that as a
+request rather than an order: if the card is missing, or p2 will not mount, or
+p2 has no executable `/sbin/init`, it stays in RAM and says so instead of
+panicking. That is deliberate — the kernel's own `root=` handling would panic,
+and a bring-up board must not become unbootable because a card was absent.
+
+**Ask the machine, do not guess:**
+
+```sh
+grep ' / ' /proc/mounts     # rootfs -> RAM;  /dev/kotisd2 -> the card
+dmesg | grep '^koti: root'  # the decision, in /init's own words
+```
+
+`koti: root on /dev/kotisd2 (ext2), switching` means the card is your root.
+`koti: root stays in RAM (<reason>)` names the reason it is not.
+
 | path | what it is | survives power-off? |
 |---|---|---|
-| `/` | initramfs, in RAM | **no** |
+| `/` when it stayed in RAM | initramfs | **no** |
+| `/` after the switch | microSD p2, ext2 | **yes** |
 | `/dev/kotisd2` | microSD partition 2, ext2 | **yes** |
+
+If `/` is still the initramfs, the card is not mounted anywhere and you reach it
+by hand:
 
 ```sh
 mount /dev/kotisd2 /mnt
@@ -66,6 +87,9 @@ mount /dev/kotisd2 /mnt
 sync
 umount /mnt
 ```
+
+If the switch happened, `/dev/kotisd2` is already `/` — mounting it again on
+`/mnt` is not what you want, and writing to `/` persists directly.
 
 ⚠️ **ext2 has no journal.** Run `sync` before pulling the power, or you lose
 whatever was still sitting in the page cache. This is the single easiest way to

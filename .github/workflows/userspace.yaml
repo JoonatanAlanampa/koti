@@ -181,9 +181,41 @@ jobs:
           dumpe2fs -h "$img"
           echo "--- /sbin/init must exist and be executable ---"
           # A dangling symlink or a mode-644 init is a panic after the point of
-          # no return. debugfs follows the link the way the kernel does.
+          # no return.
+          #
+          # ⛔ THIS USED TO SAY "and be executable" AND ONLY CHECK THE TYPE:
+          #     grep -q "Type: symlink\|Type: regular" init.stat
+          # A mode-644 regular file passes that, and it is exactly the failure
+          # the step exists to prevent. It also assumed debugfs follows the
+          # link; it does not — `stat` on a symlink reports the SYMLINK's inode,
+          # whose mode is 0777 no matter how broken the target is. So Buildroot's
+          # /sbin/init -> ../bin/busybox would have "passed" on the strength of
+          # a symlink's permission bits.
           debugfs -R "stat /sbin/init" "$img" 2>&1 | tee init.stat
           grep -q "Type: symlink\|Type: regular" init.stat
+
+          target=/sbin/init
+          if grep -q "Type: symlink" init.stat; then
+            dest=$(sed -n 's/.*[Ll]ink dest: *"\?\([^"]*\)"\?.*/\1/p' init.stat | head -1)
+            test -n "$dest" || { echo "symlink with no readable destination"; exit 1; }
+            case "$dest" in
+              /*) target=$dest ;;
+              *)  target=$(printf '%s\n' "/sbin/$dest" \
+                    | sed ':a;s#/[^/]*/\.\./#/#;ta;s#/\./#/#g') ;;
+            esac
+            echo "  /sbin/init is a symlink to $dest -> resolving as $target"
+            debugfs -R "stat $target" "$img" 2>&1 | tee init.stat
+            grep -q "Type: regular" init.stat \
+              || { echo "$target is not a regular file"; exit 1; }
+          fi
+
+          # Fail loudly if the mode cannot be read: an unparsed mode must never
+          # be silently treated as fine, which is the whole lesson above.
+          mode=$(sed -n 's/.*Mode: *0*\([0-7]\{3,4\}\).*/\1/p' init.stat | head -1)
+          test -n "$mode" || { echo "could not read the mode of $target"; exit 1; }
+          test $(( 8#$mode & 8#111 )) -ne 0 \
+            || { echo "$target has mode $mode — no execute bit, koti would panic"; exit 1; }
+          echo "  ok  $target is mode $mode, executable"
           echo "--- and the things /init itself checks for ---"
           for p in /bin/busybox /dev/console /etc/inittab /sbin/switch_root; do
             debugfs -R "stat $p" "$img" > /dev/null 2>&1 \

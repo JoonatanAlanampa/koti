@@ -123,8 +123,24 @@ Software, in order:
          engine pulls from; the driver gained `REQ_OP_WRITE` and answers
          `REQ_OP_FLUSH` immediately because there is no cache to flush.
        - ⚠️ **ext2 has NO JOURNAL** — `sync` before pulling the power.
-       - 🟡 **`root=` MOVED ONTO THE CARD 2026-08-08 — written and CI-gated, but
-         NOT yet run on hardware.** `koti.dts` bootargs carry
+       - 🟡 **`root=` MOVED ONTO THE CARD 2026-08-08 — written and CI-gated,
+         and STILL not confirmed on hardware as of 2026-08-10.**
+         ⚠️ **Which root is live is CARD STATE, not a repo fact**, so no amount
+         of reading this tree answers it. `tools/sdkernel.py writefs` has to
+         have been run on the card in the slot; the 2026-08-09 sessions wrote
+         *kernels* (`write`), which is a different subcommand. The machine
+         already answers it out loud — `koti: root on /dev/kotisd2 (ext2),
+         switching` or `koti: root stays in RAM (<reason>)`, and afterwards
+         `grep ' / ' /proc/mounts`. **Read the boot log; do not infer.**
+         ⛔ `docs/MANUAL.md` used to assert flatly that `/` is the initramfs.
+         That is one of two possible outcomes stated as fact, and it is wrong
+         on any board whose card has been written. Fixed 2026-08-10: it now
+         documents both and says how to tell.
+         ⭐ The CI gate that keeps the card image switch_root-able was checking
+         `/sbin/init`'s TYPE while its own heading said "and be executable", and
+         `debugfs stat` does not follow the symlink Buildroot actually ships —
+         so a mode-644 busybox would have passed on a symlink's 0777. Now
+         resolved and mode-checked, with an unreadable mode failing loudly. `koti.dts` bootargs carry
          `root=/dev/kotisd2 rootfstype=ext2 rw`, Buildroot now also emits
          `rootfs.ext2` for p2 (`sdkernel.py writefs`), and
          `sw/linux/rootfs-overlay/init` switch_roots onto it.

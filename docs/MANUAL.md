@@ -9,6 +9,8 @@ below the kernel — the CPU, the caches, the memory controller, the video, the
 keyboard, the SBI firmware — was written for this project.
 
 A short version of this document lives on the machine itself: type **`koti-help`**.
+For the machine's current state — RAM, uptime, which root it booted, the card,
+interrupts, and the memories Linux cannot see — type **`koti-status`**.
 That matters because koti has no networking, so a manual you can only read on
 another computer is a manual you cannot read while using it.
 
@@ -147,7 +149,7 @@ not exactly like their GNU counterparts: expect fewer long options.
 | **system** | `uname` `dmesg` `date` `hostname` `id` `whoami` `env` `printenv` `lsmod` `sysctl` `reboot` `poweroff` |
 | **maths** | `bc` `dc` `expr` `factor` `seq` |
 | **console** | `clear` `reset` `chvt` `openvt` `loadkmap` `dumpkmap` `setfont`-ish via `loadfont` |
-| **koti** | `koti-help` |
+| **koti** | `koti-help` (this manual), `koti-status` (what the machine is and is doing) |
 
 ### Everything else
 

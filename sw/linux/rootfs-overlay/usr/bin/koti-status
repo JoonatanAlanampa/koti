@@ -1,0 +1,141 @@
+#!/bin/sh
+# koti-status — what this machine is, and what it is doing right now.
+#
+# WHY THIS EXISTS. koti has no networking, so a machine you can only inspect
+# from another computer is a machine you cannot inspect. Everything here is
+# readable with the applets that are actually in the rootfs — no vmstat, no
+# lshw, no sensors, none of which koti has.
+#
+# ⛔ THE RULE THIS SCRIPT FOLLOWS: every number is either READ FROM THE MACHINE
+# or plainly marked as a compile-time constant. Nothing is inferred and nothing
+# is invented. A status tool that quietly prints a plausible wrong number is
+# worse than one that prints "unknown", because the wrong number gets believed
+# and then quoted.
+#
+# Copyright (c) 2026 Joonatan Alanampa
+# SPDX-License-Identifier: Apache-2.0
+
+DT=/proc/device-tree
+[ -d "$DT" ] || DT=/sys/firmware/devicetree/base
+
+hr() { echo "-------------------------------------------------------------------------------"; }
+
+# A device-tree string property: NUL-terminated, so strip the NUL.
+dtstr() { [ -r "$1" ] && tr -d '\000' < "$1"; }
+
+# A 4-byte big-endian device-tree cell, as a decimal number.
+dtu32() {
+    [ -r "$1" ] || return 1
+    h=$(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' \n')
+    [ -n "$h" ] || return 1
+    echo $(( 0x$h ))
+}
+
+meminfo() { grep "^$1:" /proc/meminfo 2>/dev/null | awk '{print $2}'; }
+
+kb() {  # kB -> a human column, without bc (koti has it, but this needs no fork)
+    [ -n "$1" ] || { echo "unknown"; return; }
+    if [ "$1" -ge 1024 ]; then echo "$(( $1 / 1024 )) MB  ($1 kB)"
+    else echo "$1 kB"; fi
+}
+
+echo "koti — system status"
+hr
+
+# ---- the machine ------------------------------------------------------------
+model=$(dtstr "$DT/model")
+echo "machine   : ${model:-unknown}"
+echo "kernel    : $(uname -sr) $(uname -m)"
+if [ -r /proc/uptime ]; then
+    up=$(awk '{print int($1)}' /proc/uptime)
+    echo "uptime    : $(( up / 3600 ))h $(( (up % 3600) / 60 ))m $(( up % 60 ))s"
+fi
+[ -r /proc/loadavg ] && echo "load      : $(awk '{print $1", "$2", "$3"   processes "$4}' /proc/loadavg)"
+
+# ---- the CPU ----------------------------------------------------------------
+hr
+isa=$(grep -m1 '^isa' /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed 's/^ *//')
+mmu=$(grep -m1 '^mmu' /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed 's/^ *//')
+echo "cpu       : ${isa:-unknown}"
+echo "mmu       : ${mmu:-unknown}"
+tb=$(dtu32 "$DT/cpus/timebase-frequency")
+[ -n "$tb" ] && echo "timebase  : $(( tb / 1000000 )) MHz  (the system clock)"
+echo "harts     : $(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
+echo ""
+echo "⚠️  CPU time below is timer-tick accounting, not cycles. koti's mcycle and"
+echo "    minstret are 64-bit and REAL, but M-mode only: csr.sv decodes no"
+echo "    0xC00/0xC02 and the firmware emulates only time/timeh, so rdcycle and"
+echo "    rdinstret trap. There is no IPC or cache-hit figure to be had here."
+[ -r /proc/stat ] && grep -m1 '^cpu ' /proc/stat | awk \
+    '{printf "    user %d  nice %d  system %d  idle %d  irq %d (jiffies)\n", $2,$3,$4,$5,$7}'
+
+# ---- memory Linux can see ---------------------------------------------------
+hr
+echo "RAM (what Linux manages)"
+echo "  total     : $(kb "$(meminfo MemTotal)")"
+echo "  free      : $(kb "$(meminfo MemFree)")"
+avail=$(meminfo MemAvailable)
+[ -n "$avail" ] && echo "  available : $(kb "$avail")"
+echo "  buffers   : $(kb "$(meminfo Buffers)")"
+echo "  cached    : $(kb "$(meminfo Cached)")"
+echo "  swap      : none (koti has no swap device)"
+
+# ---- memory Linux cannot see ------------------------------------------------
+hr
+echo "Memory the OS does NOT see — no driver, no node, nothing to probe."
+echo "⚠️  These are COMPILE-TIME CONSTANTS printed from this script, not"
+echo "    measurements. Sources named so you can check them."
+echo "  SDRAM total     32 MB    the part; Linux's total above is what is left"
+echo "                           after the kernel and its structures"
+echo "  config flash    16 MB    IS25LP128, holds the bitstream (no driver)"
+echo "  boot flash      32 KB    fpga/ulx3s/bram_flash.sv, a QSPI device in"
+echo "                           fabric — where the firmware boots from"
+echo "  I-cache          2 KB    src/icache.sv, 512 entries of one word"
+echo "  D-cache          2 KB    src/dcache.sv, 512 lines of one word,"
+echo "                           write-through"
+echo "  text buffer   4800 B     80x60 chars; a page of RAM the raster reads by"
+echo "                           PHYSICAL address (see koticon)"
+echo "  keyboard FIFO    8 x2    src/usb_kbd.sv, two independent read ports"
+echo "  register file   32x32b   src/regfile.sv"
+
+# ---- storage ----------------------------------------------------------------
+hr
+echo "Storage"
+rootdev=$(awk '$2 == "/" {print $1"  ("$3")"}' /proc/mounts 2>/dev/null | head -1)
+echo "  /         : ${rootdev:-unknown}"
+case "$rootdev" in
+    rootfs*|*initramfs*|/dev/root*)
+        echo "              ⚠️  this is RAM. Nothing written to / survives a"
+        echo "                  power-off; the card is at /dev/kotisd2." ;;
+    /dev/kotisd*)
+        echo "              writes to / persist (ext2, no journal — sync first)" ;;
+esac
+dec=$(dmesg 2>/dev/null | grep -m1 '^koti: root')
+[ -n "$dec" ] && echo "  /init said: $dec"
+# Zero-length and loop/ram devices are skipped: they are kernel scaffolding,
+# not storage, and on a machine with one card they would be the whole list.
+for d in /sys/block/*/size; do
+    [ -r "$d" ] || continue
+    n=$(basename "$(dirname "$d")")
+    case "$n" in loop*|ram*) continue ;; esac
+    s=$(cat "$d")
+    [ "$s" -gt 0 ] 2>/dev/null || continue
+    echo "  $n        : $s sectors ($(( s / 2048 )) MB)"
+done
+echo ""
+df -h 2>/dev/null | grep -v '^Filesystem' | while read -r fs size used avail pct mnt; do
+    echo "  $mnt on $fs: $used of $size used ($pct)"
+done
+
+# ---- devices and interrupts -------------------------------------------------
+hr
+echo "Interrupts"
+[ -r /proc/interrupts ] && sed -n '2,$p' /proc/interrupts | while read -r line; do
+    echo "  $line"
+done
+echo ""
+echo "Consoles : $(awk '{printf "%s ", $1}' /proc/consoles 2>/dev/null)"
+echo "⛔ No networking: this kernel has no CONFIG_NET, so ip/ping/wget exist as"
+echo "   busybox applets and cannot work. There is no MAC and no PHY either."
+hr
+echo "koti-help for the manual."

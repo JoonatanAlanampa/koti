@@ -565,7 +565,7 @@ module koti_core #(
     // banner over and over" symptom this block's comment already warns about.
     wire pa_lowmap   = (d_pa[25:24] == 2'b00);
     wire pa_dev      = pa_lowmap && ((d_pa[23:16] >= 8'h01
-                                   && d_pa[23:16] <= 8'h06)   // 05 = SD, 06 = USB
+                                   && d_pa[23:16] <= 8'h07)   // 05 SD, 06 USB, 07 ESP32
                                   || d_pa[23:22] == 2'b11);
     wire pa_flash_ro = pa_lowmap && !pa_dev;
 

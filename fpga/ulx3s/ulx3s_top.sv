@@ -82,6 +82,11 @@ module ulx3s_top (
     output logic       sd_clk,
     output logic       sd_cmd,
     inout  wire  [3:0] sd_d,
+    // The ESP32's own serial pair, K3/K4. Verified against upstream's v3.1.6
+    // constraint file, not remembered: unlike wifi_en (F1->J5) and wifi_gpio0
+    // (L2->F1), these two did NOT move between board revisions.
+    output logic       wifi_rxd,       // what the ESP32 RECEIVES — koti drives
+    input  wire        wifi_txd,       // what the ESP32 TRANSMITS — koti reads
     output logic       wifi_gpio0,
     // wifi_en on a v3.1.x board; NOT ASSIGNED AT ALL in the v2.0/v3.0.x
     // constraint file, so driving it there costs nothing. Belt and braces with
@@ -150,8 +155,18 @@ module ulx3s_top (
   // board dies and the COM port disappears — and it recovers by unplugging,
   // because every bitstream here is loaded to SRAM and gone at power-off. That
   // makes this a safe experiment rather than a gamble.
-  assign wifi_gpio0 = 1'b0;      // F1: a boot strap on this v3.1.8 board
-  assign wifi_en    = 1'b0;      // J5: the actual enable on v3.1.x — this one
+  // ⭐ SINCE 2026-08-10 THESE COME FROM SOFTWARE, and the power-on behaviour is
+  // unchanged: esp_uart.sv's control register RESETS TO 0, so both pins are
+  // driven low out of reset exactly as the two hardwired assignments below used
+  // to drive them. What changes is that software can now raise them
+  // deliberately — which is the only way to find out whether a booted ESP32
+  // actually drives the six GPIOs it shares with the microSD, without spending
+  // a bitstream per guess. And it can put the chip straight back into reset.
+  //   J5 = wifi_en  = 0  holds the ESP32 in reset — this is the one that counts
+  //   F1 = gpio0    = 0  a boot-mode strap, read only when it leaves reset
+  //
+  //   [was] assign wifi_gpio0 = 1'b0;
+  //   [was] assign wifi_en    = 1'b0;
 
   // ------------------------------------------------------- reset
   // BTN0 (PWR) is pulled up and reads 0 when pressed. The POR counter holds
@@ -211,6 +226,12 @@ module ulx3s_top (
       .sd_miso_drv(soc_sd_miso_drv),
       .sd_miso_oe (soc_sd_miso_oe),
       .uart_rxd   (ftdi_txd),
+      // The ESP32 pair, crossed here exactly once and deliberately: koti's
+      // transmitter drives what the ESP32 receives, and vice versa.
+      .esp_rxd    (wifi_rxd),
+      .esp_txd    (wifi_txd),
+      .esp_en     (wifi_en),
+      .esp_gpio0  (wifi_gpio0),
       .dbg_halted (cpu_halted),
       .dbg_fetch  (cpu_fetch),
       .dbg_irq    (irq_state),

@@ -114,6 +114,13 @@ jobs:
           vvp tb_usb_kbd.vvp | tee usb_kbd.log
           grep -q "tb_usb_kbd: PASS" usb_kbd.log
 
+          # The ESP32 link (PLAN item 11). Its first test is the one that
+          # matters most: esp_en must be LOW out of reset, because the ESP32's
+          # GPIOs are the microSD bus and koti loads its kernel off that card.
+          iverilog -g2012 -o tb_esp_uart.vvp ../src/esp_uart.sv             ../src/uart_tx.sv ../src/uart_rx.sv tb_esp_uart.v
+          vvp tb_esp_uart.vvp | tee esp_uart.log
+          grep -q "tb_esp_uart: PASS" esp_uart.log
+
           # mip.SEIP through a read-modify-write. csr.sv used to feed the
           # OR of the PLIC pin and the software bit back into CSRRS/CSRRC, so a
           # set/clear of ANY OTHER mip bit latched the live pin permanently --

@@ -29,6 +29,30 @@
 #define UART_RX   REG32(0x00010010)   // ⚠️ READING POPS when UART_RX_AVAIL set
 #define UART_RX_AVAIL 0x100u
 #define UART_RX_OVF   0x200u
+
+// ---- the ESP32 link at 0x0007_0000 (PLAN item 11, networking) -------------
+// A second serial port on the ESP32's own pins, plus the straps that decide
+// whether that chip is running at all.
+//
+// ⛔ ESP_EN RESETS TO 0 AND SHOULD STAY THERE UNLESS YOU MEAN IT. The ESP32's
+// GPIOs ARE the microSD bus (GPIO2/4/12/13/14/15 = sd_d[0..3], sd_clk,
+// sd_cmd), and koti loads its kernel off that card. Raising ESP_EN puts a
+// second driver on those six wires; whether it actually drives them depends on
+// the firmware the ESP32 boots, which is an experiment, not an assumption.
+//
+// ⚠️ ORDER: set ESP_GPIO0 first, THEN ESP_EN. A chip released from reset with
+// gpio0 low comes up in serial download mode instead of booting its own flash.
+#define ESP_DATA  REG32(0x00070000)   // w: tx byte. ⚠️ READING POPS when avail
+#define ESP_STAT  REG32(0x00070004)   // r: no side effects (see below)
+#define ESP_CTRL  REG32(0x00070008)   // rw: bit0 ESP_EN, bit1 ESP_GPIO0
+#define ESP_COUNT REG32(0x0007000C)   // r: bytes received since reset
+#define ESP_AVAIL     0x100u          // in ESP_DATA
+#define ESP_OVF       0x200u          // in ESP_DATA
+#define ESP_ST_TXBUSY 0x1u            // in ESP_STAT
+#define ESP_ST_AVAIL  0x2u            // in ESP_STAT — ask HERE, not ESP_DATA
+#define ESP_ST_OVF    0x4u            // in ESP_STAT
+#define ESP_EN        0x1u            // in ESP_CTRL
+#define ESP_GPIO0     0x2u            // in ESP_CTRL
 #endif
 #define GPIO_IN   REG32(0x00010008)
 #define QSPI_CFG  REG32(0x0001000C)   // bit0 flash quad, bit1 PSRAM quad

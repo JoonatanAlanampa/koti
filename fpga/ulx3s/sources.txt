@@ -44,6 +44,7 @@ src/regfile.sv
 src/muldiv.sv
 src/csr.sv
 src/tlb.sv
+src/esp_uart.sv
 src/uart_rx.sv
 src/uart_tx.sv
 

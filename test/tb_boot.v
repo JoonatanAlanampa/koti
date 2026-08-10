@@ -56,6 +56,9 @@ module tb_boot ();
   wire        sdram_doe;
 
   tt_um_koti uut (
+      // Idle high: an open input reads as x, and x through the receiver's
+      // synchroniser makes its edge detection unknown for the whole run.
+      .esp_txd(1'b1),
       .ui_in(ui_in), .uo_out(uo_out),
       .uio_in(uio_in), .uio_out(uio_out), .uio_oe(uio_oe),
       .sdram_cke(sdram_cke), .sdram_csn(sdram_csn),

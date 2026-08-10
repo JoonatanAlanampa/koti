@@ -82,6 +82,7 @@ module tb_fpga ();
   );
 
   ulx3s_top uut (
+      .wifi_txd   (1'b1),   // idle high; an open input is x
       .clk_25mhz  (clk),
       .btn        (btn),
       .sw         (sw),

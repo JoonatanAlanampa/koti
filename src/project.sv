@@ -94,6 +94,18 @@ module tt_um_koti (
     // is what makes the serial console typeable and is the same wire an ESP32
     // link would use on wifi_txd.
     input  wire        uart_rxd,
+    // ---- the ESP32 link, added 2026-08-10 (PLAN item 11). ----
+    // ⚠️ NAMED FROM THE ESP32's POINT OF VIEW, as upstream's constraint file
+    // names them: wifi_rxd (K3) is what the ESP32 RECEIVES, so koti drives it;
+    // wifi_txd (K4) is what it TRANSMITS, so koti reads it. Wiring these by the
+    // local sense of rx/tx crosses them and the link is silent in both
+    // directions with nothing to see on either end.
+    output wire        esp_rxd,       // -> wifi_rxd K3
+    input  wire        esp_txd,       // <- wifi_txd K4
+    // ⛔ Both reset LOW = the ESP32 held in reset, which is what ulx3s_top.sv
+    // hardwired before this existed. Software raises them deliberately.
+    output wire        esp_en,        // -> wifi_en    J5 on v3.1.x
+    output wire        esp_gpio0,     // -> wifi_gpio0 F1 on v3.1.x
     // ---- Liveness, for the harness's lamps. Added 2026-08-09. ----
     // ⛔ WHY THIS IS A PORT AND NOT A COMMENT SAYING "USE LED1".
     // `uo_out = vga_en ? uo_vga : {led[5:0], halted, uart_txd}` — so the HALTED
@@ -212,6 +224,13 @@ module tt_um_koti (
   // USB HID keyboard at 0x0006_0000, the next window after the microSD. Same
   // full compare, same reason.
   wire usb_range   = d_addr[23:14] == 10'h006;
+  // The ESP32 link at 0x0007_0000, the next window after the keyboard. Same
+  // full compare, same reason. ⚠️ Adding a window takes TWO edits: this one,
+  // and koti_core.sv's `pa_dev`, which decides whether WRITES to it are legal.
+  // With only this one, reads work and the first write takes a store fault —
+  // which with mtvec still 0 restarts the program and reads as a reset bug.
+  // The PLIC hit that first, then the microSD; this is the third.
+  wire esp_range   = d_addr[23:14] == 10'h007;
   // PLIC: the TOP 4 MB of flash address space, 0x00C0_0000..0x00FF_FFFF.
   //
   // It cannot live in a 64 KB carve-out beside the CLINT: the SiFive layout
@@ -224,13 +243,15 @@ module tt_um_koti (
   wire vga_sel     = d_req && vga_range;
   wire sd_sel_i    = d_req && sd_range;
   wire usb_sel_i   = d_req && usb_range;
+  wire esp_sel_i   = d_req && esp_range;
   wire plic_sel    = d_req && plic_range;
-  reg  clint_ack, vga_ack, plic_ack, sd_ack, usb_ack;
+  reg  clint_ack, vga_ack, plic_ack, sd_ack, usb_ack, esp_ack;
   always @(posedge clk) begin
       clint_ack <= rst ? 1'b0 : (clint_sel && !clint_ack);
       vga_ack   <= rst ? 1'b0 : (vga_sel && !vga_ack);
       sd_ack    <= rst ? 1'b0 : (sd_sel_i && !sd_ack);
       usb_ack   <= rst ? 1'b0 : (usb_sel_i && !usb_ack);
+      esp_ack   <= rst ? 1'b0 : (esp_sel_i && !esp_ack);
       plic_ack  <= rst ? 1'b0 : (plic_sel && !plic_ack);
   end
 
@@ -348,13 +369,31 @@ module tt_um_koti (
       .dbg_enq(usb_dbg_enq), .dbg_keyrep(usb_dbg_keyrep)
   );
 
+  // ---- the ESP32 link (PLAN item 11, networking) ----
+  // A second serial port on the ESP32's own dedicated pins, plus the two
+  // straps that decide whether that chip is running. ⛔ Both straps reset LOW,
+  // which is exactly what this file's top level hardwired before now: nothing
+  // about power-on behaviour changes, and waking the ESP32 is a write software
+  // has to make on purpose. That matters because the ESP32's GPIOs ARE the
+  // microSD bus.
+  wire [31:0] esp_rdata;
+  esp_uart #(.DIV(UDIV)) esp0 (
+      .clk(clk), .rst(rst),
+      .sel(esp_sel_i && !esp_ack), .we(d_we), .reg_a(d_addr[1:0]),
+      .wdata(d_wdata), .rdata(esp_rdata),
+      .esp_rxd(esp_rxd), .esp_txd(esp_txd),
+      .esp_en(esp_en), .esp_gpio0(esp_gpio0)
+  );
+
   wire ad_ack;
-  assign d_ack   = clint_ack || vga_ack || plic_ack || sd_ack || usb_ack || ad_ack;
+  assign d_ack   = clint_ack || vga_ack || plic_ack || sd_ack || usb_ack
+                   || esp_ack || ad_ack;
   assign d_rdata = clint_ack ? clint_rdata
                  : vga_ack   ? vga_rdata_q
                  : plic_ack  ? plic_rdata_q
                  : sd_ack    ? sd_rdata
-                 : usb_ack   ? usb_rdata    : ad_rdata;
+                 : usb_ack   ? usb_rdata
+                 : esp_ack   ? esp_rdata    : ad_rdata;
 
   // ---- video DMA + text pipeline ----
   wire        v_req, v_ack, vt_hs, vt_vs, vt_act, vt_pix;
@@ -389,7 +428,7 @@ module tt_um_koti (
   // it rather than repeating the decode, so a new MMIO window cannot become
   // cacheable by being forgotten in a second place.
   wire dc_req = d_req && !clint_range && !vga_range && !plic_range
-                      && !sd_range && !usb_range;
+                      && !sd_range && !usb_range && !esp_range;
   wire        am_req, am_we;
   wire [23:0] am_addr;
   wire [31:0] am_wdata;

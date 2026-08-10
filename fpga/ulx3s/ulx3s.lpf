@@ -114,6 +114,20 @@ IOBUF  PORT "wifi_en" PULLMODE=DOWN IO_TYPE=LVCMOS33;
 # note F1 is `wifi_en` on a v3.0.x board and `wifi_gpio0` only on v3.1.x.
 IOBUF  PORT "wifi_gpio0" PULLMODE=DOWN IO_TYPE=LVCMOS33;
 
+# The ESP32's own serial pair (PLAN item 11, networking). Taken from upstream's
+# v3.1.6 constraint file, which is the revision this board is closest to, and
+# CHECKED against the v2.0 file: unlike wifi_en (F1 -> J5) and wifi_gpio0
+# (L2 -> F1), these two sites are the same in both, so the revision trap that
+# caught wifi_gpio0 does not apply here.
+#   wifi_rxd = "FPGA transmits to WiFi"  -> koti drives it
+#   wifi_txd = "FPGA receives from WiFi" -> koti reads it
+# PULLMODE=UP on both because an idle serial line is HIGH: a floating receive
+# pin reads as an endless run of start bits and the receiver decodes noise.
+LOCATE COMP "wifi_rxd" SITE "K3";
+IOBUF  PORT "wifi_rxd" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+LOCATE COMP "wifi_txd" SITE "K4";
+IOBUF  PORT "wifi_txd" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+
 # ---- onboard microSD, driven in SPI mode ----
 # Sites copied from console/fpga/ulx3s.lpf, which has run this exact bus on this
 # exact board. sd_d[0] is MISO and is an input here; the others are driven.

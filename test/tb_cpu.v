@@ -39,6 +39,11 @@ module tb_cpu ();
       // decisions on an unknown.
       .mtip(mtip), .msip(msip), .meip(meip), .seip(1'b0),
       .halted(halted), .led(led), .uart_txd(uart_txd),
+      // Idle high, for the same reason seip is tied above and for one more:
+      // a serial line at rest IS high, and the receiver's synchroniser resets
+      // to 3'b111 to match. Left open it would be x, and x through the
+      // synchroniser makes rx_fall unknown for the whole run.
+      .uart_rxd(1'b1),
       .gpio_in(8'd0), .qspi_cfg(qspi_cfg),
       .if_req(if_req), .if_addr(if_addr), .if_ack(if_ack),
       .if_rdata(if_rdata), .if_rdata2(if_rdata2),

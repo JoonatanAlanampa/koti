@@ -20,7 +20,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
 
 sys.path.append(str(Path(__file__).parent))
-from test import CS0, CS1, SCK, SD_BITS, UART_DIV, SpiMem  # noqa: E402
+from spimem import CS0, CS1, SCK, SD_BITS, UART_DIV, SpiMem  # noqa: E402
 
 SW_ROOT = Path(__file__).parent.parent / "sw"
 

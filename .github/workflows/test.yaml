@@ -190,11 +190,20 @@ jobs:
       # harness (fpga/ulx3s/ulx3s_top.sv) through the J1 header wires, which is
       # the only thing that exercises the Pmod row permutation, the orientation
       # straps and the UART source mux. See test/test_fpga.py.
+      # ⛔ The gate is inside run_fpga.py now (test/gate.py), and the line that
+      # used to be here — `! grep failure results_fpga.xml` — is DELETED rather
+      # than kept as a belt-and-braces second check, because it was worse than
+      # nothing: when the run crashes early enough that results_fpga.xml is
+      # never written, grep exits 1 for "no match" and `!` turns that into a
+      # PASS. A missing results file and a clean run were indistinguishable.
+      # That is exactly what happened from 2026-08-08 to 2026-08-10, when
+      # test_fpga.py's `from test import ...` started resolving to the Python
+      # standard library's `test` package: this step reported green for two
+      # days while the harness did not run at all.
       - name: ULX3S harness simulation
         run: |
           cd test
           python run_fpga.py
-          ! grep failure results_fpga.xml
 
       # The variant that actually goes on the board today, because J1 is bare
       # holes until the Cartridge Pmod arrives: the boot flash is

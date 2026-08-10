@@ -458,12 +458,18 @@ defects:
 - **F3** (disabling video parks the arbiter grant) → re-expressed as
   `test/tb_vga_grant.v`, at module level, no CPU needed, and **proven able to
   fail**: restoring `assign v_req = f_busy && en` trips it.
-- 🔴 **F1** (a partial address compare aliased flash data into the MMIO
-  carve-out every 512 KB) → **NOT re-expressed. This is a real coverage gap.**
-  The fix is still in `koti_core.sv` (`io_m = addr_m[31:16] == 16'h0001`) but
-  nothing would now catch its removal. It needs a running CPU to test, so the
-  cheapest restoration is a directed case in `test/run_cpu.py` (cocotb) or a
-  bare-metal image that reads flash past 64 KB and checks it is flash data.
+- ✅ **F1 — COVERAGE RESTORED 2026-08-10.** `test_flash_does_not_alias_into_the_
+  mmio_window` plus its pair `test_mmio_window_is_readable` in `test_cpu.py`:
+  a load from **0x0009_080C** (0x0001_000C + 512 KB) must return the flash word
+  there, not QSPI_CFG. Proven able to fail by restoring the original defect —
+  `io_m = addr_m[18:16] == 3'b001` — which returns `0x0` instead of the
+  sentinel while the paired MMIO test still passes, so the mutant is caught for
+  aliasing rather than for breaking MMIO outright.
+  🪤 **It is TWO tests because this harness supports exactly one `run_program`
+  per cocotb test.** Written as one test with two calls it hung at max_cycles
+  ("program never halted"), which reads exactly like a decode bug in the core
+  and is not one. All 24 pre-existing tests already obeyed the rule; it was
+  simply never written down. It is now, in `run_program`'s docstring.
   `test_koti_boot_and_timer`, `test_vga_text` and `test_hello_c` went too;
   those are substantially covered by `tb_boot`, `tb_fpga_bram` and the real
   hardware, which is why they are not listed as gaps.

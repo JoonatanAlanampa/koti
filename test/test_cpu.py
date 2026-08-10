@@ -150,8 +150,17 @@ def layout(main, sections):
 
 
 async def run_program(dut, words, max_cycles=20000, mtip_at=None,
-                      ram_zero=(), stop_on_brk=True):
-    """Run until the program stops. `stop_on_brk` is what an S/U EBREAK means
+                      ram_zero=(), stop_on_brk=True, flash_poke=()):
+    """Run until the program stops.
+
+    ⛔ CALL THIS EXACTLY ONCE PER @cocotb.test(). Every test in this file did,
+    and on 2026-08-10 the first one written with two calls hung at max_cycles —
+    reported as "program never halted", which reads exactly like a decode or
+    memory-decode bug in the core and is not one. Two short programs that each
+    pass alone will not reliably both pass in one test. If a test needs two
+    programs, it needs to be two tests.
+
+    `stop_on_brk` is what an S/U EBREAK means
     to THIS test: True (the default) treats it as the terminator every S/U
     section here uses it as, False leaves it to the test's own handler — which
     is the only way to exercise a breakpoint that is supposed to be RESUMED,
@@ -169,6 +178,10 @@ async def run_program(dut, words, max_cycles=20000, mtip_at=None,
     # pad with EBREAK so runaway fetch halts instead of executing X
     for i in range(len(words), len(words) + 16):
         dut.mem.flash[i].value = EBREAK
+    # Words placed in flash as DATA, past the program. Last, so a poke always
+    # wins over the EBREAK padding rather than depending on program length.
+    for i, w in flash_poke:
+        dut.mem.flash[i].value = w
     await ClockCycles(dut.clk, 2)
     dut.rst.value = 0
     for cyc in range(max_cycles):
@@ -1000,3 +1013,44 @@ async def test_timer_interrupt(dut):
     assert reg(dut, 14) == 0x8000_0007
     assert reg(dut, 21) == 1
     assert reg(dut, 13) >= 1, "loop never ran"
+
+
+@cocotb.test()
+async def test_mmio_window_is_readable(dut):
+    """Half one of the F1 pair: the core's MMIO window works at all.
+
+    Without this, the alias test below would pass on an RTL that had simply
+    deleted the MMIO decode — every address would read memory, including the
+    one that must not."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await run_program(dut, li(1, 0x0001_000C) + li(2, 3) + [sw(2, 1, 0)]
+                      + [lw(10, 1, 0)] + [EBREAK])
+    assert reg(dut, 10) == 3,         f"QSPI_CFG at 0x0001_000C read back {reg(dut, 10):#x}, not 3"
+
+
+@cocotb.test()
+async def test_flash_does_not_alias_into_the_mmio_window(dut):
+    """F1 regression: the core's MMIO window is 0x0001_0000..0x0001_FFFF and
+    the compare that recognises it must use the WHOLE upper half-word.
+
+    The original defect compared only the low bits of the page number, so the
+    window repeated every 512 KB: a load from 0x0009_080C read a CORE REGISTER
+    instead of the flash word living there, and every 0x80000 above it did the
+    same. Flash is where all bare-metal code and the SBI firmware live, so the
+    failure is silent, data-dependent corruption of the boot path.
+
+    ⚠️ THE PAIRED HALF IS test_mmio_window_is_readable, and it is a SEPARATE
+    test on purpose: this harness supports exactly ONE run_program per cocotb
+    test. Every other test here obeys that; the one written with two calls hung
+    at max_cycles with nothing wrong in the RTL, which reads exactly like a
+    decode bug and is not one.
+
+    0x0009_080C is 0x0001_000C + 0x80000, its low bits [3:2] select QSPI_CFG,
+    and its word address lands on flash word 0x203 in xip_model — which is
+    where the sentinel goes."""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    ALIAS = 0x0009_080C
+    SENTINEL = 0xF1A5_F1A5
+    await run_program(dut, li(4, ALIAS) + [lw(11, 4, 0)] + [EBREAK],
+                      flash_poke=[((ALIAS >> 2) & 0x3FFF, SENTINEL)])
+    assert reg(dut, 11) == SENTINEL,         f"load from {ALIAS:#x} returned {reg(dut, 11):#x}, want {SENTINEL:#x} "         f"— flash aliased into the MMIO window (it read a core register)"

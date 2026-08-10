@@ -199,3 +199,28 @@ CONFIG_PRINTK_TIME=y
 CONFIG_KALLSYMS=y
 CONFIG_LOG_BUF_SHIFT=16
 CONFIG_HZ_100=y
+
+# ---- networking, PLAN item 11 -----------------------------------------------
+# koti's only route off the board is the onboard ESP32 over src/esp_uart.sv.
+# SLIP rather than PPP for the first link: it is a line discipline with no
+# negotiation, no daemon and no Buildroot package — `ip link` and a tiny
+# ldattach are the whole userspace, where PPP needs pppd built and configured
+# before anything can be tried at all.
+CONFIG_NET=y
+CONFIG_PACKET=y
+CONFIG_UNIX=y
+CONFIG_INET=y
+CONFIG_IP_PNP=y
+CONFIG_IP_PNP_DHCP=y
+# The link itself.
+CONFIG_NETDEVICES=y
+CONFIG_SLIP=y
+CONFIG_SLIP_COMPRESSED=y
+CONFIG_SLHC=y
+# The serial port SLIP attaches to. Without a tty there is no line discipline
+# and therefore no way to run any link protocol at all — this is the config
+# that makes /dev/ttyKOTI0 exist.
+CONFIG_SERIAL_KOTI_ESP=y
+# ⛔ NOT enabled, and worth saying why so nobody adds it by reflex:
+# CONFIG_INET_DIAG, IPV6 and the netfilter stack are all real memory on a
+# machine with 25 MB, and none of them is needed to fetch a page over HTTP.

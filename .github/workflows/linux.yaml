@@ -297,6 +297,23 @@ jobs:
           tail -10 drivers/input/keyboard/Kconfig
           grep -n koti drivers/input/keyboard/Makefile
 
+      # The ESP32 link (PLAN item 11). A serial-core driver, so the port is a
+      # real tty: that is what lets a LINE DISCIPLINE attach to it, which is
+      # the only way SLIP or PPP can ever run, and what lets a userspace
+      # AT-command client just open a device node.
+      #
+      # ⚠️ It must never touch bits 0-1 of the control register. Those are
+      # esp_en and esp_gpio0 -- whether the ESP32 is out of reset -- and that
+      # chip's GPIOs are the microSD bus this machine boots from.
+      - name: Add koti's ESP32 serial driver
+        working-directory: linux-${{ env.KVER }}
+        run: |
+          cp ../sw/linux/koti_esp.c drivers/tty/serial/
+          printf '\nconfig SERIAL_KOTI_ESP\n\ttristate "Koti-1 ESP32 serial link"\n\tselect SERIAL_CORE\n\thelp\n\t  Serial driver for koti'"'"'s ESP32 link (src/esp_uart.sv).\n\t  Gives /dev/ttyKOTI0, which SLIP or PPP can attach to.\n' >> drivers/tty/serial/Kconfig
+          printf 'obj-$(CONFIG_SERIAL_KOTI_ESP)\t+= koti_esp.o\n' >> drivers/tty/serial/Makefile
+          tail -8 drivers/tty/serial/Kconfig
+          grep -n koti drivers/tty/serial/Makefile
+
       # The OUTPUT twin of the driver above, and the reason CONFIG_VT is now on.
       # A VT needs a console driver to draw on, and koti's screen is character
       # cells in memory rather than a pixel buffer -- so this is a `struct

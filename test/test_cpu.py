@@ -488,17 +488,35 @@ async def test_flash_lrsc_store_access_fault(dut):
 
 
 @cocotb.test()
-async def test_psram_upper_bound_access_fault(dut):
-    """F4: the APS6404 is 8 MiB; the high mirror (addr[24] && addr[23],
-    0x0180_0000+) must access-fault (store cause 7, load cause 5) rather
-    than silently alias into the low 8 MiB."""
+async def test_ram_top_quarter_access_fault(dut):
+    """The RAM window ends at 0x02FF_FFFF and PA[25:24] == 11 is past the end
+    of the part, so 0x0300_0000+ must access-fault (store cause 7, load cause
+    5) rather than alias silently onto real RAM.
+
+    ⚠️ THIS TEST PINS BOTH SIDES ON PURPOSE, and the legal side is the half
+    that would catch a careless fix. PLAN item 12 made RAM span TWO quarters,
+    PA[25:24] ∈ {01, 10}; a bound written as "anything above 16 MB faults"
+    passes the illegal case below and silently amputates the upper 16 MB the
+    whole item existed to reach. koti_core.sv's own comment says the same
+    thing from the other direction.
+
+    (Until 2026-08-08 this was test_psram_upper_bound_access_fault and it
+    asserted the ASIC build's 8 MiB APS6404 high mirror at 0x0180_0000 —
+    which item 12 turned into ordinary, legal RAM. The test then failed on
+    every run for two days without reddening a single job, because no runner
+    checked cocotb's results; see test/gate.py.)"""
     cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
-    PSRAM_HI = 0x0180_0000
+    RAM_TOP = 0x02FF_FFFC     # last word of real RAM: must NOT fault
+    PAST_END = 0x0300_0000    # first word past it:    must fault
     main = ([addi(24, 0, 0)]
             + li(1, HANDLER * 4) + [csrrw(0, MTVEC, 1)]
-            + li(2, PSRAM_HI) + li(3, 0xABCD) + [
-                sw(3, 2, 0),              # store to high mirror: cause 7
-                lw(10, 2, 0),             # load from high mirror: cause 5
+            + li(4, RAM_TOP) + li(3, 0xABCD) + [
+                sw(3, 4, 0),              # legal: no trap, appends no nibble
+                lw(11, 4, 0),             # legal: no trap
+            ]
+            + li(2, PAST_END) + [
+                sw(3, 2, 0),              # past the end: cause 7
+                lw(10, 2, 0),             # past the end: cause 5
                 EBREAK])
     m_handler = [
         csrrs(20, MCAUSE, 0),
@@ -508,10 +526,18 @@ async def test_psram_upper_bound_access_fault(dut):
     ]
     await run_program(dut, with_handler(main, m_handler),
                       ram_zero=[(0, 4)])
+    # Exactly two nibbles: 7 then 5. A third would mean a legal RAM access
+    # faulted; a shorter one means the out-of-range access went through.
     assert reg(dut, 24) == 0x75, \
-        f"cause seq {reg(dut, 24):#x} != 7,5 (store/load high-mirror access-fault)"
-    # the faulting store must not have aliased into the low 8 MiB
-    assert int(dut.mem.ram[0].value) == 0, "high-mirror store aliased to low PSRAM"
+        f"cause seq {reg(dut, 24):#x} != 7,5 — expected the two accesses past " \
+        f"the end of RAM to fault and the two at the top of RAM not to"
+    # ⚠️ The alias check is what makes the fault meaningful rather than
+    # decorative. tb_cpu wires 23 of the core's 24 address bits (see the
+    # `Padding 1 high bits` warning at elaboration), so an unfaulted store to
+    # 0x0300_0000 lands on xipmem's ram[0] — precisely the silent aliasing the
+    # bound exists to prevent, and visible here as a non-zero word.
+    assert int(dut.mem.ram[0].value) == 0, \
+        "the store past the end of RAM aliased onto real RAM"
 
 
 @cocotb.test()

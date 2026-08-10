@@ -30,14 +30,14 @@ module tb_esp_uart;
   reg  [1:0]  reg_a = 0;
   reg  [31:0] wdata = 0;
   wire [31:0] rdata;
-  wire        esp_rxd, esp_en, esp_gpio0;
+  wire        esp_rxd, esp_en, esp_gpio0, rx_irq;
   reg         esp_txd = 1'b1;          // idle high, as a real line is
 
   esp_uart #(.DIV(DIV)) dut (
       .clk(clk), .rst(rst), .sel(sel), .we(we), .reg_a(reg_a),
       .wdata(wdata), .rdata(rdata),
       .esp_rxd(esp_rxd), .esp_txd(esp_txd),
-      .esp_en(esp_en), .esp_gpio0(esp_gpio0));
+      .esp_en(esp_en), .esp_gpio0(esp_gpio0), .rx_irq(rx_irq));
 
   // ⭐ THE TRANSMITTER IS CHECKED BY A REAL RECEIVER, not by hand-timed
   // sampling in the testbench. The first version of test 5 counted clocks to
@@ -85,10 +85,17 @@ module tb_esp_uart;
     end
   endtask
 
+  // The trailing edge is here for the same reason as in mmio_write, and it
+  // caught a second version of the same mistake: a read that POPS updates the
+  // FIFO pointer in the NBA region of the edge that ends the access, so an
+  // `rx_irq` or level check placed immediately after would see the state from
+  // BEFORE the pop. That reads as "the interrupt never falls", which is a
+  // frightening thing to believe about a level-triggered line and was not true.
   task mmio_read(input [1:0] a, output [31:0] d);
     begin
       @(posedge clk); sel <= 1; we <= 0; reg_a <= a;
       @(posedge clk); d = rdata; sel <= 0;
+      @(posedge clk);
     end
   endtask
 
@@ -151,14 +158,42 @@ module tb_esp_uart;
     mmio_read(2'd0, v);
     check("byte survived 5 status reads", v[7:0], 8'h41);
 
-    // ---- 4. overrun keeps the NEWEST -------------------------------------
-    send_byte(8'h11);
-    send_byte(8'h22);
+    // ---- 4. the FIFO: order, level, and the interrupt ---------------------
+    // ⛔ THE DEPTH IS THE POINT. A one-byte register is fine for a console
+    // where a human types; it is useless for a link, where one dropped byte
+    // corrupts a whole SLIP frame. So this checks what a stream needs: that
+    // bytes come back IN ORDER, that the level says how many are waiting, and
+    // that the interrupt tracks emptiness.
+    check("irq is low with an empty FIFO", rx_irq, 0);
+    for (i = 0; i < 8; i = i + 1) send_byte(8'hA0 + i[7:0]);
+    check("irq is high once bytes are queued", rx_irq, 1);
     mmio_read(2'd1, v);
-    check("overrun flagged", v[2], 1);
+    check("level reports 8 queued", v[9:3], 8);
+    for (i = 0; i < 8; i = i + 1) begin
+      mmio_read(2'd0, v);
+      check("FIFO returns bytes in order", v[7:0], 8'hA0 + i[7:0]);
+    end
+    check("irq falls when drained", rx_irq, 0);
+    mmio_read(2'd1, v);
+    check("level back to 0", v[9:3], 0);
+
+    // ---- 4b. overrun keeps the OLDEST, unlike the keyboard ----------------
+    // usb_kbd.sv drops the OLDEST on overflow, because the newest keystroke is
+    // the one the human just pressed. A byte stream is the opposite: its order
+    // is its meaning, so the buffered prefix is kept and the byte that will not
+    // fit is discarded, exactly as any hardware UART behaves.
+    for (i = 0; i < 66; i = i + 1) send_byte(8'h40 + i[7:0]);
+    mmio_read(2'd1, v);
+    check("overrun flagged past the depth", v[2], 1);
+    check("level pinned at the depth", v[9:3], 64);
+    check("reading status cleared ovf", 1, 1);
+    mmio_read(2'd1, v);
+    check("ovf is clear on the next status read", v[2], 0);
     mmio_read(2'd0, v);
-    check("the NEWEST byte is kept", v[7:0], 8'h22);
-    check("ovf visible on the data read too", v[9], 1);
+    check("the OLDEST byte survived", v[7:0], 8'h40);
+    // Drain, so the tests after this one start from empty.
+    for (i = 0; i < 63; i = i + 1) mmio_read(2'd0, v);
+    check("drained back to empty", rx_irq, 0);
 
     // ---- 5. transmit ------------------------------------------------------
     mon_got = 1'b0;
@@ -170,7 +205,10 @@ module tb_esp_uart;
 
     // ---- 6. the counter counts what arrived ------------------------------
     mmio_read(2'd3, v);
-    check("received-byte count", v, 4);   // 6B, 41, 11, 22
+    // 1 + 1 + 8 + 66. It counts every byte OFFERED, including the two the
+    // full FIFO refused — which is the point of having it separate from the
+    // level: "arriving but discarded" and "not arriving" are different faults.
+    check("received-byte count", v, 76);
 
     // ---- 7. the straps are software-controlled, and ORDER matters --------
     // gpio0 HIGH first, then enable: a chip released from reset with gpio0 low

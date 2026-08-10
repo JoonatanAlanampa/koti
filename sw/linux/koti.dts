@@ -315,6 +315,30 @@
 		};
 
 		/*
+		 * The ESP32 link — src/esp_uart.sv, PLAN item 11. This is koti's
+		 * only route to a network: the onboard ESP32 over its own serial
+		 * pair on K3/K4, with a 64-byte receive FIFO and PLIC source 2.
+		 *
+		 * ⛔ IT IS NOT A 16550 AND MAINLINE BINDS TO NOTHING HERE, the
+		 * same as the keyboard above. `ns16550a` would be a lie that
+		 * ends in a driver poking registers that are not there.
+		 *
+		 * ⚠️ The node does NOT wake the ESP32. esp_uart's control
+		 * register resets to 0, holding it in reset, and the chip's
+		 * GPIOs are the microSD bus — see the experiment in
+		 * fpga/ulx3s/README.md 2e. A driver binding here gets a serial
+		 * port; making the far end run is a separate, deliberate act.
+		 */
+		esp0: serial@70000 {
+			compatible = "koti,esp-uart-1.0";
+			reg = <0x00070000 0x00010000>;
+			interrupt-parent = <&plic0>;
+			interrupts = <2>;
+			clock-frequency = <25000000>;
+			current-speed = <115200>;
+		};
+
+		/*
 		 * The 40x30 text console — PLAN.md item 9b, driver
 		 * sw/linux/koticon.c. `reg` is the VGA register block, NOT the
 		 * character buffer: the buffer is ordinary RAM that the driver

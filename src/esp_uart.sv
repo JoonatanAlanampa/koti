@@ -29,7 +29,10 @@
 // Registers (word addresses, reg_a = d_addr[1:0]):
 //   +0x00  W  transmit byte (low 8 bits). Ignored while `tx_busy`.
 //          R  {ovf, avail, data[7:0]} — ⚠️ READING POPS when `avail` is set.
-//   +0x04  R  status, NO SIDE EFFECTS: bit0 tx_busy, bit1 rx_avail, bit2 rx_ovf
+//   +0x04  R  status: bit0 tx_busy, bit1 rx_avail, bit2 rx_ovf,
+//             bits 9:3 = how many bytes are queued (0..64).
+//             ⚠️ Reading it CLEARS rx_ovf — see the note at the FIFO. It does
+//             not pop, so it is still safe to ask "is a byte waiting".
 //   +0x08  RW control: bit0 esp_en (drives wifi_en), bit1 esp_gpio0
 //   +0x0C  R  received-byte count since reset, free-running, no side effects
 //
@@ -63,7 +66,10 @@ module esp_uart #(
 
     // The two strap pins, driven from the control register.
     output logic        esp_en,          // -> wifi_en   (J5 on v3.1.x)
-    output logic        esp_gpio0        // -> wifi_gpio0 (F1 on v3.1.x)
+    output logic        esp_gpio0,       // -> wifi_gpio0 (F1 on v3.1.x)
+
+    // Level, into the PLIC. High while the receive FIFO holds anything.
+    output wire         rx_irq
 );
 
     // ---- the serial halves, both reused verbatim ---------------------------
@@ -86,32 +92,69 @@ module esp_uart #(
         .clk(clk), .rst(rst), .rx_pin(esp_txd),
         .data(rx_data_w), .valid(rx_valid_w), .frame_err(rx_frame_w));
 
-    // ---- the received byte -------------------------------------------------
-    // One byte deep with an overrun flag, the same shape and the same policy as
-    // the console receiver in koti_core: KEEP THE NEWEST. A link partner that
-    // sends faster than software reads is a fact to record, not to hide, and a
-    // stale byte is worse than a missing one.
-    logic [7:0] rx_byte;
-    logic       rx_avail, rx_ovf;
-    logic [31:0] rx_count;
+    // ---- the receive FIFO --------------------------------------------------
+    // ⛔ A ONE-BYTE REGISTER IS NOT ENOUGH FOR A LINK, and the first version of
+    // this file had one because it was modelled on the console receiver in
+    // koti_core, where M-mode firmware polls between keystrokes. A human types
+    // at ~10 bytes/s; a link partner sends at 11520. At 115200 baud a byte
+    // lands every 86.8 us, and ONE dropped byte corrupts an entire SLIP or PPP
+    // frame — which then has to be retransmitted, at which point the same
+    // thing happens again. A depth-1 buffer makes a link that works only when
+    // nothing else is running.
+    //
+    // 64 bytes is ~5.5 ms of slack at 115200, which is a comfortable margin
+    // against interrupt latency on a 25 MHz core that also has video DMA and a
+    // page-table walker competing for memory.
+    localparam int DEPTH = 64;
+    localparam int PTRW  = $clog2(DEPTH);
 
-    wire rx_pop = sel && !we && (reg_a == 2'd0);
+    logic [7:0]        fifo [0:DEPTH-1];
+    logic [PTRW:0]     wptr, rptr;             // one extra bit: full vs empty
+    logic              rx_ovf;
+    logic [31:0]       rx_count;
 
+    wire f_empty = (wptr == rptr);
+    wire f_full  = (wptr[PTRW-1:0] == rptr[PTRW-1:0]) && (wptr[PTRW] != rptr[PTRW]);
+    wire [PTRW:0] f_level = wptr - rptr;
+
+    wire rx_pop = sel && !we && (reg_a == 2'd0) && !f_empty;
+
+    // ⚠️ ON OVERRUN THIS DROPS THE NEWEST BYTE, which is the OPPOSITE of what
+    // src/usb_kbd.sv does, deliberately. For a keystroke queue the newest entry
+    // is what the human just pressed and the oldest is stale, so dropping the
+    // oldest is right. For a BYTE STREAM the FIFO's contents are the data and
+    // its order IS the meaning: discarding from the middle of a frame that has
+    // already partly arrived corrupts it either way, so the useful behaviour is
+    // the one every hardware UART has — keep what is buffered, discard what
+    // will not fit, and say so through `ovf` so the loss is visible rather than
+    // silent.
     always_ff @(posedge clk)
         if (rst) begin
-            rx_byte <= 8'd0; rx_avail <= 1'b0; rx_ovf <= 1'b0;
-            rx_count <= 32'd0;
+            wptr <= '0; rptr <= '0; rx_ovf <= 1'b0; rx_count <= 32'd0;
         end else begin
             if (rx_valid_w) begin
-                rx_byte  <= rx_data_w;
-                rx_avail <= 1'b1;
                 rx_count <= rx_count + 32'd1;
-                if (rx_avail && !rx_pop) rx_ovf <= 1'b1;
-            end else if (rx_pop) begin
-                rx_avail <= 1'b0;
-                rx_ovf   <= 1'b0;
+                if (!f_full) begin
+                    fifo[wptr[PTRW-1:0]] <= rx_data_w;
+                    wptr <= wptr + 1'b1;
+                end else
+                    rx_ovf <= 1'b1;
             end
+            // Clearing on a read of the STATUS register, not the data register:
+            // a driver that drains the FIFO byte by byte would otherwise clear
+            // the flag on its first pop and never see an overrun that happened
+            // later in the same burst.
+            if (sel && !we && (reg_a == 2'd1)) rx_ovf <= 1'b0;
+            if (rx_pop) rptr <= rptr + 1'b1;
         end
+
+    wire [7:0] rx_byte  = fifo[rptr[PTRW-1:0]];
+    wire       rx_avail = !f_empty;
+
+    // Level-sensitive, like usb_kbd's: high while anything is queued. The
+    // driver must drain to empty, or the line never falls and the PLIC
+    // re-enters for ever.
+    assign rx_irq = rx_avail;
 
     // ---- the straps --------------------------------------------------------
     // ⛔ BOTH RESET TO 0, WHICH IS THE PRE-2026-08-10 HARDWIRED BEHAVIOUR:
@@ -134,7 +177,11 @@ module esp_uart #(
     always_comb
         case (reg_a)
             2'd0:    rdata = {22'd0, rx_ovf, rx_avail, rx_byte};
-            2'd1:    rdata = {29'd0, rx_ovf, rx_avail, tx_busy};
+            // {level[6:0], ovf, avail, tx_busy}. The LEVEL is what makes an
+            // interrupt-driven driver efficient: read it once, then pop that
+            // many times, instead of an MMIO round trip per byte to ask
+            // whether there is another one.
+            2'd1:    rdata = {17'd0, 7'(f_level), rx_ovf, rx_avail, tx_busy};
             2'd2:    rdata = {30'd0, ctrl};
             default: rdata = rx_count;
         endcase

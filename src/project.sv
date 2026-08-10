@@ -321,7 +321,12 @@ module tt_um_koti (
   // latch it forever depending on the cycle it landed on. It needs a
   // read-to-clear status bit of its own first, the way the keyboard has one.
   // Sources 2-4 are tied low so the register map already has room for them.
-  wire [4:1]  plic_src = {3'b000, usb_kb_irq};
+  // Source 1 = the USB keyboard, source 2 = the ESP32 link's receive FIFO.
+  // ⚠️ A LINK CANNOT BE POLLED FROM LINUX AT THIS BAUD. A byte lands every
+  // 86.8 us at 115200; a polled tty driver would have to wake faster than that
+  // forever, on a 25 MHz core that also runs a video DMA and a page-table
+  // walker. So the FIFO has a level line, and it goes here.
+  wire [4:1]  plic_src = {2'b00, esp_rx_irq, usb_kb_irq};
   wire [31:0] plic_rdata;
 
   plic #(.SOURCES(4)) plic0 (
@@ -377,12 +382,14 @@ module tt_um_koti (
   // has to make on purpose. That matters because the ESP32's GPIOs ARE the
   // microSD bus.
   wire [31:0] esp_rdata;
+  wire        esp_rx_irq;
   esp_uart #(.DIV(UDIV)) esp0 (
       .clk(clk), .rst(rst),
       .sel(esp_sel_i && !esp_ack), .we(d_we), .reg_a(d_addr[1:0]),
       .wdata(d_wdata), .rdata(esp_rdata),
       .esp_rxd(esp_rxd), .esp_txd(esp_txd),
-      .esp_en(esp_en), .esp_gpio0(esp_gpio0)
+      .esp_en(esp_en), .esp_gpio0(esp_gpio0),
+      .rx_irq(esp_rx_irq)
   );
 
   wire ad_ack;

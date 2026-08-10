@@ -9,6 +9,8 @@ from pathlib import Path
 
 from cocotb_tools.runner import get_runner
 
+import gate
+
 TEST_DIR = Path(__file__).parent
 SRC_DIR = TEST_DIR.parent / "src"
 FPGA_DIR = TEST_DIR.parent / "fpga" / "ulx3s"
@@ -92,12 +94,13 @@ def main():
     # Distinct results file: run.py writes results.xml, and CI uploads that
     # one. Sharing the name would mean whichever suite ran last silently
     # decided what the summary said.
-    runner.test(
+    results = runner.test(
         hdl_toplevel="tb_fpga",
         test_module="test_fpga",
         test_dir=TEST_DIR,
         results_xml="results_fpga.xml",
     )
+    gate.check(results, "ULX3S harness simulation")
 
 
 if __name__ == "__main__":

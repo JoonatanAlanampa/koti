@@ -7,6 +7,8 @@ from pathlib import Path
 
 from cocotb_tools.runner import get_runner
 
+import gate
+
 TEST_DIR = Path(__file__).parent
 SRC_DIR = TEST_DIR.parent / "src"
 
@@ -25,11 +27,12 @@ def main():
         build_args=["-g2012", f"-I{SRC_DIR}"],
         timescale=("1ns", "1ps"),
     )
-    runner.test(
+    results = runner.test(
         hdl_toplevel="tb_core",
         test_module="test_core",
         test_dir=TEST_DIR,
     )
+    gate.check(results, "muldiv unit tests")
 
 
 if __name__ == "__main__":

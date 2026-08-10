@@ -76,14 +76,50 @@ module esp_uart #(
     // Deliberately the SAME modules the console uses rather than a second
     // implementation: uart_rx.sv is mutation-tested (edge sampling, start-bit
     // validation, stop bit) and a private copy would start identical and drift.
+    // ---- the transmit FIFO -------------------------------------------------
+    // ⛔ THE TRANSMITTER NEEDS ONE FOR THE SAME REASON THE RECEIVER DOES, and
+    // the reason is a property of the DRIVER, not of the wire. Linux's serial
+    // core calls `start_tx` with the port lock held and interrupts disabled.
+    // With a one-byte transmitter the driver's only options there are to spin
+    // until each byte goes out — 26 ms for a 300-byte SLIP frame, with
+    // interrupts OFF, which overflows the 64-byte receive FIFO four times over
+    // — or to poll from a timer, which at 87 us per byte means an 11.5 kHz
+    // wakeup on a 25 MHz core. Both are unusable. A FIFO plus a "there is room"
+    // interrupt is what lets the driver hand over a burst and return.
+    localparam int TXDEPTH = 64;
+    localparam int TXPTRW  = $clog2(TXDEPTH);
+
+    logic [7:0]         txf [0:TXDEPTH-1];
+    logic [TXPTRW:0]    twptr, trptr;
+    wire tx_empty = (twptr == trptr);
+    wire tx_full  = (twptr[TXPTRW-1:0] == trptr[TXPTRW-1:0])
+                    && (twptr[TXPTRW] != trptr[TXPTRW]);
+    wire [TXPTRW:0] tx_level = twptr - trptr;
+
     logic tx_busy;
-    wire  tx_wr = sel && we && (reg_a == 2'd0);
+    wire  tx_wr = sel && we && (reg_a == 2'd0) && !tx_full;
+
+    // Hand the next byte to the shifter the moment it is idle and the queue is
+    // not empty. `tx_go` is one clock wide because uart_tx latches on `wr`.
+    wire tx_go = !tx_busy && !tx_empty && !tx_start_q;
+    logic tx_start_q;
+
+    always_ff @(posedge clk)
+        if (rst) begin
+            twptr <= '0; trptr <= '0; tx_start_q <= 1'b0;
+        end else begin
+            tx_start_q <= tx_go;
+            if (tx_wr) begin
+                txf[twptr[TXPTRW-1:0]] <= wdata[7:0];
+                twptr <= twptr + 1'b1;
+            end
+            if (tx_go) trptr <= trptr + 1'b1;
+        end
 
     uart_tx #(.DIV(DIV)) tx0 (
         .clk(clk), .rst(rst),
-        .wr(tx_wr && !tx_busy),          // a write while busy is DROPPED, not
-                                         // queued: see the note at the bottom
-        .data(wdata[7:0]), .tx(esp_rxd), .busy(tx_busy));
+        .wr(tx_go),
+        .data(txf[trptr[TXPTRW-1:0]]), .tx(esp_rxd), .busy(tx_busy));
 
     wire [7:0] rx_data_w;
     wire       rx_valid_w, rx_frame_w;
@@ -151,10 +187,11 @@ module esp_uart #(
     wire [7:0] rx_byte  = fifo[rptr[PTRW-1:0]];
     wire       rx_avail = !f_empty;
 
-    // Level-sensitive, like usb_kbd's: high while anything is queued. The
-    // driver must drain to empty, or the line never falls and the PLIC
-    // re-enters for ever.
-    assign rx_irq = rx_avail;
+    // Level-sensitive, like usb_kbd's: high while anything is queued, or while
+    // the driver has asked to be told there is transmit room. The driver must
+    // drain to empty AND clear tx_irq_en when it runs out of data, or the line
+    // never falls and the PLIC re-enters for ever.
+    assign rx_irq = rx_avail || (tx_irq_en && !tx_full);
 
     // ---- the straps --------------------------------------------------------
     // ⛔ BOTH RESET TO 0, WHICH IS THE PRE-2026-08-10 HARDWIRED BEHAVIOUR:
@@ -165,13 +202,19 @@ module esp_uart #(
     // ⚠️ To boot the ESP32 from its own flash, gpio0 must be HIGH when enable
     // goes high. Set bit1 FIRST, then bit0, or the chip comes up in serial
     // download mode wondering why nobody is talking to it.
-    logic [1:0] ctrl;
+    // bit2 = TX-room interrupt enable. ⚠️ IT MUST BE A CONTROL BIT AND NOT
+    // ALWAYS ON: an idle transmitter always has room, so a bare "room"
+    // condition would hold the PLIC line high for ever and starve userspace —
+    // the exact failure mode this project spent a day on in the SEIP hunt. The
+    // driver raises it only while it has bytes left to send.
+    logic [2:0] ctrl;
     always_ff @(posedge clk)
-        if (rst)                                    ctrl <= 2'b00;
-        else if (sel && we && (reg_a == 2'd2))      ctrl <= wdata[1:0];
+        if (rst)                                    ctrl <= 3'b000;
+        else if (sel && we && (reg_a == 2'd2))      ctrl <= wdata[2:0];
 
     assign esp_en    = ctrl[0];
     assign esp_gpio0 = ctrl[1];
+    wire   tx_irq_en = ctrl[2];
 
     // ---- the read mux ------------------------------------------------------
     always_comb
@@ -181,7 +224,9 @@ module esp_uart #(
             // interrupt-driven driver efficient: read it once, then pop that
             // many times, instead of an MMIO round trip per byte to ask
             // whether there is another one.
-            2'd1:    rdata = {17'd0, 7'(f_level), rx_ovf, rx_avail, tx_busy};
+            // {tx_level[6:0], rx_level[6:0], ovf, avail, tx_busy}
+            2'd1:    rdata = {10'd0, 7'(tx_level), 7'(f_level),
+                              rx_ovf, rx_avail, tx_busy || !tx_empty};
             2'd2:    rdata = {30'd0, ctrl};
             default: rdata = rx_count;
         endcase

@@ -50,13 +50,19 @@ module tb_esp_uart;
   wire       mon_valid;
   reg  [7:0] mon_byte = 8'h00;
   reg        mon_got = 1'b0;
+  integer    mon_n = 0;
+  reg  [7:0] mon_log [0:127];
 
   uart_rx #(.DIV(DIV)) mon (
       .clk(clk), .rst(rst), .rx_pin(esp_rxd),
       .data(mon_data), .valid(mon_valid), .frame_err());
 
   always @(posedge clk)
-      if (mon_valid) begin mon_byte <= mon_data; mon_got <= 1'b1; end
+      if (mon_valid) begin
+        mon_byte <= mon_data; mon_got <= 1'b1;
+        if (mon_n < 128) mon_log[mon_n] = mon_data;
+        mon_n = mon_n + 1;
+      end
 
   integer fails = 0;
 
@@ -209,6 +215,37 @@ module tb_esp_uart;
     // full FIFO refused — which is the point of having it separate from the
     // level: "arriving but discarded" and "not arriving" are different faults.
     check("received-byte count", v, 76);
+
+    // ---- 6b. the TRANSMIT FIFO -------------------------------------------
+    // ⛔ WHY A TX FIFO EXISTS AT ALL, since a UART can obviously send without
+    // one: Linux's serial core calls start_tx with the port lock held and
+    // interrupts OFF. With a one-byte transmitter the driver must spin there —
+    // 26 ms for a 300-byte frame, long enough to overflow the receive FIFO four
+    // times over. The FIFO is what lets it hand over a burst and return.
+    mon_n = 0;
+    for (i = 0; i < 16; i = i + 1) mmio_write(2'd0, 32'h50 + i);
+    mmio_read(2'd1, v);
+    check("tx reports bytes queued", (v[16:10] > 0), 1);
+    // Let the whole burst drain at one byte per frame time.
+    repeat (16 * 12 * DIV) @(posedge clk);
+    check("every queued byte was sent", mon_n, 16);
+    for (i = 0; i < 16; i = i + 1)
+      check("tx FIFO sent in order", mon_log[i], 8'h50 + i[7:0]);
+    mmio_read(2'd1, v);
+    check("tx drained: level 0", v[16:10], 0);
+    check("tx drained: busy clear", v[0], 0);
+
+    // ---- 6c. the TX interrupt is OPT-IN ----------------------------------
+    // ⚠️ An idle transmitter always has room, so a bare "there is room"
+    // condition would hold the PLIC line high for ever and starve userspace —
+    // which is precisely the failure this project spent a day on in the SEIP
+    // hunt. The driver asks for the interrupt only while it has data left.
+    check("irq low when idle and tx irq disabled", rx_irq, 0);
+    mmio_write(2'd2, 32'b100);           // tx_irq_en, straps still low
+    check("irq high once tx irq is enabled", rx_irq, 1);
+    check("and the straps did NOT move", {esp_gpio0, esp_en}, 2'b00);
+    mmio_write(2'd2, 32'b000);
+    check("irq low again when disabled", rx_irq, 0);
 
     // ---- 7. the straps are software-controlled, and ORDER matters --------
     // gpio0 HIGH first, then enable: a chip released from reset with gpio0 low

@@ -9,6 +9,8 @@ from pathlib import Path
 
 from cocotb_tools.runner import get_runner
 
+import gate
+
 TEST_DIR = Path(__file__).parent
 SRC_DIR = TEST_DIR.parent / "src"
 
@@ -28,12 +30,13 @@ def main():
         build_args=["-g2012", f"-I{SRC_DIR}"],
         timescale=("1ns", "1ps"),
     )
-    runner.test(
+    results = runner.test(
         hdl_toplevel="tb_sdram",
         test_module="test_sdram",
         test_dir=TEST_DIR,
         results_xml="results_sdram.xml",
     )
+    gate.check(results, "SDRAM controller")
 
 
 if __name__ == "__main__":

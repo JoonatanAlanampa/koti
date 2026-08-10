@@ -54,11 +54,17 @@ jobs:
       # controller is verified before it goes anywhere near the SoC — a memory
       # controller that is wrong in a corner is far cheaper to find here than
       # under a running kernel.
+      # ⛔ The gate is inside run_sdram.py (test/gate.py). The line that used to
+      # be here — `! grep failure results_sdram.xml` — is DELETED, for the same
+      # reason as its twin in the ULX3S harness step: when a run crashes early
+      # enough that results_sdram.xml is never written, grep exits 1 for "no
+      # match" and `!` turns that into a PASS. A missing results file and a
+      # clean run were the same answer. That twin hid a bench that had not run
+      # at all for two days.
       - name: SDRAM controller
         run: |
           cd test
           python run_sdram.py
-          ! grep failure results_sdram.xml
 
       # icache standalone. Pure Verilog on purpose — no cocotb — so it also runs
       # on the Windows host, where cocotb is not installed and every other suite

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check_sources.py — the source lists and src/ must agree.
 
-WHY THIS EXISTS, and it is not hypothetical. This repo keeps FOUR independent
+WHY THIS EXISTS, and it is not hypothetical. This repo keeps FIVE independent
 lists of RTL files, and on 2026-08-08 two separate CI failures came from the
 same shape of mistake in one session:
 
@@ -43,8 +43,15 @@ rule: they build `tb_cpu`, which instantiates `koti_core` alone — no SoC, no
 block RAM, no card, no keyboard. Their rule is EXACTNESS against what
 `koti_core` actually instantiates, computed here by walking the instantiations
 rather than kept as a hand-written second list. A hand-written expected-set
-would be a fifth list to forget to update, which is the bug this file exists
+would be one more list to forget to update, which is the bug this file exists
 to prevent.
+
+⛔ AND IT HAPPENED A THIRD TIME, on 2026-08-10, in this file. The extension
+above covered run_cpu.py and run_riscv.py and MISSED run_sdram.py, which is
+also a source list and also a cocotb runner. It went unguarded for the rest of
+that day and was found by auditing the WORKFLOWS, not the runners — the same
+lesson as the `test/Makefile` note above, one level up: the thing you enumerate
+from decides what you can see. Enumerate `test/run_*.py`, not memory.
 
     python test/check_sources.py
 
@@ -128,11 +135,19 @@ def main():
         for mod in names_in(SRC / f, r"^\s*module\s+(\w+)"):
             mod_file[mod] = f
 
-    # What tb_cpu actually needs. Derived, never written down twice.
-    core_set = closure_from("koti_core", mod_file)
+    # Derived, never written down twice: a hand-written expected set would be
+    # one more list to forget to update, which is the bug this file prevents.
+    closures = {}
+    bad = []
 
     # "full" — the whole machine is built, so every module must be named.
-    # "core" — only koti_core is built, so the list must equal core_set.
+    # A module NAME instead — the list builds that module alone, so it must
+    # equal the transitive closure of what that module instantiates.
+    #
+    # ⚠️ EVERY RUNNER BELONGS HERE. run_sdram.py was missed when this check was
+    # extended on 2026-08-10 — it is a fifth source list, it went unchecked for
+    # the rest of that day, and it was found by auditing the WORKFLOWS rather
+    # than the runners. If you add a runner, add it here in the same commit.
     lists = {
         "fpga/ulx3s/sources.txt": (
             names_in(ROOT / "fpga/ulx3s/sources.txt", r"src/(\w+\.sv)"), "full"),
@@ -141,28 +156,36 @@ def main():
             "full"),
         "test/run_cpu.py": (
             names_in(ROOT / "test/run_cpu.py", r'SRC_DIR / "(\w+\.sv)"'),
-            "core"),
+            "koti_core"),
         "test/run_riscv.py": (
             names_in(ROOT / "test/run_riscv.py", r'SRC_DIR / "(\w+\.sv)"'),
-            "core"),
+            "koti_core"),
+        "test/run_sdram.py": (
+            names_in(ROOT / "test/run_sdram.py", r'SRC_DIR / "(\w+\.sv)"'),
+            "sdram_ctrl"),
     }
 
-    bad = []
     print(f"src/ holds {len(on_disk)} modules "
           f"({len(FPGA_ONLY)} of them FPGA-only)")
-    print(f"koti_core instantiates {len(core_set)} of them, transitively: "
-          f"{' '.join(sorted(m[:-3] for m in core_set))}")
+    for kind in sorted({k for _, k in lists.values()} - {"full"}):
+        if kind not in mod_file:
+            bad.append(f"no module named {kind} in src/ to take a closure from")
+            continue
+        closures[kind] = closure_from(kind, mod_file)
+        print(f"{kind} instantiates {len(closures[kind])} of them, "
+              f"transitively: "
+              f"{' '.join(sorted(m[:-3] for m in closures[kind]))}")
 
     for name, (listed, kind) in lists.items():
         # STALE: named but not present. Always wrong, in every list.
         stale = sorted(listed - on_disk)
-        want = on_disk if kind == "full" else core_set
+        want = on_disk if kind == "full" else closures.get(kind, set())
         missing = sorted(want - listed)
         # A "core" list naming something koti_core does not instantiate still
         # compiles, so it never breaks CI — which is exactly why it is worth
         # reporting. It means the list and the design have drifted apart and
         # nothing else will ever say so.
-        extra = sorted(listed - want) if kind == "core" else []
+        extra = sorted(listed - want) if kind != "full" else []
 
         flag = "FAIL" if (stale or missing or extra) else "ok  "
         print(f"  {flag} {name}: {len(listed)} listed ({kind})")
@@ -173,9 +196,9 @@ def main():
             print(f"         MISSING {f} is in src/ but not named here")
             bad.append(f"{name} does not name {f}")
         for f in extra:
-            print(f"         UNNEEDED {f} is named here but koti_core "
+            print(f"         UNNEEDED {f} is named here but {kind} "
                   f"does not instantiate it")
-            bad.append(f"{name} names {f}, which tb_cpu does not need")
+            bad.append(f"{name} names {f}, which {kind} does not need")
 
     if bad:
         print(f"\ncheck_sources: FAIL ({len(bad)})")

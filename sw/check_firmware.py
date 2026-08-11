@@ -46,6 +46,74 @@ def sha(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
+def check_tree(label, root, provenance, images, shared, build_cmd, bad):
+    """Verify one directory of committed firmware against its record.
+
+    Two trees, not one, and the second is not an afterthought — it is where the
+    2026-08-11 near-miss actually lived. sw/sbi/*.bin EMBED sw/linux/koti.dtb at
+    flash 0x6000 and hand it to the kernel, so the machine description Linux
+    sees ships inside the FIRMWARE, inside the bitstream. `serial@70000` had
+    been in koti.dts and koti.dtb for a day and in none of the three .bin files.
+    koti_esp would have found no node, never probed, and left /dev/ttyKOTI0
+    absent — with every badge green.
+    """
+    if not provenance.exists():
+        print(f"FAIL: {label}/{provenance.name} is missing.")
+        print(f"  Run `{build_cmd}`, which writes it, and commit both.")
+        bad.append(f"{label}/{provenance.name} is missing.")
+        return
+
+    rec = json.loads(provenance.read_text(encoding="utf-8"))
+
+    for entry_srcs in images:
+        name, srcs = entry_srcs[0], entry_srcs[-1]
+        binp = root / f"{name}.bin"
+        if not binp.exists():
+            print(f"  FAIL {name}.bin is missing")
+            bad.append(f"{label}/{name}.bin does not exist.")
+            continue
+
+        entry = rec.get(name)
+        if entry is None:
+            print(f"  FAIL {name} has no record")
+            bad.append(f"{label}/{provenance.name} has no entry for {name} — "
+                       f"run `{build_cmd}` and commit the result.")
+            continue
+
+        if entry.get("bin_sha256") != sha(binp):
+            print(f"  FAIL {name}.bin does not match its record")
+            bad.append(f"{label}/{name}.bin has changed since "
+                       f"{provenance.name} was written. Run `{build_cmd}` and "
+                       f"commit the .bin and the record together.")
+            continue
+
+        want = entry.get("sources", {})
+        stale = []
+        for s in sorted(set(srcs) | set(shared)):
+            p = root / s
+            if not p.exists():
+                continue
+            # koti.dtb is binary; everything else is text whose line endings
+            # this repo does not keep consistent.
+            got = sha(p) if s.endswith(".dtb") else sha_source(p)
+            if s not in want:
+                stale.append(f"{label}/{s} is a source of {name} but was not "
+                             f"hashed when it was built")
+            elif want[s] != got:
+                stale.append(f"{label}/{s} has changed since {name}.bin was "
+                             f"built, so the bitstream would flash firmware "
+                             f"that does NOT contain that change")
+
+        if stale:
+            for msg in stale:
+                print(f"  FAIL {name}: {msg}")
+            bad.extend(f"{m}. Run `{build_cmd}` and commit {label}/{name}.bin "
+                       f"together with {label}/{provenance.name}."
+                       for m in stale)
+        else:
+            print(f"  ok   {label}/{name}.bin matches its sources")
+
+
 def main():
     bad = []
 
@@ -108,13 +176,25 @@ def main():
         else:
             print(f"  ok   {name}.bin matches its sources")
 
+    # ---- and the SBI tree, which is where the DTB lives ---------------------
+    sys.path.insert(0, str(HERE / "sbi"))
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "sbi_build", HERE / "sbi" / "build.py")
+    sbi_build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sbi_build)
+    check_tree("sw/sbi", HERE / "sbi", HERE / "sbi" / "firmware.provenance",
+               sbi_build.SBI_IMAGES, sbi_build.SBI_SHARED,
+               "python sw/sbi/build.py", bad)
+
     if bad:
         print(f"\nFAIL: {len(bad)} firmware problem(s)\n")
         for b in bad:
             print(f"  - {b}")
         return 1
 
-    print(f"\nOK: {len(IMAGES)} firmware images match the sources beside them")
+    n = len(IMAGES) + len(sbi_build.SBI_IMAGES)
+    print(f"\nOK: {n} firmware images match the sources beside them")
     return 0
 
 

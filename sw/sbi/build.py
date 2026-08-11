@@ -11,6 +11,32 @@ XPACK = Path(os.environ.get(
 GCC = XPACK / "riscv-none-elf-gcc.exe"
 OBJCOPY = XPACK / "riscv-none-elf-objcopy.exe"
 SBI = Path(__file__).parent
+CRLF = bytes((13, 10))
+LF = bytes((10,))
+
+
+# Every SBI image and everything it is built from, lifted out of main() so that
+# ../check_firmware.py can hash exactly these files.
+#
+# ⛔ koti.dtb IS IN THIS LIST AND IT IS THE WHOLE REASON THE LIST EXISTS.
+# dtb.S embeds the device tree at flash 0x6000 and sbi.c hands it to the
+# kernel, so THE MACHINE DESCRIPTION LINUX SEES LIVES IN THIS FIRMWARE, inside
+# the bitstream — not in anything the kernel build produces. On 2026-08-11 the
+# `serial@70000` node had been in koti.dts for a day and in koti.dtb, and in
+# none of these three .bin files, because nobody had rebuilt them. koti_esp
+# would have found no node, never probed, and left /dev/ttyKOTI0 absent — with
+# every badge green and the symptom appearing only on the bench, as a missing
+# device file.
+SBI_SHARED = ("sbi.S", "sbi.c", "payload.c", "../console.c", "dtb.S",
+              "link.ld", "sdboot.h", "../koti.h", "../console.h",
+              "../linux/koti.dtb")
+
+SBI_IMAGES = (
+    ("sbi_test", [],                                []),
+    ("sbi_sd",   ["-DKOTI_ULX3S"],                  ["sdboot.c", "../usbkbd.c"]),
+    ("sbi_prof", ["-DKOTI_ULX3S", "-DKOTI_PROFILE"], ["sdboot.c", "../usbkbd.c"]),
+)
+
 
 
 def run(cmd):
@@ -49,11 +75,7 @@ def main():
     # committed and baked into bitstreams by $readmemh: a profiler quietly added
     # to sbi_sd.bin would ship in the machine that boots normally, printing a
     # line a second into the console for ever.
-    for name, extra, srcs in (
-            ("sbi_test", [],            []),
-            ("sbi_sd",   ["-DKOTI_ULX3S"], ["sdboot.c", "../usbkbd.c"]),
-            ("sbi_prof", ["-DKOTI_ULX3S", "-DKOTI_PROFILE"],
-                         ["sdboot.c", "../usbkbd.c"])):
+    for name, extra, srcs in SBI_IMAGES:
         run([GCC, "-march=rv32ima_zicsr", "-mabi=ilp32", "-O2",
              "-ffreestanding", "-nostdlib", "-nostartfiles", "-static",
              *extra,
@@ -77,6 +99,46 @@ def main():
         if got != b"\xd0\x0d\xfe\xed":
             raise SystemExit(f"{name}.bin: no FDT magic at flash 0x6000, found {got!r}")
         print(f"  {name}.bin .dtb at 0x6000: {dtb.stat().st_size} bytes, magic ok")
+
+    write_provenance()
+
+
+def write_provenance():
+    """Record what built these three .bin files. See ../check_firmware.py."""
+    import hashlib
+    import json
+
+    prov = SBI / "firmware.provenance"
+
+    def sha_bin(q):
+        return hashlib.sha256(q.read_bytes()).hexdigest()
+
+    def sha_src(q):
+        # Line endings normalised — the firmware sources are mixed CRLF/LF
+        # in this repo and the compiler does not care either. Same rule as
+        # sw/build.py's sha_source(); koti.dtb is binary and goes through
+        # sha_bin instead, because normalising a binary would corrupt the
+        # comparison it exists to make.
+        raw = q.read_bytes()
+        return hashlib.sha256(raw.replace(CRLF, LF)).hexdigest()
+
+    rec = {}
+    for name, _extra, srcs in SBI_IMAGES:
+        binp = SBI / f"{name}.bin"
+        if not binp.exists():
+            continue
+        files = {}
+        for rel in sorted(set(srcs) | set(SBI_SHARED)):
+            q = SBI / rel
+            if not q.exists():
+                continue
+            files[rel] = sha_bin(q) if rel.endswith(".dtb") else sha_src(q)
+        rec[name] = {"bin_sha256": sha_bin(binp),
+                     "bin_bytes": binp.stat().st_size,
+                     "sources": files}
+    prov.write_text(json.dumps(rec, indent=2, sort_keys=True) + LF.decode(),
+                    encoding="utf-8")
+    print(f"wrote sbi/firmware.provenance for {len(rec)} images")
 
 
 if __name__ == "__main__":

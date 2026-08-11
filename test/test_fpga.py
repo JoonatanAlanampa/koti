@@ -198,9 +198,27 @@ async def test_harness_boot_mapping_a(dut):
     # instead of having to be edited whenever the flag moves.
     row1 = b"hello, visible world"
 
+    # ⚠️ ROW 1 IS AT base + COLS, AND COLS IS 80. This read used to be at
+    # base + 0x28 = base + 40, which was right when the console was 40 columns
+    # and has been wrong since PLAN item 11d made it 80 on 2026-08-09.
+    #
+    # ⭐ It kept passing for two days because sw/hello.bin was never rebuilt
+    # after that change either: a 40-column firmware and a 40-column test
+    # agreeing with each other, while console.c said 80. The test only went red
+    # on 2026-08-11, the moment hello.bin was rebuilt — so the RED IS THE
+    # CORRECTION, not the regression. sw/check_firmware.py is what forced the
+    # rebuild that exposed it.
+    #
+    # 11d's own note lists the places that must agree on the geometry —
+    # vga_text.sv, koticon.c, sw/console.c, tools/screenshot.py. This test was
+    # a fifth, and it was not on the list.
+    CHARBUF = 0x8000            # sw/console.c: CHARBUF 0x01008000
+    COLS = 80                   # sw/console.c: COLS
+    row1_off = CHARBUF + COLS
+
     def charbuf(n=40):
-        return (bytes(ram.mem[0x8028:0x8028 + n]),
-                sdram_bytes(dut, 0x01008028, n))
+        return (bytes(ram.mem[row1_off:row1_off + n]),
+                sdram_bytes(dut, 0x01000000 + row1_off, n))
 
     for _ in range(200):
         await ClockCycles(dut.clk, 10_000)

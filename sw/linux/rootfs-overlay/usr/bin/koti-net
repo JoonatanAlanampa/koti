@@ -1,0 +1,332 @@
+#!/bin/sh
+# koti-net — koti's network client, and the ESP32 is the modem.
+#
+# ⛔ READ THIS BEFORE THE CODE, BECAUSE THE PLAN THIS REPLACES IS WRITTEN DOWN
+# IN THREE PLACES AND IS WRONG FOR THIS BOARD.
+#
+# PLAN.md item 11 and the session board both describe the far end as "stock
+# ESP-AT" driven with AT+CWJAP / AT+CIPSTART. **There is no ESP-AT on this
+# board.** fpga/ulx3s/README.md records what was actually measured on the
+# bench on 2026-08-08, by reading the serial port after a power cycle:
+#
+#     rst:0x1 (POWERON_RESET),boot:0x1f (SPI_FAST_FLASH_BOOT)
+#     MicroPython v1.14 on 2021-02-02; ESP32 module (spiram) with ESP32
+#     >>>
+#
+# The ESP32 holds **stock MicroPython 1.14**, whose `network` and `socket`
+# modules are already an AT command set — a better one, in Python. So:
+#
+#   * getting to a fetched page needs NO ESP32 reflash. Putting ESP-AT on
+#     would mean erasing MicroPython, which is destructive, needs a firmware
+#     image nobody has picked yet, and buys a strictly weaker far end.
+#   * it needs NO ESP-IDF toolchain and NO esp-hosted, which is what the SLIP
+#     route in koti_defconfig would have cost.
+#   * it needs NO kernel networking at all. CONFIG_NET is on and unused here;
+#     this is a userspace client over a tty, exactly like a modem.
+#
+# ⚠️ WHAT THIS IS NOT: koti does not get an IP address, a route, or a socket
+# API. `wget`, `ping` and `ip` still do not work — the ESP32 owns the TCP
+# stack and koti drives it by remote control. Real IP on koti is a bigger
+# job (SLIP plus custom ESP32 firmware) and this does not pretend to be it.
+#
+# ⚠️⚠️ WAKING THE ESP32 PUTS A SECOND DRIVER ON THE MICROSD BUS. Its GPIOs
+# ARE the card's: sd_clk=GPIO14, sd_cmd=GPIO15, sd_d=GPIO2/4/12/13. koti loads
+# its kernel from that card. `image: esptest` is the bench measurement that
+# answers whether the card survives it; until that has been run, treat `wake`
+# as an experiment and not as a routine command.
+#
+# Copyright (c) 2026 Joonatan Alanampa
+# SPDX-License-Identifier: Apache-2.0
+set -u
+
+DEV=/dev/ttyKOTI0
+SYS=/sys/class/tty/ttyKOTI0/device
+CAP=/tmp/koti-net.cap
+PID=/tmp/koti-net.pid
+
+die() { echo "koti-net: $*" >&2; exit 1; }
+
+[ -c "$DEV" ] || die "$DEV does not exist — is koti_esp bound? check dmesg"
+
+# ---------------------------------------------------------------------------
+# The capture reader.
+#
+# One `cat` owns the port and everything else reads the file it writes. The
+# obvious alternative — read the device directly when a reply is expected —
+# loses every byte that arrives between reads, and on this link the far end
+# starts talking before we have finished asking (an ESP32 leaving reset prints
+# unprompted). A continuously-running reader is the same lesson tt-riscv's
+# testbench learned: receivers must listen CONTINUOUSLY, not on demand.
+# ---------------------------------------------------------------------------
+reader_running() {
+	[ -f "$PID" ] && [ -d "/proc/$(cat "$PID" 2>/dev/null)" ]
+}
+
+reader_start() {
+	reader_running && return 0
+	# raw: no line discipline editing, no echo, no CR/LF translation. The
+	# far end is a REPL that means every byte it sends.
+	stty -F "$DEV" raw -echo 115200 2>/dev/null || true
+	: > "$CAP"
+	cat "$DEV" >> "$CAP" &
+	echo $! > "$PID"
+	usleep 200000
+}
+
+reader_stop() {
+	if [ -f "$PID" ]; then
+		kill "$(cat "$PID")" 2>/dev/null
+		rm -f "$PID"
+	fi
+}
+
+# Clear the capture before each command, so a reply is read back without
+# re-matching everything said earlier in the session. Markers repeat, and a
+# stale match reads as a fresh success — `join` would report the address from
+# the previous attempt and call a failed connect a pass.
+#
+# Truncating works while the reader holds the file because it opened it with
+# `>>`: append mode recomputes the offset at every write, so the next byte
+# lands at 0. Tracking a byte offset and replaying with `tail -c +N` would do
+# the same job and depends on busybox having been built with that form of the
+# flag; this does not depend on anything.
+capture_reset() { : > "$CAP"; }
+# -a: the first thing an ESP32 sends after reset is its 74880-baud ROM log
+# read at 115200, i.e. bytes that are not text. Without -a grep decides the
+# capture is binary and prints "Binary file matches" instead of the line.
+capture() { cat "$CAP" 2>/dev/null; }
+
+# ---------------------------------------------------------------------------
+# Sending.
+#
+# 🪤 `printf '%s\r\n'`, NEVER `printf "$line\n"`. The Python being sent is full
+# of backslash escapes that belong to Python (b'...\r\n\r\n' in the HTTP
+# request); letting printf interpret them sends a bare CR to the ESP32 and a
+# request the far end never answers. %s does not process escapes in its
+# argument, which is exactly what is wanted.
+#
+# 🪤 ONE STATEMENT PER LINE, and blocks go inside exec("...\n..."). This is the
+# FRIENDLY repl, which auto-indents after a colon: paste a normal Python block
+# into it and the second line arrives already indented, gets indented again,
+# and the block is a syntax error that looks like a corrupted link.
+#
+# ⚠️ MicroPython 1.14 has no raw-paste flow control, so the far end's UART
+# buffer is the only thing between us and a dropped line. Keep lines short —
+# well under 128 bytes — and pace them. At 115200 a 100-byte line is 8.7 ms on
+# the wire; the 150 ms below is two orders of margin, and this script sends
+# fewer than a dozen lines per command, so the cost is invisible.
+# ---------------------------------------------------------------------------
+send() {
+	printf '%s\r\n' "$1" > "$DEV"
+	usleep 150000
+}
+
+# Poll the capture for a pattern. busybox has no `timeout`, and a fixed sleep
+# either wastes seconds or fails on the one boot that is slow.
+expect() {
+	_pat=$1; _secs=$2; _i=0
+	while [ "$_i" -lt $(( _secs * 5 )) ]; do
+		capture | grep -qa "$_pat" && return 0
+		usleep 200000
+		_i=$(( _i + 1 ))
+	done
+	return 1
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+cmd_wake() {
+	[ -w "$SYS/esp_power" ] || die "no $SYS/esp_power — kernel too old for this script"
+
+	echo "koti-net: waking the ESP32."
+	echo "koti-net: ⚠️  it now shares the microSD bus with this machine."
+
+	reader_start
+	capture_reset
+	# `run`, not a strap bit: the driver sequences GPIO0 before releasing
+	# reset. Releasing reset with GPIO0 low boots the serial DOWNLOAD mode,
+	# which is silent at 115200 and looks exactly like a dead link.
+	echo run > "$SYS/esp_power"
+
+	# An ESP32 leaving reset prints its ROM log at 74880 baud into a port
+	# running at 115200, so the first thing to arrive is GARBAGE. That is
+	# expected and is not what we wait for; MicroPython's own banner is
+	# printed after the switch to 115200 and is legible.
+	if expect 'MicroPython' 15; then
+		echo "koti-net: MicroPython is up."
+	else
+		echo "koti-net: no MicroPython banner in 15 s." >&2
+		echo "koti-net: bytes seen on the link: $(cat "$SYS/esp_rx_count")" >&2
+		echo "koti-net: (0 = nothing arrived at all: wire, pin sites or receiver." >&2
+		echo "koti-net:  non-zero = the chip talks but did not reach the REPL.)" >&2
+		return 1
+	fi
+
+	send ''
+	expect '>>>' 5 || echo "koti-net: no prompt; try 'koti-net repl'" >&2
+}
+
+cmd_off() {
+	reader_stop
+	echo off > "$SYS/esp_power" 2>/dev/null || die "no $SYS/esp_power"
+	echo "koti-net: ESP32 back in reset; it is off the microSD bus."
+}
+
+cmd_status() {
+	echo "link:      $DEV"
+	echo "esp_power: $(cat "$SYS/esp_power" 2>/dev/null || echo '(no sysfs)')"
+	echo "rx bytes:  $(cat "$SYS/esp_rx_count" 2>/dev/null || echo '?')"
+	if reader_running; then
+		echo "reader:    running (pid $(cat "$PID")), capture $CAP"
+	else
+		echo "reader:    stopped"
+	fi
+}
+
+cmd_py() {
+	reader_running || die "not awake — run 'koti-net wake' first"
+	capture_reset
+	send "$1"
+	usleep 500000
+	capture
+}
+
+cmd_join() {
+	[ $# -ge 1 ] || die "usage: koti-net join SSID [PASSWORD]"
+	_ssid=$1
+	_pass=${2:-}
+	case "$_ssid$_pass" in
+		*"'"*) die "quote in SSID or password: use 'koti-net repl' by hand" ;;
+	esac
+	reader_running || die "not awake — run 'koti-net wake' first"
+
+	capture_reset
+	send 'import network, time'
+	send 'w=network.WLAN(network.STA_IF)'
+	send 'w.active(True)'
+	send "w.connect('$_ssid','$_pass')"
+	# The block goes through exec() so it stays ONE line — see the note on
+	# the friendly REPL's auto-indent above. 60 half-seconds: a cold DHCP
+	# on a busy 2.4 GHz band is routinely over ten.
+	send 'exec("for _ in range(60):\n if w.isconnected(): break\n time.sleep(0.5)")'
+	# The marker is CONCATENATED so that the echo of this very line does not
+	# contain it. The friendly REPL echoes everything typed; a marker typed
+	# literally matches its own echo and every wait succeeds instantly.
+	send "print('KOTI'+'-IP', w.ifconfig()[0] if w.isconnected() else 'FAILED')"
+
+	if expect 'KOTI-IP' 45; then
+		capture | grep -a 'KOTI-IP' | tail -n 1 \
+			| sed 's/^KOTI-IP /koti-net: address /'
+		capture | grep -qa 'KOTI-IP FAILED' && return 1
+		return 0
+	fi
+	echo "koti-net: no answer from the ESP32 in 45 s" >&2
+	return 1
+}
+
+cmd_get() {
+	[ $# -ge 1 ] || die "usage: koti-net get URL   (http only, no https)"
+	_u=${1#http://}
+	case "$1" in
+		https://*) die "https needs TLS on the ESP32; use http://" ;;
+	esac
+	_host=${_u%%/*}
+	case "$_u" in
+		*/*) _path=/${_u#*/} ;;
+		*)   _path=/ ;;
+	esac
+	reader_running || die "not awake — run 'koti-net wake' first"
+
+	capture_reset
+	send 'import socket, sys'
+	send "h='$_host'"
+	send "p='$_path'"
+	send 's=socket.socket()'
+	send 's.connect(socket.getaddrinfo(h,80)[0][-1])'
+	# 🪤 `.encode()` ON THE WHOLE REQUEST, not b'GET '+p. `h` and `p` are str
+	# and MicroPython refuses bytes+str exactly as CPython does — the error
+	# arrives as a TypeError traceback echoed back through the REPL, which is
+	# a confusing place to read a type error from.
+	#
+	# HTTP/1.0 with Connection: close so the far end ends the body by closing
+	# the socket, which is the only framing that needs no chunked-transfer
+	# parser at this end.
+	send "s.send(('GET '+p+' HTTP/1.0\r\nHost: '+h+'\r\nConnection: close\r\n\r\n').encode())"
+	# ⛔ BOTH MARKERS ARE PRINTED BY ONE exec(), and the reason is the single
+	# nastiest property of driving a REPL: IT ECHOES WHAT YOU TYPE. Sending
+	# `print(begin)`, then the read loop, then `print(end)` as three commands
+	# puts the ECHO of commands two and three between the two markers, so the
+	# extracted "page" ends with a couple of lines of this script's own source.
+	# It looks like a page with junk appended, not like a bug. Emitting both
+	# markers from a single command means the only echo is that command's own,
+	# and it lands BEFORE the opening marker where it is trimmed away.
+	#
+	# The program is built up in `c` across two short lines rather than sent
+	# as one long one, purely to keep each line comfortably inside the far
+	# end's receive buffer — MicroPython 1.14 has no raw-paste flow control.
+	#
+	# 🪤 `sys.stdout.write(d)` ON RAW BYTES, not d.decode(...). MicroPython's
+	# bytes.decode() does not take the encoding/errors arguments CPython's
+	# does; the call that works everywhere else raises TypeError here, echoed
+	# back as a traceback. Writing the bytes through untouched is both shorter
+	# and exactly what a page fetch wants.
+	send "c=\"print('KOTI'+'-BEGIN')\nwhile 1:\n d=s.recv(256)\n if not d:break\n sys.stdout.write(d)\""
+	# The trailing print() matters: a body that does not end in a newline
+	# would otherwise leave the end marker glued to the last line of the page,
+	# where the anchored match below never sees it and the fetch times out
+	# with the whole page already in hand.
+	send "c+=\"\nprint()\nprint('KOTI'+'-END')\""
+	send 'exec(c)'
+	send 's.close()'
+
+	if expect '^KOTI-END' 60; then
+		# Between the markers, minus the marker lines themselves. The
+		# tty is raw, so every line still carries the CR the REPL sent.
+		capture | tr -d '\r' | sed -n '/^KOTI-BEGIN/,/^KOTI-END/p' \
+			| sed '1d;$d'
+		return 0
+	fi
+	echo "koti-net: no complete reply in 60 s. Raw capture follows:" >&2
+	capture >&2
+	return 1
+}
+
+cmd_repl() {
+	# microcom wants the port to itself: two readers split the incoming
+	# bytes between them at random, which presents as a REPL that drops
+	# every other character.
+	reader_stop
+	echo "koti-net: handing $DEV to microcom. Ctrl-X to quit."
+	exec microcom -s 115200 "$DEV"
+}
+
+case "${1:-help}" in
+	wake)	shift; cmd_wake "$@" ;;
+	off|sleep) shift; cmd_off "$@" ;;
+	status)	shift; cmd_status "$@" ;;
+	join)	shift; cmd_join "$@" ;;
+	get)	shift; cmd_get "$@" ;;
+	py)	shift; cmd_py "$@" ;;
+	repl)	shift; cmd_repl "$@" ;;
+	*)
+		cat <<'EOF'
+koti-net — talk to the internet through the onboard ESP32.
+
+  koti-net wake              release the ESP32 and wait for MicroPython
+  koti-net join SSID [PASS]  join a WiFi network, print the address
+  koti-net get http://URL    fetch a page to stdout
+  koti-net py 'CODE'         run one line of MicroPython, print the reply
+  koti-net status            link state and byte counter
+  koti-net repl              hand the link to microcom, interactively
+  koti-net off               put the ESP32 back into reset
+
+The ESP32 runs stock MicroPython 1.14 and owns the TCP stack; koti drives it
+over /dev/ttyKOTI0. koti itself has no IP address, so wget and ping still do
+not work — see the comments at the top of this script.
+
+⚠️ An awake ESP32 shares the microSD bus with this machine. `koti-net off`
+puts it back.
+EOF
+		;;
+esac

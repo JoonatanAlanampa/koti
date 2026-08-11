@@ -372,17 +372,40 @@ Software, in order:
        session is one bitstream**: `image: esptest`, watch COM3, read the
        VERDICT line.
 
-11. [ ] 🌐 **Networking. There is none at all, and it is TWO absences.**
-       (a) No stack: `grep -c CONFIG_NET koti_defconfig` = **0**, so no sockets,
-       no TCP/IP, not even loopback. busybox ships `ip`/`ping`/`wget` as
-       applets and they fail with `socket: Function not implemented` — which is
-       exactly what `S40network` prints in the boot log.
-       (b) **No network hardware**: no MAC and no PHY anywhere in `src/`.
-       Enabling `CONFIG_NET` alone would give a stack with nothing to attach.
-       Options, cheapest first: **the onboard ESP32 over a second UART** (it is
-       already on the board; koti currently holds `wifi_en` low), an Ethernet
-       Pmod plus a MAC in fabric, or USB Ethernet through the soft host — by
-       far the largest lift.
+11. [~] 🌐 **Networking. The wire, the driver and the stack exist; the far end
+       is the open item.** (2026-08-10/11)
+       ✅ (a) the link — `src/esp_uart.sv` at `0x0007_0000` on the ESP32's own
+       pair (`wifi_rxd` K3 / `wifi_txd` K4), 64-byte FIFOs both ways, PLIC
+       source 2.
+       ✅ (b) Linux reaches it — `sw/linux/koti_esp.c` gives `/dev/ttyKOTI0`,
+       plus **`esp_power`** and `esp_rx_count` in sysfs (2026-08-11), which is
+       the only way to wake the ESP32 from Linux.
+       ✅ (c) the stack — `CONFIG_NET`/`INET`/`SLIP` are on. The old text here
+       said `grep -c CONFIG_NET` = 0; that has not been true since 2026-08-10.
+       🔴 (d) the far end — **`sw/linux/rootfs-overlay/usr/bin/koti-net`, and
+       it has never run on hardware.**
+
+       ⛔ **THE "STOCK ESP-AT" PLAN WAS WRONG FOR THIS BOARD, and it was wrong
+       in the cheap direction.** The far end is not an unknown to be chosen: it
+       was measured on 2026-08-08 and written down in `fpga/ulx3s/README.md`.
+       That ESP32 holds **stock MicroPython 1.14**, whose `network` and
+       `socket` modules are already an AT command set in a better language. So
+       reaching a fetched page needs **no ESP32 reflash, no ESP-IDF toolchain,
+       no esp-hosted, and no kernel networking** — `koti-net` drives the REPL
+       over the tty like a modem. The SLIP route in `koti_defconfig` remains
+       the way to a real IP address on koti, and it still costs custom ESP32
+       firmware; it is no longer on the path to the first page.
+
+       🔴 **`image: esptest` STILL GATES ALL OF IT** and is still unrun: an
+       awake ESP32 is a second driver on the microSD bus koti boots from
+       (`sd_clk`=GPIO14, `sd_cmd`=GPIO15, `sd_d`=GPIO2/4/12/13). Procedure in
+       `fpga/ulx3s/README.md` § 2e. If the card does not survive, the answer is
+       an Ethernet Pmod nobody owns, and `koti-net` is wasted work.
+
+       ⚠️ Even when it all works, **koti has no IP address** — `ping`, `wget`
+       and `ip` still fail. The ESP32 owns the TCP stack. Do not report this
+       item done on the strength of a fetched page: (d) is a modem client, not
+       a network layer.
 
 11d. [x] 🖥️ **80 COLUMNS — DONE AND CONFIRMED ON HARDWARE 2026-08-09.**
        8x8 glyphs 1:1 in 640x480: 80x60, four times the text. Four places

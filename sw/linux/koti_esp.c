@@ -3,8 +3,14 @@
  * koti_esp.c — a serial driver for src/esp_uart.sv, koti's link to the
  * onboard ESP32. This is what turns an MMIO register block into
  * /dev/ttyKOTI0, and it is the layer everything else in PLAN item 11 stands
- * on: a line discipline (SLIP or PPP) can only be attached to a tty, and a
- * userspace AT-command client can only open a device node.
+ * on: a line discipline (SLIP or PPP) can only be attached to a tty, and the
+ * userspace client that drives the far end can only open a device node.
+ *
+ * ⚠️ THAT CLIENT IS usr/bin/koti-net AND IT DOES NOT SPEAK AT COMMANDS. The
+ * ESP32 on this board holds stock MicroPython 1.14, measured — not ESP-AT, as
+ * PLAN.md used to assume. Nothing in this driver depends on which it is; the
+ * note is here because "AT-command client" is what this comment said, and it
+ * is the sort of aside that a later reader takes for a fact about the board.
  *
  * ⛔ MAINLINE BINDS TO NOTHING HERE, and calling the DT node `ns16550a` to
  * make it would be a lie that ends in 8250.c poking registers that do not
@@ -35,6 +41,7 @@
  */
 
 #include <linux/console.h>
+#include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/kfifo.h>
 #include <linux/module.h>
@@ -299,6 +306,133 @@ static const struct uart_ops koti_esp_ops = {
 	.verify_port	= koti_esp_verify_port,
 };
 
+/* ---- the straps, as one sysfs power state ------------------------------- */
+/*
+ * ⛔ WHY THIS IS ONE ATTRIBUTE AND NOT TWO BOOLEANS NAMED AFTER THE TWO BITS.
+ * The strap bits are not independent, and the obvious interface is a trap:
+ *
+ *   - GPIO0's level AT THE INSTANT RESET IS RELEASED is what selects between
+ *     booting the ESP32's own flash and entering its serial download mode.
+ *     It is a sampled strap, not a running control.
+ *   - The control register resets to 0 and ulx3s.lpf pulls `wifi_gpio0` DOWN,
+ *     so GPIO0 starts LOW.
+ *
+ * ⇒ `echo 1 > esp_en` — the first thing anybody would ever type — releases
+ * reset with GPIO0 low and boots the chip into serial download mode, where it
+ * says nothing at 115200 and is indistinguishable from a dead link, a wrong
+ * pin site or a broken receiver. Naming the states instead of the bits is what
+ * stops that from being the default outcome of the obvious command.
+ *
+ * ⚠️ EVERY TRANSITION GOES THROUGH RESET, including run -> download. Writing
+ * GPIO0 while the chip is already out of reset changes nothing, because the
+ * strap was sampled seconds ago; a person who typed `download` and got a
+ * running MicroPython would conclude the attribute does not work.
+ *
+ * The order — GPIO0 first, settle, then ENABLE — and the fact that it is worth
+ * settling at all are sw/esptest.c's, which is the version that was taken to
+ * the bench.
+ *
+ * ⚠️ This is the ONLY way to wake the ESP32 from Linux, and waking it is not a
+ * neutral act: its GPIOs are the microSD bus this machine boots from. That is
+ * why nothing does it implicitly — not open(), not probe(), not the console.
+ */
+#define KOTI_ESP_SETTLE_MS	10
+
+static void koti_esp_set_straps(struct uart_port *port, u32 straps)
+{
+	unsigned long flags;
+	u32 ctrl;
+
+	/*
+	 * Preserve the transmit-interrupt bit for the same reason
+	 * koti_esp_set_txirq() preserves the straps: clearing it under a
+	 * driver that is mid-transmit strands the rest of the buffer in the
+	 * kfifo for ever, since the only thing that would refill the hardware
+	 * FIFO is the interrupt this bit arms.
+	 */
+	uart_port_lock_irqsave(port, &flags);
+	ctrl = readl(port->membase + KOTI_ESP_CTRL) & CTRL_TX_IRQ;
+	writel(ctrl | straps, port->membase + KOTI_ESP_CTRL);
+	uart_port_unlock_irqrestore(port, flags);
+}
+
+static ssize_t esp_power_show(struct device *dev,
+			      struct device_attribute *attr, char *buf)
+{
+	struct uart_port *port = dev_get_drvdata(dev);
+	u32 ctrl = readl(port->membase + KOTI_ESP_CTRL);
+	const char *state;
+
+	if (!(ctrl & CTRL_ESP_EN))
+		state = "off";
+	else if (ctrl & CTRL_ESP_GPIO0)
+		state = "run";
+	else
+		state = "download";
+
+	return sysfs_emit(buf, "%s\n", state);
+}
+
+static ssize_t esp_power_store(struct device *dev,
+			       struct device_attribute *attr,
+			       const char *buf, size_t count)
+{
+	struct uart_port *port = dev_get_drvdata(dev);
+	u32 gpio0;
+
+	if (sysfs_streq(buf, "off")) {
+		koti_esp_set_straps(port, 0);
+		dev_info(dev, "ESP32 held in reset\n");
+		return count;
+	} else if (sysfs_streq(buf, "run")) {
+		gpio0 = CTRL_ESP_GPIO0;
+	} else if (sysfs_streq(buf, "download")) {
+		gpio0 = 0;
+	} else {
+		return -EINVAL;
+	}
+
+	/* Through reset, always — see the block comment above. */
+	koti_esp_set_straps(port, 0);
+	msleep(KOTI_ESP_SETTLE_MS);
+	koti_esp_set_straps(port, gpio0);
+	msleep(KOTI_ESP_SETTLE_MS);
+	koti_esp_set_straps(port, gpio0 | CTRL_ESP_EN);
+
+	/*
+	 * Loud on purpose. This is the moment a second driver appears on the
+	 * microSD bus; if the card misbehaves in the next minute, this line in
+	 * dmesg is the first thing that should be suspected.
+	 */
+	dev_info(dev, "ESP32 released from reset in %s mode — it now shares the microSD bus\n",
+		 gpio0 ? "normal boot" : "serial download");
+	return count;
+}
+static DEVICE_ATTR_RW(esp_power);
+
+/*
+ * A free-running count of bytes ever received, straight from the gateware.
+ * It answers "is anything arriving at all" without opening the port, popping a
+ * byte, or disturbing whatever else is reading — which is exactly the question
+ * asked when a link looks dead, and the instrument sw/esptest.c used to answer
+ * it at the bench.
+ */
+static ssize_t esp_rx_count_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	struct uart_port *port = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", readl(port->membase + KOTI_ESP_COUNT));
+}
+static DEVICE_ATTR_RO(esp_rx_count);
+
+static struct attribute *koti_esp_attrs[] = {
+	&dev_attr_esp_power.attr,
+	&dev_attr_esp_rx_count.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(koti_esp);
+
 static struct uart_driver koti_esp_uart_driver = {
 	.owner		= THIS_MODULE,
 	.driver_name	= "koti_esp",
@@ -332,6 +466,9 @@ static int koti_esp_probe(struct platform_device *pdev)
 	port->line	= 0;
 	port->type	= PORT_UNKNOWN;
 	port->uartclk	= KOTI_ESP_BAUD * 16;
+
+	/* What the sysfs attributes below reach the hardware through. */
+	platform_set_drvdata(pdev, port);
 
 	ret = uart_add_one_port(&koti_esp_uart_driver, port);
 	if (ret)
@@ -368,6 +505,13 @@ static struct platform_driver koti_esp_platform_driver = {
 	.driver	= {
 		.name		= "koti_esp",
 		.of_match_table	= koti_esp_of_match,
+		/*
+		 * driver->dev_groups, not device_add_group() in probe: the core
+		 * adds these only after probe() has returned success, so the
+		 * drvdata the attributes dereference is always set, and it
+		 * removes them for us on unbind.
+		 */
+		.dev_groups	= koti_esp_groups,
 	},
 };
 

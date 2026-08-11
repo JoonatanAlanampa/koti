@@ -18,6 +18,16 @@ jobs:
       - name: install cocotb
         run: pip install "cocotb>=2.0"
 
+      # ⛔ FIRST, because it is the cheapest check in the repo and it guards a
+      # failure that is silent in the worst direction. fpga-ulx3s.yaml does not
+      # compile the firmware — it packs sw/$img.bin off disk — so editing a .c
+      # without rebuilding produces a green run, a valid bitstream, and a board
+      # running the OLD code. That happened on 2026-08-11 and cost a bitstream
+      # build and a flash cycle to notice. No toolchain needed: it compares the
+      # recorded source hashes, not a rebuild.
+      - name: firmware binaries match the sources beside them
+        run: python sw/check_firmware.py
+
       - name: muldiv unit tests
         run: python run_core.py
         working-directory: test

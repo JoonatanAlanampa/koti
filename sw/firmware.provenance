@@ -1,0 +1,79 @@
+{
+  "bringup": {
+    "bin_bytes": 364,
+    "bin_sha256": "6a984ac712b2f7f36a895716dbe634ca22e2a97d00e7ed3969e07c1d4740a374",
+    "sources": {
+      "bringup.S": "3ae6fbbbb429849013e60aa460752ae8da5185aee90143ea07964d7c9cf930f3",
+      "console.h": "9f34b6a346f3240663d3bb801139da78d0db69573f7417663efbfb8583134d29",
+      "koti.h": "2784538e9f71f59e8c04eda125f2dba7b357be3b6a9ca1840691dda55f05e515",
+      "link.ld": "cb45e2f5d5e8fd57771e987d2db768dfc6848fe7e404564113c9eb826117f45a"
+    }
+  },
+  "esptest": {
+    "bin_bytes": 4776,
+    "bin_sha256": "dae620f5e00ad05265c029d0a27b841f9752bf177189db7994f82aae087a19ff",
+    "sources": {
+      "console.h": "9f34b6a346f3240663d3bb801139da78d0db69573f7417663efbfb8583134d29",
+      "crt0.S": "a2add2682ee9fae1236263f04bbc6c6605649e369cf43ddefd90978a5404efaf",
+      "esptest.c": "5131968b0271973ab04ddf5dad3e852b37d9ca33a51b76c50bbff7d96082d4b1",
+      "koti.h": "2784538e9f71f59e8c04eda125f2dba7b357be3b6a9ca1840691dda55f05e515",
+      "link.ld": "cb45e2f5d5e8fd57771e987d2db768dfc6848fe7e404564113c9eb826117f45a"
+    }
+  },
+  "hello": {
+    "bin_bytes": 604,
+    "bin_sha256": "b0bb90d8bc8a81a035a7c6dd3fbc2a28f9d98696e28f0f0bfeff42103b7f39d6",
+    "sources": {
+      "console.c": "1f0fd9aefcab367bc751fa798337d82fc3f6a390bb4ce3a3d080729d524432ba",
+      "console.h": "9f34b6a346f3240663d3bb801139da78d0db69573f7417663efbfb8583134d29",
+      "crt0.S": "a2add2682ee9fae1236263f04bbc6c6605649e369cf43ddefd90978a5404efaf",
+      "hello.c": "0cc21f1c48647a1d5bc37eb98e59b9f195be94cb222b5d927597845e539c3fdf",
+      "koti.h": "2784538e9f71f59e8c04eda125f2dba7b357be3b6a9ca1840691dda55f05e515",
+      "link.ld": "cb45e2f5d5e8fd57771e987d2db768dfc6848fe7e404564113c9eb826117f45a"
+    }
+  },
+  "memtest": {
+    "bin_bytes": 3648,
+    "bin_sha256": "6401f774374982ce52e73a85142b1e4f3eb374cc2337684abc227b939cb200a9",
+    "sources": {
+      "console.h": "9f34b6a346f3240663d3bb801139da78d0db69573f7417663efbfb8583134d29",
+      "crt0.S": "a2add2682ee9fae1236263f04bbc6c6605649e369cf43ddefd90978a5404efaf",
+      "koti.h": "2784538e9f71f59e8c04eda125f2dba7b357be3b6a9ca1840691dda55f05e515",
+      "link.ld": "cb45e2f5d5e8fd57771e987d2db768dfc6848fe7e404564113c9eb826117f45a",
+      "memtest.c": "97776b81ef0df8956d4577a2d1eef55a3311e5ac255b01ff845b593ee97c1bad"
+    }
+  },
+  "sdraw": {
+    "bin_bytes": 3364,
+    "bin_sha256": "22ccf4f8a999f2341956ef3e489c2cad727f5f6453bf1bcbd85a9801d0629731",
+    "sources": {
+      "console.h": "9f34b6a346f3240663d3bb801139da78d0db69573f7417663efbfb8583134d29",
+      "crt0.S": "a2add2682ee9fae1236263f04bbc6c6605649e369cf43ddefd90978a5404efaf",
+      "koti.h": "2784538e9f71f59e8c04eda125f2dba7b357be3b6a9ca1840691dda55f05e515",
+      "link.ld": "cb45e2f5d5e8fd57771e987d2db768dfc6848fe7e404564113c9eb826117f45a",
+      "sdraw.c": "340e937051c7d787750586523ed40240b810e76de151910b762a8be867e32178"
+    }
+  },
+  "sdtest": {
+    "bin_bytes": 2832,
+    "bin_sha256": "1e970c2978c07e445fcfb5235a8f283f6fc3c87785f19257bedfb2ee87745a0f",
+    "sources": {
+      "console.h": "9f34b6a346f3240663d3bb801139da78d0db69573f7417663efbfb8583134d29",
+      "crt0.S": "a2add2682ee9fae1236263f04bbc6c6605649e369cf43ddefd90978a5404efaf",
+      "koti.h": "2784538e9f71f59e8c04eda125f2dba7b357be3b6a9ca1840691dda55f05e515",
+      "link.ld": "cb45e2f5d5e8fd57771e987d2db768dfc6848fe7e404564113c9eb826117f45a",
+      "sdtest.c": "68efdb52f13f2d2444fe3e254bf1998a9c8b8c76d1d64527161abe17b5ea2c00"
+    }
+  },
+  "usbtest": {
+    "bin_bytes": 1640,
+    "bin_sha256": "d2d3b976efee1ac1bb824eb14e799fec25f72d6e8ba2d1d5627961b046c5c508",
+    "sources": {
+      "console.h": "9f34b6a346f3240663d3bb801139da78d0db69573f7417663efbfb8583134d29",
+      "crt0.S": "a2add2682ee9fae1236263f04bbc6c6605649e369cf43ddefd90978a5404efaf",
+      "koti.h": "2784538e9f71f59e8c04eda125f2dba7b357be3b6a9ca1840691dda55f05e515",
+      "link.ld": "cb45e2f5d5e8fd57771e987d2db768dfc6848fe7e404564113c9eb826117f45a",
+      "usbtest.c": "964ceeeed78043162e7612cb03d061c1f84f33acf03196f311074fab0fe5c222"
+    }
+  }
+}

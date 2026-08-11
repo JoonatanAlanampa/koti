@@ -686,10 +686,37 @@ and `image: sdraw` is the layer below that.
 > still know it is not a fault — but on THIS board, text is what to expect, and
 > text is a much stronger result: it proves the baud rate as well as the wire.
 >
-> ⚠️ What this does NOT prove: that MicroPython reaches its REPL. This image
-> resets the chip a few seconds after waking it, and only the first 16 bytes
-> are ever shown. The banner arrives later than that window. `koti-net wake`
-> is what answers it.
+> ### 🏆 AND THE REPL IS UP — step 4b, same day, verbatim off the wire
+> ```
+> ets Jul 29 2019 12:21:46
+> rst:0x1 (POWERON_RESET),boot:0x3f (SPI_FAST_FLASH_BOOT)
+> configsip: 0, SPIWP:0xee
+> mode:DIO, clock div:2
+> load:0x3fff0018,len:4      ... entry 0x400806bc
+> MicroPython v1.14 on 2021-02-02; ESP32 module (spiram) with ESP32
+> Type "help()" for more information.
+> >>>
+> ```
+> **All 477 bytes of it, then silence — `4b. step-4 bytes=477 then 0 more`.**
+> That is exactly a REPL: it says its piece in under a second and waits.
+> ⇒ **`usr/bin/koti-net`'s entire premise is confirmed on hardware.** The far
+> end is a live MicroPython prompt, reachable at 115200 over K3/K4.
+> - `boot:0x3f (SPI_FAST_FLASH_BOOT)`, **not** download mode — so the GPIO0
+>   strap sequence in step 3 (and in the `esp_power` sysfs attribute that
+>   copies it) is doing its job.
+> - ⚠️ **The banner arrives ~1 s after `ESP_EN` rises and nothing follows it.**
+>   Anything waiting for the far end to speak first must look for `>>>`, and
+>   must not conclude from later silence that the link died.
+>
+> 🪤 **Getting this out took THREE bitstreams, and neither wasted one was a
+> hardware fault.** (1) `fpga-ulx3s.yaml` does not compile the firmware — it
+> packs the COMMITTED `sw/esptest.bin`, so editing the .c changed nothing on
+> the board and step 4b was simply absent. `sw/check_firmware.py` now gates
+> that. (2) Then 4b printed `bytes=0`, which reads exactly like a chip that
+> boots and says nothing — but `esp_drain()` POPS, so step 4 had already read
+> and discarded all 477 bytes. **An instrument that consumes the evidence it
+> reports on is worse than none**, because its answer is confident, wrong, and
+> ends the investigation.
 
 The measurement below is the one that produced the result above. **It was the
 one thing standing between koti and a network**; it is kept in full because it

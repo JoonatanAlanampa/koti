@@ -178,12 +178,22 @@ send() {
 
 # Poll the capture for a pattern. busybox has no `timeout`, and a fixed sleep
 # either wastes seconds or fails on the one boot that is slow.
+# ⛔ A REAL DEADLINE, not a loop count. The first version ran `_secs * 5`
+# iterations of `cat $CAP | grep`, called that _secs seconds, and was wrong by
+# an order of magnitude ON THIS MACHINE: two forks per iteration on a 25 MHz
+# core cost far more than the 200 ms sleep they were budgeted alongside, so a
+# "15 second" wait ran for minutes. Measured 2026-08-11 — `koti-net wake` was
+# assumed hung and interrupted, and it was not hung, it was still counting.
+#
+# `date +%s` costs one more fork per iteration and buys a number that means
+# what it says. The grep now reads $CAP directly instead of through `cat`,
+# which pays for it: one fork per iteration instead of two.
 expect() {
-	_pat=$1; _secs=$2; _i=0
-	while [ "$_i" -lt $(( _secs * 5 )) ]; do
-		capture | grep -qa "$_pat" && return 0
+	_pat=$1
+	_deadline=$(( $(date +%s) + $2 ))
+	while [ "$(date +%s)" -lt "$_deadline" ]; do
+		grep -qa "$_pat" "$CAP" 2>/dev/null && return 0
 		usleep 200000
-		_i=$(( _i + 1 ))
 	done
 	return 1
 }
@@ -204,22 +214,35 @@ cmd_wake() {
 	# which is silent at 115200 and looks exactly like a dead link.
 	echo run > "$SYS/esp_power"
 
-	# An ESP32 leaving reset prints its ROM log at 74880 baud into a port
-	# running at 115200, so the first thing to arrive is GARBAGE. That is
-	# expected and is not what we wait for; MicroPython's own banner is
-	# printed after the switch to 115200 and is legible.
-	if expect 'MicroPython' 15; then
-		echo "koti-net: MicroPython is up."
+	# ⛔ WAIT FOR THE PROMPT, NOT FOR THE BANNER. `>>>` is what actually
+	# means "the REPL is ready to be typed at"; the banner is decoration.
+	#
+	# Measured 2026-08-11: waiting for "MicroPython" FAILED on a boot that had
+	# worked perfectly, because one byte of the banner arrived corrupted —
+	# `oicroPython v1.14 on 2021-02-02` — while `>>>` two lines later was
+	# intact. A single flipped byte in a 477-byte burst is not a reason to
+	# declare the link dead, and matching a long cosmetic string makes it one.
+	#
+	# ⚠️ On this board that corruption is not rare or mysterious. The ESP32's
+	# transmit line and the FPGA's share the same net back to the USB serial
+	# adapter, so anything koti prints while the ESP32 is talking collides
+	# with it — and every character typed at koti over that serial port also
+	# arrives at the ESP32's receiver and is echoed back into this capture.
+	# Driving this from koti's own keyboard avoids both.
+	if expect '>>>' 20; then
+		if grep -qa 'MicroPython' "$CAP" 2>/dev/null; then
+			echo "koti-net: MicroPython is up."
+		else
+			echo "koti-net: REPL prompt is up (banner was garbled, harmless)."
+		fi
 	else
-		echo "koti-net: no MicroPython banner in 15 s." >&2
+		echo "koti-net: no REPL prompt in 20 s." >&2
 		echo "koti-net: bytes seen on the link: $(cat "$SYS/esp_rx_count")" >&2
 		echo "koti-net: (0 = nothing arrived at all: wire, pin sites or receiver." >&2
 		echo "koti-net:  non-zero = the chip talks but did not reach the REPL.)" >&2
+		echo "koti-net: what it did say is in $CAP" >&2
 		return 1
 	fi
-
-	send ''
-	expect '>>>' 5 || echo "koti-net: no prompt; try 'koti-net repl'" >&2
 }
 
 cmd_off() {

@@ -649,11 +649,52 @@ The firmware falls back to its built-in flash payload and prints `STK` — a
 missing card is not a brick. `image: sdtest` checks the card path on its own,
 and `image: sdraw` is the layer below that.
 
-## 🔴 2e. The ESP32 link — **THE EXPERIMENT. NOT YET RUN ON HARDWARE.**
+## ✅ 2e. The ESP32 link — **RUN ON HARDWARE 2026-08-11. THE CARD SURVIVES.**
 
-This is the one measurement standing between koti and a network, and it is one
-bitstream. **Do this before writing any more networking code**, because the
-answer decides whether the whole ESP32 route is viable.
+> ### 🏆 THE RESULT, measured — 25 consecutive passes, unanimous
+>
+> ```
+> 1. microSD baseline: init OK, block 0 x3: stable ac230418
+> 2. link, ESP32 held in reset: ctrl=00000000 bytes=0
+> 3. waking: gpio0 first, then enable
+> 4. link, ESP32 awake: bytes=74 73 20 4a 75 6c 20 32 39 20 32 30 31 39 20 31 477
+> 5. microSD with ESP32 AWAKE: ac230418  same
+> 6. microSD after ESP32 back in reset: ac230418  same
+> VERDICT: the card SURVIVES an awake ESP32; link carried data
+> ```
+>
+> 75 s capture on COM3, SRAM-loaded bitstream, SW3 OFF. **25/25 passes agreed
+> on every line**: same baseline checksum, `bytes=0` while held in reset every
+> single time (so line 4 is signal and not noise), 477 bytes on every wake, and
+> the card reading `ac230418` before, during and after.
+>
+> ⇒ **The ESP32 route is OPEN.** Networking and storage are not mutually
+> exclusive; the Ethernet-Pmod fallback is not needed. This is the measurement
+> PLAN item 11 was gated on.
+>
+> ### ⭐ AND THE PREDICTION BELOW ABOUT GARBAGE IS WRONG — IT IS LEGIBLE
+> This section told you to expect undecodable bytes on line 4, because an
+> ESP32's ROM bootloader talks at 74880 baud and this port is 115200. The 16
+> bytes it printed decode to clean ASCII:
+> ```
+> 74 73 20 4a 75 6c 20 32 39 20 32 30 31 39 20 31  ->  "ts Jul 29 2019 1"
+> ```
+> which is the tail of the ROM banner `ets Jul 29 2019 12:21:46`. **74880 baud
+> is what an ESP32 with a 26 MHz crystal does; this module has a 40 MHz
+> crystal, so its ROM log comes out at 115200 and reads perfectly.** The
+> warning is kept below unchanged, because a reader who sees garbage should
+> still know it is not a fault — but on THIS board, text is what to expect, and
+> text is a much stronger result: it proves the baud rate as well as the wire.
+>
+> ⚠️ What this does NOT prove: that MicroPython reaches its REPL. This image
+> resets the chip a few seconds after waking it, and only the first 16 bytes
+> are ever shown. The banner arrives later than that window. `koti-net wake`
+> is what answers it.
+
+The measurement below is the one that produced the result above. **It was the
+one thing standing between koti and a network**; it is kept in full because it
+is re-runnable, and any future change to the SD or ESP32 wiring should re-run
+it rather than trust the verdict above.
 
 **The question.** koti's cheapest possible network link is the onboard ESP32
 over the serial pair on K3/K4 (`src/esp_uart.sv`, MMIO `0x0007_0000`). But the
@@ -706,11 +747,24 @@ is the result**; legible text would be a bonus, not the test.
 ⚠️ It is SRAM-loaded, so a power cycle removes it. Nothing here touches the
 config flash, and `ESP_CTRL = 0` on the way out puts the ESP32 back in reset.
 
-**What each verdict means for PLAN item 11:**
+**What each verdict means for PLAN item 11** (✅ the first one is what happened):
 
-- *the card SURVIVES* → the ESP32 route is open. Next is the ESP32's own
-  firmware and then a Linux driver — `CONFIG_NET` is still 0 and a UART is not
-  an Ethernet device.
+- *the card SURVIVES* → the ESP32 route is open. ⇒ **This is the measured
+  answer.** Next is not "the ESP32's own firmware": that firmware already
+  exists and was identified on 2026-08-08 — **stock MicroPython 1.14**, whose
+  `network` and `socket` modules are an AT command set in a better language.
+  The client that drives it is `usr/bin/koti-net` in the rootfs overlay:
+  ```
+  koti-net wake                 # release the ESP32, wait for MicroPython
+  koti-net join SSID PASSWORD   # print the address it got
+  koti-net get http://host/path # the page, on stdout
+  koti-net off                  # back into reset, off the microSD bus
+  ```
+  ⚠️ It needs the `esp_power` sysfs attribute, so a kernel from 2026-08-11 or
+  later. ⚠️ koti still has no IP address of its own — `wget` and `ping` still
+  fail, because the ESP32 owns the TCP stack. The old line here said
+  `CONFIG_NET` is 0; it has been on since 2026-08-10 and is unused by this
+  path.
 - *BREAKS the card, and it RECOVERS* → networking and storage are mutually
   exclusive but switchable. The architecture then is: firmware loads the kernel
   off the card, root stays in RAM, and only then does the ESP32 come up.

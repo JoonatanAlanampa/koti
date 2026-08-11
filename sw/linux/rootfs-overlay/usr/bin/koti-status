@@ -1,7 +1,7 @@
 #!/bin/sh
 # koti-status — what this machine is, and what it is doing right now.
 #
-# WHY THIS EXISTS. koti has no networking, so a machine you can only inspect
+# WHY THIS EXISTS. koti cannot fetch anything, so a machine you can only inspect
 # from another computer is a machine you cannot inspect. Everything here is
 # readable with the applets that are actually in the rootfs — no vmstat, no
 # lshw, no sensors, none of which koti has.
@@ -135,7 +135,17 @@ echo "Interrupts"
 done
 echo ""
 echo "Consoles : $(awk '{printf "%s ", $1}' /proc/consoles 2>/dev/null)"
-echo "⛔ No networking: this kernel has no CONFIG_NET, so ip/ping/wget exist as"
-echo "   busybox applets and cannot work. There is no MAC and no PHY either."
+# The ESP32 link, read from the gateware rather than from anything this script
+# believes: esp_power is the strap state and esp_rx_count is a free-running
+# byte counter, so both are the machine answering rather than a claim.
+_esp=/sys/class/tty/ttyKOTI0/device
+if [ -r "$_esp/esp_power" ]; then
+    echo "ESP32 link: /dev/ttyKOTI0, $(cat "$_esp/esp_power"), $(cat "$_esp/esp_rx_count") bytes received"
+    echo "   koti-net drives it. koti has NO address of its own, so ip/ping/wget"
+    echo "   still fail -- the ESP32 owns the TCP stack, not this machine."
+else
+    echo "⛔ No ESP32 link: no $_esp. This kernel predates the koti_esp driver,"
+    echo "   so there is no way to the internet from here at all."
+fi
 hr
 echo "koti-help for the manual."

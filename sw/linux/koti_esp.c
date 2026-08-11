@@ -48,6 +48,10 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/serial_core.h>
+/* sysfs_streq(), for the esp_power attribute. Explicit because which header
+ * happens to drag in string.h has changed across releases, and finding out
+ * costs a full kernel build in CI. */
+#include <linux/string.h>
 #include <linux/tty_flip.h>
 
 #define KOTI_ESP_DATA	0x00	/* w: tx byte.  r: pops the rx FIFO */

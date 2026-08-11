@@ -49,8 +49,10 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import stat
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -418,6 +420,44 @@ def main():
                        f"workflow and commit the new cpio.")
         else:
             print(f"  ok   overlay {rel} matches the cpio byte for byte")
+
+    # ---- 5b. the overlay's shell scripts actually parse ----------------------
+    #
+    # ⛔ NOTHING ELSE IN THIS REPO EVER PARSES THEM. The checks above prove an
+    # overlay script is present, is executable, has a shebang, has no CR bytes
+    # and matches the cpio byte for byte — every one of which a script with an
+    # unbalanced quote passes. The first thing that finds a syntax error is
+    # then busybox, on the machine, at boot, and for /init specifically that is
+    # a kernel panic.
+    #
+    # A parse is not a test: it cannot tell whether the script does the right
+    # thing, and it will not catch a busybox-vs-dash difference. It catches the
+    # one class of defect that costs a 40-minute rootfs rebuild and a trip to
+    # the bench to discover, which is why it is worth its four lines.
+    #
+    # `sh` on the runner is dash; koti's is busybox ash. Both are POSIX shells,
+    # so a syntax error in one is overwhelmingly a syntax error in the other —
+    # but this is a proxy, and the honest way to state it is that it proves the
+    # script parses SOMEWHERE, not that busybox will accept it.
+    sh = shutil.which("sh")
+    if sh is None:
+        print("  ---- no sh on this host; skipping the syntax check")
+    else:
+        for p in overlay_files():
+            rel = str(p.relative_to(OVERLAY)).replace("\\", "/")
+            head = p.read_bytes()[:64]
+            if not head.startswith(b"#!") or b"sh" not in head.split(b"\n")[0]:
+                continue
+            r = subprocess.run([sh, "-n", str(p)], capture_output=True,
+                               text=True)
+            if r.returncode == 0:
+                print(f"  ok   overlay {rel} parses as a shell script")
+            else:
+                print(f"  FAIL overlay {rel} is not valid shell")
+                bad.append(f"sw/linux/rootfs-overlay/{rel} does not parse "
+                           f"(`sh -n`): {r.stderr.strip() or 'no message'}. "
+                           f"busybox would only discover this while running "
+                           f"it on the machine.")
 
     # ---- 6. freshness: the fragment, by recorded hash ------------------------
     if not PROVENANCE.exists():

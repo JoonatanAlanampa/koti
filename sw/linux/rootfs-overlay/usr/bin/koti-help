@@ -1,7 +1,7 @@
 #!/bin/sh
 # koti-help — the manual, on the machine.
 #
-# ⛔ WHY THIS EXISTS RATHER THAN JUST docs/MANUAL.md: koti has no networking.
+# ⛔ WHY THIS EXISTS RATHER THAN JUST docs/MANUAL.md: koti cannot fetch it.
 # A machine that cannot fetch anything needs its documentation locally, or the
 # documentation is only useful to someone sitting at a different computer. This
 # is the short form; docs/MANUAL.md is the long one and they are kept in step
@@ -42,10 +42,20 @@ KEYBOARD
   Finnish layout, loaded at boot (`koti: fi keymap loaded`). AltGr reaches
   @ $ { } [ ] \ | -- all of which a shell needs.
 
+INTERNET
+  koti has no address of its own -- no MAC, no PHY -- so ip, ping and wget
+  exist as busybox applets and still fail. What it has instead is a modem:
+  the ESP32 next to the FPGA, reached over /dev/ttyKOTI0.
+    koti-net wake                     release the ESP32 from reset
+    koti-net join <ssid> <password>   prints the address it was given
+    koti-net get http://example.com/  the page, on standard output
+    koti-net off                      put it back into reset
+  The address belongs to the ESP32, not to koti. http only, no https.
+  Waking it puts a second driver on the microSD bus (the ESP32's GPIOs ARE
+  the card's wires) -- measured harmless over 25 runs, but `koti-net off`
+  when you are done is the right habit.
+
 WHAT IS NOT HERE
-  NO NETWORKING. No CONFIG_NET, no MAC, no interface but loopback. ip, ping
-  and wget exist as busybox applets and will fail with
-  "socket: Function not implemented". That is expected, not a fault.
   NO package manager, no compiler, no floating point (koti has no FPU).
 
 SHUTTING DOWN

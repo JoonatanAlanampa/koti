@@ -118,16 +118,37 @@ anything off, so the machine stops rather than powers down.
 
 ## What is *not* here
 
-**No networking at all.** There is no `CONFIG_NET` in the kernel and no MAC
-anywhere in the hardware; the only interface is loopback. `ip`, `ping`, `wget`
-and friends exist as busybox applets and will fail with:
+**No IP address, but there is a way to the internet.** koti has no MAC and no
+PHY, so it is not on a network in the way another computer is: `ip`, `ping`,
+`wget`, `telnet`, `traceroute` and `nslookup` all exist as busybox applets and
+all still fail. That is expected, not a fault, and so is
+`Starting network: ... FAIL` in the boot log.
+
+What koti has instead is a **modem**. The ULX3S carries an ESP32 alongside the
+FPGA, koti reaches it over its own serial link (`/dev/ttyKOTI0`), and that
+ESP32 runs MicroPython with a working WiFi stack. `koti-net` drives it:
 
 ```
-ip: socket: Function not implemented
+koti-net wake                     # release the ESP32 from reset
+koti-net join <ssid> <password>   # prints the address it was given
+koti-net get http://example.com/  # the page, on standard output
+koti-net off                      # put it back into reset
 ```
 
-That is expected, not a fault. `Starting network: ... FAIL` in the boot log is
-the same thing.
+⚠️ **The address `join` prints belongs to the ESP32, not to koti.** Nothing on
+this machine gains a socket, which is why `wget` still fails a moment after
+`koti-net get` has fetched a page. It is remote control of somebody else's TCP
+stack — genuinely the internet, genuinely not networking.
+
+⚠️ **`koti-net wake` is not free.** The ESP32's GPIO pins are physically the
+same wires as the microSD bus, so while it is awake two chips can drive the
+card's signals. That was measured on 2026-08-11 over 25 runs and the card read
+identically before, during and after — but `koti-net off` when you are done is
+still the right habit, and it is the first thing to suspect if the card starts
+misbehaving.
+
+⚠️ **http only.** The fetch is plain HTTP; there is no TLS, so `https://` URLs
+will not work.
 
 **No compiler, no package manager, no floating point.** koti has no FPU, and
 userspace is built soft-float and statically linked against musl. There is no
@@ -196,8 +217,10 @@ not exactly like their GNU counterparts: expect fewer long options.
 
 ⚠️ **The presence of a command is not a promise that it works.** Every
 networking applet in that list — `ping`, `wget`, `telnet`, `ifconfig`, `ip`,
-`udhcpc`, `traceroute`, `nslookup` — will fail, because there is no network
-stack for them to call. Likewise `lspci`, `lsusb` and `i2c*` name buses koti
+`udhcpc`, `traceroute`, `nslookup` — will fail, because koti has no address of
+its own for them to bind to. Use `koti-net` instead; the difference is
+explained under "What is *not* here" above, and it is a real difference rather
+than a wording one. Likewise `lspci`, `lsusb` and `i2c*` name buses koti
 does not have. busybox ships its whole applet set; koti provides the hardware
 for a subset of it.
 

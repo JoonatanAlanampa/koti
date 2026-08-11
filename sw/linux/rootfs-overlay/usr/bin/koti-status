@@ -138,7 +138,13 @@ echo "Consoles : $(awk '{printf "%s ", $1}' /proc/consoles 2>/dev/null)"
 # The ESP32 link, read from the gateware rather than from anything this script
 # believes: esp_power is the strap state and esp_rx_count is a free-running
 # byte counter, so both are the machine answering rather than a claim.
-_esp=/sys/class/tty/ttyKOTI0/device
+# 🪤 The attributes are NOT under /sys/class/tty/ttyKOTI0/device — that
+# symlink resolves to a serdev node two levels below the platform device the
+# driver bound to (measured 2026-08-11). Walk up until esp_power appears.
+_esp=$(readlink -f /sys/class/tty/ttyKOTI0/device 2>/dev/null)
+while [ -n "$_esp" ] && [ "$_esp" != "/" ] && [ ! -e "$_esp/esp_power" ]; do
+    _esp=$(dirname "$_esp")
+done
 if [ -r "$_esp/esp_power" ]; then
     echo "ESP32 link: /dev/ttyKOTI0, $(cat "$_esp/esp_power"), $(cat "$_esp/esp_rx_count") bytes received"
     echo "   koti-net drives it. koti has NO address of its own, so ip/ping/wget"

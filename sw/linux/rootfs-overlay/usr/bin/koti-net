@@ -40,13 +40,44 @@
 set -u
 
 DEV=/dev/ttyKOTI0
-SYS=/sys/class/tty/ttyKOTI0/device
 CAP=/tmp/koti-net.cap
 PID=/tmp/koti-net.pid
 
 die() { echo "koti-net: $*" >&2; exit 1; }
 
 [ -c "$DEV" ] || die "$DEV does not exist — is koti_esp bound? check dmesg"
+
+# ---------------------------------------------------------------------------
+# Where esp_power actually lives.
+#
+# 🪤 NOT /sys/class/tty/ttyKOTI0/device, which is the obvious answer and the
+# wrong one. Measured on hardware 2026-08-11, that symlink resolves to
+#
+#   /sys/devices/platform/soc/70000.serial/70000.serial:0/70000.serial:0.0
+#
+# — a SERDEV node two levels BELOW the platform device. uart_add_one_port()
+# registers the tty through tty_port_register_device_attr_serdev(), so the
+# tty's parent is the serial controller, not the platform device the driver
+# bound to. The attributes are on the platform device, where driver.dev_groups
+# put them, and the script reported "(no sysfs)" while they existed all along.
+#
+# Walking up until the attribute is found beats hardcoding either path: it is
+# correct whether or not CONFIG_SERIAL_DEV_BUS inserts those extra levels, and
+# it does not embed the MMIO address of the block in a shell script.
+# ---------------------------------------------------------------------------
+find_sys() {
+	_d=$(readlink -f "/sys/class/tty/$(basename "$DEV")/device" 2>/dev/null)
+	while [ -n "$_d" ] && [ "$_d" != "/" ] && [ "$_d" != "." ]; do
+		if [ -e "$_d/esp_power" ]; then
+			echo "$_d"
+			return 0
+		fi
+		_d=$(dirname "$_d")
+	done
+	return 1
+}
+
+SYS=$(find_sys) || SYS=/nonexistent
 
 # ---------------------------------------------------------------------------
 # The capture reader.

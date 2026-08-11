@@ -76,6 +76,39 @@
 #define KOTI_ESP_NR	1
 #define KOTI_ESP_MAJOR	0	/* dynamic */
 
+/*
+ * ⛔ THE PORT MUST NOT BE PORT_UNKNOWN, AND NOTHING SAYS SO OUT LOUD.
+ *
+ * serial_core's uart_port_startup() opens with
+ *
+ *	if (uport->type == PORT_UNKNOWN)
+ *		return 1;
+ *
+ * and uart_startup() turns that non-zero into set_bit(TTY_IO_ERROR). The
+ * positive return is then folded back into "success" by uart_port_activate(),
+ * so the failure is completely silent in the shape it takes:
+ *
+ *	open("/dev/ttyKOTI0")  -> succeeds
+ *	read(...)              -> EIO, immediately, for ever
+ *	ops->startup()         -> NEVER CALLED, so request_irq never runs
+ *
+ * Measured on hardware 2026-08-11: `cat /dev/ttyKOTI0` printed
+ * "cat: read error: I/O error" with the ESP32 still held in reset, which reads
+ * like a wiring or far-end problem and is neither.
+ *
+ * PORT_UNKNOWN means "autoconfiguration has not identified this port yet". It
+ * is the right value for an 8250 before probing and the wrong one for a port
+ * that is exactly what its compatible string says. The value itself is not
+ * meaningful to anything outside this driver — TIOCGSERIAL reports it and
+ * nothing acts on it — it only has to be non-zero. It is deliberately not one
+ * of the low, well-known numbers, so that a person reading TIOCGSERIAL output
+ * is not told this is an 8250.
+ *
+ * ⚠️ NO SIMULATION COULD HAVE CAUGHT THIS. The Verilator boot gate proves the
+ * kernel reaches userspace; nothing in it ever opens this device.
+ */
+#define PORT_KOTI_ESP	119
+
 static struct uart_port koti_esp_port;
 
 /*
@@ -280,8 +313,14 @@ static const char *koti_esp_type(struct uart_port *port)
 
 static void koti_esp_config_port(struct uart_port *port, int flags)
 {
+	/*
+	 * UPF_BOOT_AUTOCONF makes serial_core call this at registration, and
+	 * whatever it leaves in port->type is what uart_port_startup() tests.
+	 * Setting PORT_UNKNOWN here — the obvious "we have nothing to
+	 * autoconfigure" answer — is what made every read return EIO.
+	 */
 	if (flags & UART_CONFIG_TYPE)
-		port->type = PORT_UNKNOWN;
+		port->type = PORT_KOTI_ESP;
 }
 
 static int koti_esp_verify_port(struct uart_port *port,
@@ -468,7 +507,7 @@ static int koti_esp_probe(struct platform_device *pdev)
 	port->ops	= &koti_esp_ops;
 	port->fifosize	= KOTI_ESP_FIFO;
 	port->line	= 0;
-	port->type	= PORT_UNKNOWN;
+	port->type	= PORT_KOTI_ESP;	/* see the note at its #define */
 	port->uartclk	= KOTI_ESP_BAUD * 16;
 
 	/* What the sysfs attributes below reach the hardware through. */

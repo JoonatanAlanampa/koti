@@ -110,10 +110,38 @@ reader_running() {
 }
 
 reader_start() {
-	reader_running && return 0
-	# raw: no line discipline editing, no echo, no CR/LF translation. The
-	# far end is a REPL that means every byte it sends.
-	stty -F "$DEV" raw -echo 115200 2>/dev/null || true
+	# ⛔ EXACTLY ONE READER, AND THIS IS NOT PARANOIA. Two `cat`s on one tty
+	# do not each get a copy — they SPLIT the byte stream at random, and both
+	# append here. Measured 2026-08-11: two readers were live at once (a stale
+	# one plus a fresh one) and the capture came back as
+	#
+	#     >>> 'mport socket
+	#      >> ot()
+	#     s>> e
+	#
+	# which reads exactly like a corrupted wire or a failing UART, and is
+	# neither. `reader_running` only checks OUR pid file, so a reader started
+	# by anything else — a previous session, a hand-run cat — is invisible to
+	# it. Sweep for them by what they are actually doing.
+	for _p in $(ps 2>/dev/null | grep "cat $DEV" | grep -v grep \
+			| awk '{print $1}'); do
+		kill "$_p" 2>/dev/null
+	done
+	rm -f "$PID"
+
+	# 🪤 `stty raw -echo < "$DEV"`, NOT `stty -F "$DEV"`. busybox's stty
+	# answers `-F` with "Not a tty" on this port and then silently operates on
+	# STDIN instead — so the original line configured the console koti-net was
+	# being typed at, never the link, and `2>/dev/null || true` hid it. The
+	# redirect form is the portable one.
+	#
+	# ⚠️ It is still allowed to fail: `|| true` stays, because the link works
+	# without it (the far end is a REPL, not a line-edited terminal). What is
+	# NOT acceptable is failing invisibly, so say so.
+	if ! stty raw -echo < "$DEV" 2>/dev/null; then
+		echo "koti-net: note: stty could not configure $DEV;" \
+		     "continuing with default line settings" >&2
+	fi
 	# ⛔ 0600, BECAUSE THIS FILE WILL CONTAIN THE WIFI PASSWORD. The far end
 	# is a REPL and a REPL ECHOES WHAT IT IS TOLD, so `join` puts
 	# w.connect('ssid','password') into the capture in clear text, as the
@@ -266,7 +294,17 @@ cmd_py() {
 	reader_running || die "not awake — run 'koti-net wake' first"
 	capture_reset
 	send "$1"
-	usleep 500000
+	# ⚠️ WAS 500 ms, AND THAT WAS TOO SHORT ON THE REAL MACHINE. `koti-net py
+	# 'print(6*7)'` returned nothing at all — no echo, no answer, no error —
+	# which reads like a dead link and was simply the reply arriving after the
+	# script had stopped looking. A round trip here is a write, a REPL parse
+	# on a 240 MHz chip, and 115200-baud transit both ways; half a second is
+	# not a generous budget for it, it is barely the transit.
+	#
+	# Two seconds, and anything slower (w.scan(), a connect) needs the capture
+	# read afterwards rather than a bigger number here — which is what the
+	# help text says to do.
+	sleep 2
 	capture
 }
 

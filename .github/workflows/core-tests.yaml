@@ -28,6 +28,14 @@ jobs:
       - name: firmware binaries match the sources beside them
         run: python sw/check_firmware.py
 
+      # ⚠️ A LINT, and a weak one by construction — see the file's own header.
+      # It cannot tell whether a driver works. It pins constructs that already
+      # cost a bench session, because the thing that would really prove these
+      # drivers is opening their device nodes on a booted machine, and no gate
+      # in this repo does that.
+      - name: drivers carry no known-wrong constructs
+        run: python sw/linux/check_drivers.py
+
       - name: muldiv unit tests
         run: python run_core.py
         working-directory: test

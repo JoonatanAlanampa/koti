@@ -10,12 +10,12 @@
     }
   },
   "esptest": {
-    "bin_bytes": 4776,
-    "bin_sha256": "dae620f5e00ad05265c029d0a27b841f9752bf177189db7994f82aae087a19ff",
+    "bin_bytes": 5016,
+    "bin_sha256": "ef485a92dbc0da64d3f53a744c0a58f88713a604dc0f04002af43f40fc8ee615",
     "sources": {
       "console.h": "9f34b6a346f3240663d3bb801139da78d0db69573f7417663efbfb8583134d29",
       "crt0.S": "a2add2682ee9fae1236263f04bbc6c6605649e369cf43ddefd90978a5404efaf",
-      "esptest.c": "5131968b0271973ab04ddf5dad3e852b37d9ca33a51b76c50bbff7d96082d4b1",
+      "esptest.c": "47f92a1f2140f267f51211f37e3995b48182a3a55365eb95cf7a8c7a85606c29",
       "koti.h": "2784538e9f71f59e8c04eda125f2dba7b357be3b6a9ca1840691dda55f05e515",
       "link.ld": "cb45e2f5d5e8fd57771e987d2db768dfc6848fe7e404564113c9eb826117f45a"
     }

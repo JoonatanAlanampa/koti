@@ -127,6 +127,21 @@ static unsigned esp_drain(unsigned budget, unsigned show) {
 // reported as truncated rather than looking like the far end stopped talking.
 static unsigned char espbuf[1024];
 
+// Print what esp_capture() kept, as text. CR and LF pass through so the far
+// end's own line structure shows; everything else non-printable becomes '.',
+// so a stray byte cannot move the cursor or eat the report printed around it.
+static void esp_show(unsigned n) {
+    unsigned i, lim = (n < sizeof espbuf) ? n : (unsigned)sizeof espbuf;
+    for (i = 0; i < lim; i++) {
+        unsigned c = espbuf[i];
+        if (c == 13u || c == 10u || (c >= 32u && c < 127u))
+            uart_putc(c);
+        else
+            uart_putc('.');
+    }
+    if (n > sizeof espbuf) uart_puts("\r\n[TRUNCATED to 1024]");
+}
+
 static unsigned esp_capture(unsigned budget) {
     unsigned got = 0;
     while (budget--) {
@@ -193,8 +208,22 @@ int main(void) {
         ESP_CTRL = ESP_GPIO0;
         spin(20000u);
         ESP_CTRL = ESP_GPIO0 | ESP_EN;
+        // ⛔ CAPTURE, do not drain. esp_drain() POPS every byte and shows the
+        // first 16, so by the time step 4b looked, the FIFO was empty and the
+        // far end had long since stopped talking — 4b printed "bytes=0" and
+        // that reads exactly like a chip that boots and says nothing. It is
+        // not: those 477 bytes had already been read and thrown away HERE.
+        // Measured 2026-08-11, on the run that was supposed to answer the
+        // MicroPython question and instead answered a question about itself.
         uart_puts("4. link, ESP32 awake: bytes=");
-        awake = esp_drain(4000000u, 16);
+        awake = esp_capture(4000000u);
+        {
+            unsigned i, lim = (awake < 16u) ? awake : 16u;
+            for (i = 0; i < lim; i++) {
+                uart_hex8(espbuf[i]);
+                uart_putc(' ');
+            }
+        }
         uart_udec(awake);
         uart_puts(awake ? "  <- THE LINK CARRIES DATA\r\n"
                         : "  (silence: wire, baud or ESP32 firmware)\r\n");
@@ -217,24 +246,17 @@ int main(void) {
         // Look for `>>>`. `ets`/`rst:`/`boot:` alone means the chip reached its
         // ROM bootloader and stopped, which is a firmware question, not a wire
         // one — and a different problem from silence.
-        uart_puts("4b. listening ~10 s, as text. '>>>' means MicroPython:\r\n");
+        uart_puts("4b. what it SAID — step 4's bytes, then ~10 s more.\r\n");
         uart_puts("---- 8< ----\r\n");
+        esp_show(awake);                    // what step 4 already captured
         {
-            unsigned n = esp_capture(60000000u), i;
-            for (i = 0; i < n && i < sizeof espbuf; i++) {
-                unsigned c = espbuf[i];
-                // CR and LF kept so the far end's own line structure shows;
-                // everything else non-printable becomes '.' so that a stray
-                // byte cannot move the cursor or eat the report around it.
-                if (c == 13u || c == 10u || (c >= 32u && c < 127u))
-                    uart_putc(c);
-                else
-                    uart_putc('.');
-            }
-            uart_puts("\r\n---- 8< ----\r\n4b. bytes=");
-            uart_udec(n);
-            if (n > sizeof espbuf) uart_puts(" (dump TRUNCATED to 1024)");
-            uart_puts("\r\n");
+            unsigned more = esp_capture(60000000u);
+            esp_show(more);                 // and anything that follows
+            uart_puts("\r\n---- 8< ----\r\n4b. step-4 bytes=");
+            uart_udec(awake);
+            uart_puts(" then ");
+            uart_udec(more);
+            uart_puts(" more\r\n");
         }
 
         // ---- 5. the card, with the ESP32 awake --------------------------

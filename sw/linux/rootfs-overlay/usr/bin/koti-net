@@ -114,7 +114,15 @@ reader_start() {
 	# raw: no line discipline editing, no echo, no CR/LF translation. The
 	# far end is a REPL that means every byte it sends.
 	stty -F "$DEV" raw -echo 115200 2>/dev/null || true
-	: > "$CAP"
+	# ⛔ 0600, BECAUSE THIS FILE WILL CONTAIN THE WIFI PASSWORD. The far end
+	# is a REPL and a REPL ECHOES WHAT IT IS TOLD, so `join` puts
+	# w.connect('ssid','password') into the capture in clear text, as the
+	# echo of the line this script sent. Nothing about that is obvious from
+	# reading `join`, which is exactly why it is guarded here at the one
+	# place the file is created rather than remembered at each caller.
+	# It is a tmpfs, so it dies at power-off; that is not a reason to make
+	# it world-readable while the machine is on.
+	( umask 077; : > "$CAP" )
 	cat "$DEV" >> "$CAP" &
 	echo $! > "$PID"
 	usleep 200000
@@ -265,10 +273,21 @@ cmd_join() {
 	if expect 'KOTI-IP' 45; then
 		capture | grep -a 'KOTI-IP' | tail -n 1 \
 			| sed 's/^KOTI-IP /koti-net: address /'
-		capture | grep -qa 'KOTI-IP FAILED' && return 1
-		return 0
+		_failed=1
+		capture | grep -qa 'KOTI-IP FAILED' || _failed=0
+		# Scrub before returning, on BOTH paths: the capture holds the REPL's
+		# echo of w.connect('ssid','password'). 0600 keeps other users out;
+		# emptying it keeps the password from sitting in RAM for the rest of
+		# the session for no reason. Everything worth reading from this
+		# exchange has already been printed above.
+		capture_reset
+		return $_failed
 	fi
 	echo "koti-net: no answer from the ESP32 in 45 s" >&2
+	# ⚠️ Deliberately NOT dumping the raw capture here, unlike `get` — this
+	# one contains the password. Re-run the individual steps with
+	# `koti-net py` if the exchange needs to be watched.
+	capture_reset
 	return 1
 }
 

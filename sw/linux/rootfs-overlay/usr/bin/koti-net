@@ -31,9 +31,25 @@
 #
 # ⚠️⚠️ WAKING THE ESP32 PUTS A SECOND DRIVER ON THE MICROSD BUS. Its GPIOs
 # ARE the card's: sd_clk=GPIO14, sd_cmd=GPIO15, sd_d=GPIO2/4/12/13. koti loads
-# its kernel from that card. `image: esptest` is the bench measurement that
-# answers whether the card survives it; until that has been run, treat `wake`
-# as an experiment and not as a routine command.
+# its kernel from that card. That was measured on 2026-08-11 with `image:
+# esptest`: 25 consecutive passes, block 0 reading identically before, during
+# and after. The card survives. `koti-net off` when you are done is still the
+# right habit, and it is the first thing to suspect if the card misbehaves.
+#
+# ⛔⛔ RUN THIS AT koti's OWN KEYBOARD AND SCREEN, NOT OVER THE COM3 SERIAL
+# CONSOLE. An awake ESP32 makes that console unusable, and it is wiring, not a
+# bug: the FTDI's transmit line reaches BOTH the FPGA and the ESP32's receiver,
+# and the ESP32's transmitter shares the FTDI's receive line with the FPGA. So
+# a woken REPL echoes your keystrokes onto the very wire koti is transmitting
+# on, and the two collide.
+#
+# Measured 2026-08-11: after `wake` over the serial console the shell still
+# echoed CRLF — input was arriving — but no prompt ever rendered again, and it
+# recovered the instant `off` ran. That presents as "waking the ESP32 crashed
+# my machine", and nothing has crashed at all.
+#
+# koti's HDMI output and USB keyboard share nothing with the ESP32, so from
+# there this is simply not a problem.
 #
 # Copyright (c) 2026 Joonatan Alanampa
 # SPDX-License-Identifier: Apache-2.0

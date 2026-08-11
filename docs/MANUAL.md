@@ -147,6 +147,17 @@ identically before, during and after — but `koti-net off` when you are done is
 still the right habit, and it is the first thing to suspect if the card starts
 misbehaving.
 
+⛔ **Use `koti-net` from koti's own keyboard and screen, not over the COM3
+serial console.** An awake ESP32 makes that console unusable. This is wiring
+rather than a fault: the USB serial adapter's transmit line reaches both the
+FPGA and the ESP32's receiver, and the ESP32's transmitter shares the adapter's
+receive line with the FPGA — so a woken MicroPython prompt echoes your
+keystrokes onto the same wire koti is transmitting on, and the two collide.
+Measured: after `wake` over serial the shell still echoed newlines, so input
+was arriving, but no prompt ever appeared again, and it came back the instant
+`koti-net off` ran. It looks exactly like a crash and is not one. The HDMI
+output and the USB keyboard share nothing with the ESP32.
+
 ⚠️ **http only.** The fetch is plain HTTP; there is no TLS, so `https://` URLs
 will not work.
 

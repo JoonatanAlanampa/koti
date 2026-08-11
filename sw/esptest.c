@@ -114,6 +114,31 @@ static unsigned esp_drain(unsigned budget, unsigned show) {
     return got;
 }
 
+// ---- 4b's instrument -------------------------------------------------------
+//
+// Capture FIRST, print AFTERWARDS, and the separation is the point: the console
+// UART runs at the same 115200 as the link, so a loop that printed each byte as
+// it arrived would spend as long transmitting as receiving and fall behind the
+// far end. The 64-byte FIFO absorbs a little of that and then drops the rest —
+// silently, and precisely during the burst worth reading. A tight poll into a
+// buffer cannot fall behind for the same reason.
+//
+// ⚠️ Bytes past the buffer are counted but not kept, so a truncated dump is
+// reported as truncated rather than looking like the far end stopped talking.
+static unsigned char espbuf[1024];
+
+static unsigned esp_capture(unsigned budget) {
+    unsigned got = 0;
+    while (budget--) {
+        if (ESP_STAT & ESP_ST_AVAIL) {
+            unsigned v = ESP_DATA & 0xFFu;      // this POPS
+            if (got < sizeof espbuf) espbuf[got] = (unsigned char)v;
+            got++;
+        }
+    }
+    return got;
+}
+
 int main(void) {
     unsigned pass = 0;
 
@@ -173,6 +198,44 @@ int main(void) {
         uart_udec(awake);
         uart_puts(awake ? "  <- THE LINK CARRIES DATA\r\n"
                         : "  (silence: wire, baud or ESP32 firmware)\r\n");
+
+        // ---- 4b. what the ESP32 actually SAYS ---------------------------
+        //
+        // ⭐ THE PREDICTION ABOVE THAT THIS WOULD BE GARBAGE IS WRONG ON THIS
+        // BOARD, measured 2026-08-11: the 16 bytes line 4 printed decode to
+        // "ts Jul 29 2019 1", the tail of the ROM banner. 74880 baud is what
+        // an ESP32 with a 26 MHz crystal does; this module has a 40 MHz
+        // crystal, so its ROM log comes out at 115200 and reads perfectly.
+        //
+        // So the hex dump is no longer the most informative thing available,
+        // and this step exists to answer what line 4 structurally could not:
+        // the chip talks, but does it get all the way to MicroPython? Line 4's
+        // budget is well under a second — enough for the ROM banner and
+        // nothing after it. The REPL prompt is the thing usr/bin/koti-net
+        // depends on, and until it appears here it is an assumption.
+        //
+        // Look for `>>>`. `ets`/`rst:`/`boot:` alone means the chip reached its
+        // ROM bootloader and stopped, which is a firmware question, not a wire
+        // one — and a different problem from silence.
+        uart_puts("4b. listening ~10 s, as text. '>>>' means MicroPython:\r\n");
+        uart_puts("---- 8< ----\r\n");
+        {
+            unsigned n = esp_capture(60000000u), i;
+            for (i = 0; i < n && i < sizeof espbuf; i++) {
+                unsigned c = espbuf[i];
+                // CR and LF kept so the far end's own line structure shows;
+                // everything else non-printable becomes '.' so that a stray
+                // byte cannot move the cursor or eat the report around it.
+                if (c == 13u || c == 10u || (c >= 32u && c < 127u))
+                    uart_putc(c);
+                else
+                    uart_putc('.');
+            }
+            uart_puts("\r\n---- 8< ----\r\n4b. bytes=");
+            uart_udec(n);
+            if (n > sizeof espbuf) uart_puts(" (dump TRUNCATED to 1024)");
+            uart_puts("\r\n");
+        }
 
         // ---- 5. the card, with the ESP32 awake --------------------------
         uart_puts("5. microSD with ESP32 AWAKE: ");

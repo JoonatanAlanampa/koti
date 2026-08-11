@@ -353,24 +353,49 @@ cmd_join() {
 }
 
 cmd_get() {
-	[ $# -ge 1 ] || die "usage: koti-net get URL   (http only, no https)"
+	[ $# -ge 1 ] || die "usage: koti-net get URL [HOST]   (http only, no https)"
 	_u=${1#http://}
 	case "$1" in
 		https://*) die "https needs TLS on the ESP32; use http://" ;;
 	esac
-	_host=${_u%%/*}
+	_addr=${_u%%/*}
 	case "$_u" in
 		*/*) _path=/${_u#*/} ;;
 		*)   _path=/ ;;
+	esac
+
+	# ⭐ THE OPTIONAL SECOND ARGUMENT IS WHAT MAKES THIS WORK WITHOUT DNS, and
+	# it exists because of a measurement. On 2026-08-11 koti fetched
+	#
+	#     HTTP/1.1 302 Found
+	#     Location: http://188.web.cern.ch/188
+	#
+	# from CERN by dialling 188.184.67.127 directly — a real reply from a real
+	# server, carrying their clock. The 302 was not a fault: dialling an
+	# address makes the request say `Host: 188.184.67.127`, and a virtual host
+	# quite correctly declines to serve info.cern.ch to that. So:
+	#
+	#     koti-net get http://188.184.67.127/ info.cern.ch
+	#
+	# connects to the address and asks for the name. That is the whole of the
+	# difference between a redirect and a page, and it needs no name server —
+	# which matters while getaddrinfo() on this link still returns -202.
+	_host=${2:-$_addr}
+	case "$_host$_addr$_path" in
+		*"'"*) die "quote in URL or host: use 'koti-net repl' by hand" ;;
 	esac
 	reader_running || die "not awake — run 'koti-net wake' first"
 
 	capture_reset
 	send 'import socket, sys'
+	send "a='$_addr'"
 	send "h='$_host'"
 	send "p='$_path'"
 	send 's=socket.socket()'
-	send 's.connect(socket.getaddrinfo(h,80)[0][-1])'
+	# `a`, not `h`: connect to the ADDRESS, ask for the NAME. When no second
+	# argument was given the two are the same string and this is the ordinary
+	# case, unchanged.
+	send 's.connect(socket.getaddrinfo(a,80)[0][-1])'
 	# 🪤 `.encode()` ON THE WHOLE REQUEST, not b'GET '+p. `h` and `p` are str
 	# and MicroPython refuses bytes+str exactly as CPython does — the error
 	# arrives as a TypeError traceback echoed back through the REPL, which is
@@ -407,11 +432,35 @@ cmd_get() {
 	send 'exec(c)'
 	send 's.close()'
 
-	if expect '^KOTI-END' 60; then
-		# Between the markers, minus the marker lines themselves. The
-		# tty is raw, so every line still carries the CR the REPL sent.
-		capture | tr -d '\r' | sed -n '/^KOTI-BEGIN/,/^KOTI-END/p' \
-			| sed '1d;$d'
+	if expect 'KOTI-END' 60; then
+		# ⛔ STRIP THE MARKER TEXT, DO NOT DELETE THE MARKER LINE. The old
+		# version did `sed '1d;$d'`, and on 2026-08-11 that threw away a
+		# real response from CERN: the capture held
+		#
+		#     KOTI-BEGIN HTTP/1.1 302 Found
+		#
+		# with the marker and the first header on ONE line, so deleting the
+		# line deleted the headers with it. `get` printed nothing while the
+		# capture was perfect, which sends you looking at the network for a
+		# bug that is in this pipeline.
+		#
+		# Cutting at the marker instead of at the line boundary is correct
+		# whether or not the far end put a newline after it, and it also
+		# survives the case where both markers land on one line (an empty
+		# body), which the line-delete version turned into gibberish.
+		#
+		# The anchors are gone from the match for the same reason.
+		# Split the markers onto their own lines FIRST. Without that, a
+		# response whose body starts on the marker's line leaves the sed
+		# range looking for an end marker that is on the same line it
+		# already started on, so it runs to the end of the capture and
+		# emits the REPL's own trailing output as if it were the page.
+		capture | tr -d '\r' \
+			| sed -e 's/KOTI-BEGIN/KOTI-BEGIN\n/' \
+			      -e 's/KOTI-END/\nKOTI-END/' \
+			| sed -n '/KOTI-BEGIN/,/KOTI-END/p' \
+			| sed -e '1s/.*KOTI-BEGIN//' -e '$s/KOTI-END.*//' \
+			| sed -e '/./,$!d'
 		return 0
 	fi
 	echo "koti-net: no complete reply in 60 s. Raw capture follows:" >&2
@@ -440,13 +489,21 @@ case "${1:-help}" in
 		cat <<'EOF'
 koti-net — talk to the internet through the onboard ESP32.
 
-  koti-net wake              release the ESP32 and wait for MicroPython
-  koti-net join SSID [PASS]  join a WiFi network, print the address
-  koti-net get http://URL    fetch a page to stdout
-  koti-net py 'CODE'         run one line of MicroPython, print the reply
-  koti-net status            link state and byte counter
-  koti-net repl              hand the link to microcom, interactively
-  koti-net off               put the ESP32 back into reset
+  koti-net wake                  release the ESP32 and wait for MicroPython
+  koti-net join SSID [PASS]      join a WiFi network, print the address
+  koti-net get http://URL [HOST] fetch a page to stdout
+  koti-net py 'CODE'             run one line of MicroPython, print the reply
+  koti-net status                link state and byte counter
+  koti-net repl                  hand the link to microcom, interactively
+  koti-net off                   put the ESP32 back into reset
+
+⚠️ If a name will not resolve (getaddrinfo returning -202 on this link), give
+the ADDRESS in the URL and the NAME as the second argument:
+
+    koti-net get http://188.184.67.127/ info.cern.ch
+
+That connects to the address and asks for the name, so a virtual host serves
+the page instead of redirecting. It needs no name server at all.
 
 The ESP32 runs stock MicroPython 1.14 and owns the TCP stack; koti drives it
 over /dev/ttyKOTI0. koti itself has no IP address, so wget and ping still do

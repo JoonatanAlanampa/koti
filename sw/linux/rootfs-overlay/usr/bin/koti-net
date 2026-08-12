@@ -738,13 +738,50 @@ clock_save() {
 	echo "koti-net: saved to $CLOCKFILE, so the next boot starts here."
 }
 
+# ---------------------------------------------------------------------------
+# repl — ⚠️ THIS HAS WEDGED THE MACHINE AND IS NO LONGER ADVERTISED.
+#
+# PLAN item 17. On 2026-08-11 `koti-net repl` left microcom running with the
+# console unrecoverable; it took `killall microcom` from a second session to get
+# the machine back. A command that hangs the computer should not be in the help
+# text, so it is not any more, and it now requires -f.
+#
+# ⛔ NOT DIAGNOSED. What is written here is what is known, and the honest state
+# is that nobody has reproduced it deliberately. Do not read the change below as
+# a fix.
+#
+# ⭐ ONE THING WAS PLAINLY WRONG INDEPENDENT OF THE CAUSE, AND IT IS FIXED:
+# this used to `exec microcom`, REPLACING the shell. That removes the only
+# recovery path there was — quit microcom and there is no shell to return to,
+# so the tty stays held and getty cannot respawn a login on it while it does.
+# Whatever makes microcom hang, `exec` is what turned "a stuck program" into "a
+# stuck machine". Running it as a child means Ctrl-X returns you to your prompt
+# and Ctrl-C has something to interrupt.
+#
+# ⚠️ Other candidates, none confirmed: microcom puts the tty in raw mode and
+# leaves it there if it dies abnormally; a stale `cat $DEV` started outside this
+# script splits the byte stream with it (reader_stop only knows about our own
+# pid file); and on hvc0 the keystrokes reach BOTH consoles, so Ctrl-X may be
+# arriving somewhere other than where it is being waited for.
+# ---------------------------------------------------------------------------
 cmd_repl() {
+	if [ "${1:-}" != "-f" ]; then
+		echo "koti-net: 'repl' has hung this machine before and is not" >&2
+		echo "koti-net: diagnosed (PLAN item 17). Use 'koti-net py' for" >&2
+		echo "koti-net: one-shot commands, which is what it is for." >&2
+		echo "koti-net: If you really want it: koti-net repl -f" >&2
+		return 1
+	fi
 	# microcom wants the port to itself: two readers split the incoming
 	# bytes between them at random, which presents as a REPL that drops
 	# every other character.
 	reader_stop
 	echo "koti-net: handing $DEV to microcom. Ctrl-X to quit."
-	exec microcom -s 115200 "$DEV"
+	echo "koti-net: if it stops responding, Ctrl-C; from the OTHER console,"
+	echo "koti-net: 'killall microcom' recovers it."
+	# NOT exec — see the block above. This is the recovery path.
+	microcom -s 115200 "$DEV"
+	echo "koti-net: back from microcom."
 }
 
 case "${1:-help}" in
@@ -768,8 +805,11 @@ koti-net — talk to the internet through the onboard ESP32.
   koti-net time [URL [HOST]]     set koti's clock from a server's Date header
   koti-net py 'CODE'             run one line of MicroPython, print the reply
   koti-net status                link state and byte counter
-  koti-net repl                  hand the link to microcom, interactively
   koti-net off                   put the ESP32 back into reset
+
+⛔ `koti-net repl` still exists but is NOT recommended: it has left this machine
+with an unrecoverable console (PLAN item 17, not diagnosed). It now needs -f.
+Use `koti-net py 'CODE'` for one-shot commands instead.
 
 ⚠️ If a name will not resolve (getaddrinfo returning -202 on this link), give
 the ADDRESS in the URL and the NAME as the second argument:

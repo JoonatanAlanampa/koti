@@ -105,6 +105,17 @@ REQUIRED = [
     # config line. The workflow additionally checks the script reached the
     # built rootfs, because the symbol being right does not prove the path is.
     ("BR2_ROOTFS_OVERLAY", "../sw/linux/rootfs-overlay"),
+    # e2fsck, for PLAN item 18 — the card mounts unchecked at every boot on a
+    # journal-less filesystem, on a machine switched off by pulling a charger.
+    # busybox's `fsck` is only a dispatcher and execs a fsck.ext2 that does not
+    # otherwise exist, so this package IS the checker.
+    #
+    # ⚠️ Asserted here rather than trusted from the fragment for the reason this
+    # whole list exists: a package symbol whose dependencies are unmet is
+    # dropped by `make olddefconfig` in silence. The failure would be a boot
+    # that prints "no e2fsck — mounting unchecked" forever, which is a sentence
+    # nobody reads twice, on the one thing here that persists.
+    ("BR2_PACKAGE_E2FSPROGS", "y"),
 ]
 
 

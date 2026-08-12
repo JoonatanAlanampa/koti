@@ -1,5 +1,7 @@
 #!/bin/sh
-# test_koti_net.sh — unit-test the parts of koti-net that are arithmetic.
+# test_rootfs_shell.sh — unit-test the parts of koti's rootfs shell that are
+# pure functions: koti-net's calendar arithmetic and Date-header parser, and
+# S45kotisd's never-run-the-clock-backwards rule.
 #
 # WHY THIS EXISTS. `koti-net` decides what year this machine thinks it is, from
 # a string parsed out of a wire that is known to corrupt its first byte, using
@@ -27,7 +29,7 @@
 # implementation as the oracle, which is the only way a self-check of a
 # calendar means anything.
 #
-# Run:  sh sw/linux/test_koti_net.sh
+# Run:  sh sw/linux/test_rootfs_shell.sh
 # ⚠️ Run it under `dash` or `busybox sh` if you can — koti's shell is busybox
 # ash, and bash accepts things ash does not (the octal trap below is exactly
 # such a case: bash says "value too great for base", ash says "Illegal number",
@@ -247,10 +249,81 @@ FAKE_YEAR=2026
 if clock_unset; then bad "clock_unset said yes at 2026"; else ok; fi
 FAKE_YEAR=""
 
+# ---------------------------------------------------------------------------
+# S45kotisd's clock rules.
+#
+# ⛔ THE ONE THAT MATTERS IS "NEVER BACKWARDS". The card holds the last time the
+# machine was running; the kernel starts at the epoch. Restoring unconditionally
+# is right on the usual boot and WRONG on the one that matters — if `koti-net
+# time` has already set a real clock this boot, a value saved last week would
+# drag it back, and every file written afterwards would be stamped before files
+# that already exist. A silent, cumulative corruption of the only ordering
+# information on the card, from a line that looks obviously correct.
+#
+# Extracted from the shipped script for the same reason as above.
+# ---------------------------------------------------------------------------
+echo "== S45kotisd clock rules =="
+SD=$here/rootfs-overlay/etc/init.d/S45kotisd
+awk '/^restore_clock\(\) \{/{p=1} /^case "\$1" in/{p=0} p' "$SD" > "$TMP/sd.sh"
+grep -q '^save_clock() {' "$TMP/sd.sh" || {
+	echo "extraction failed — S45kotisd's function names moved" >&2
+	exit 1
+}
+
+CLOCKFILE=$TMP/koti-clock
+NOW=0
+# A second stub: restore_clock reads the current time with `date -u +%s` and
+# writes with `date -s`, both of which this test must control rather than obey.
+date() {
+	case "${1:-}" in
+	-s)	SET_TO=${2#@}; return 0 ;;
+	-u)
+		shift
+		case "${1:-}" in
+		+%s)	echo "$NOW"; return 0 ;;
+		+%Y)	"$ORACLE" -u -d "@$NOW" +%Y; return 0 ;;
+		esac
+		"$ORACLE" -u "$@" ;;
+	*)	"$ORACLE" "$@" ;;
+	esac
+}
+# shellcheck disable=SC1090
+. "$TMP/sd.sh"
+
+try_restore() {
+	# try_restore SAVED CURRENT -> the epoch it set, or nothing
+	if [ -n "$1" ]; then printf '%s\n' "$1" > "$CLOCKFILE"; else rm -f "$CLOCKFILE"; fi
+	NOW=$2
+	SET_TO=""
+	restore_clock > /dev/null 2>&1
+	printf '%s' "$SET_TO"
+}
+
+past=1786543598      # 2026-08-12 14:06:38
+later=$((past + 604800))
+eq "epoch boot restores the saved time" "$past" "$(try_restore "$past" 0)"
+eq "never backwards: a real clock is not dragged back" "" \
+	"$(try_restore "$past" "$later")"
+eq "equal times change nothing" "" "$(try_restore "$past" "$past")"
+eq "no saved file is not an error" "" "$(try_restore "" 0)"
+eq "a corrupt clock file is ignored" "" "$(try_restore "not-a-number" 0)"
+eq "a partially written clock file is ignored" "" "$(try_restore "17865435xx" 0)"
+
+# save_clock must refuse to write the epoch back: doing so would carry 1970
+# forward as if it were a real observation and make restore_clock a permanent
+# no-op on a machine that had never been told the time.
+NOW=0
+rm -f "$CLOCKFILE"
+save_clock
+if [ -f "$CLOCKFILE" ]; then bad "save_clock wrote a 1970 timestamp"; else ok; fi
+NOW=$past
+save_clock
+eq "save_clock writes a real time" "$past" "$(cat "$CLOCKFILE" 2>/dev/null)"
+
 echo
 if [ "$fails" -eq 0 ]; then
-	echo "test_koti_net: PASS ($checks checks)"
+	echo "test_rootfs_shell: PASS ($checks checks)"
 	exit 0
 fi
-echo "test_koti_net: FAIL ($fails of $checks checks)"
+echo "test_rootfs_shell: FAIL ($fails of $checks checks)"
 exit 1

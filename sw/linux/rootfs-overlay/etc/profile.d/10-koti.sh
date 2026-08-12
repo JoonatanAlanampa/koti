@@ -17,6 +17,45 @@
 # Copyright (c) 2026 Joonatan Alanampa
 # SPDX-License-Identifier: Apache-2.0
 
+# ---------------------------------------------------------------------------
+# PLAN item 15: the networking applets that ship and cannot work.
+#
+# `ping` and `wget` are the first two commands anyone reaches for, they are both
+# in the rootfs, and neither can ever succeed: koti has no IP address, because
+# the ESP32 owns the TCP stack and koti drives it by remote control. They fail
+# with `ping: bad address` and `wget: bad address`, which reads as "the network
+# is broken" at exactly the moment the network is working perfectly. That is a
+# worse failure than not shipping them.
+#
+# ⛔ SHELL FUNCTIONS, NOT SHIMS IN $PATH, and the reason is specific. Buildroot
+# installs the busybox applets as symlinks whose directory depends on the
+# applet (`/bin/ping`, `/usr/bin/wget`), and the default PATH puts /bin FIRST —
+# so a file dropped in /usr/bin would shadow one of them and not the other,
+# which is worse than doing nothing. A function shadows the name for the
+# INTERACTIVE shell only: scripts and subshells still get the real applet, and
+# `command ping` reaches it from here too. The person typing gets the sentence;
+# nothing else changes.
+#
+# ⚠️ Deliberately NOT wrapping `ip`, `ifconfig` or `netstat`. Those report on
+# interfaces koti really has (`lo`, and whatever a future SLIP link becomes) and
+# their output is truthful. It is only the two that try to reach the OUTSIDE
+# that mislead.
+for _koti_app in ping wget; do
+	eval "$_koti_app() {
+		echo \"$_koti_app: koti has no IP address of its own, so this\" \\
+		     \"cannot work.\" >&2
+		echo \"Use koti-net instead — it drives the onboard ESP32, which\" \\
+		     \"does have one:\" >&2
+		echo \"    koti-net wake\" >&2
+		echo \"    koti-net join SSID PASSWORD\" >&2
+		echo \"    koti-net get http://ADDRESS/ [HOSTNAME]\" >&2
+		echo \"('koti-help' explains why; 'command $_koti_app' runs the\" \\
+		     \"real one anyway.)\" >&2
+		return 1
+	}"
+done
+unset _koti_app
+
 # Only for an interactive shell on a real terminal. Sourcing this from a script
 # or a pipe must not emit escape codes into whatever is reading the output.
 if [ -n "$PS1" ] && [ -t 1 ]; then

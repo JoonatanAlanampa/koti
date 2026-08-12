@@ -58,6 +58,7 @@ jobs:
           for f in sw/linux/rootfs-overlay/init \
                    sw/linux/rootfs-overlay/etc/init.d/S45kotisd \
                    sw/linux/rootfs-overlay/etc/init.d/S99koti \
+                   sw/linux/rootfs-overlay/etc/profile.d/10-koti.sh \
                    sw/linux/rootfs-overlay/usr/bin/koti-net \
                    sw/linux/rootfs-overlay/usr/bin/koti-help \
                    sw/linux/rootfs-overlay/usr/bin/koti-status; do
@@ -65,8 +66,8 @@ jobs:
             busybox sh -n "$f"
           done
 
-      - name: koti-net clock parser unit tests
-        run: busybox sh sw/linux/test_koti_net.sh
+      - name: rootfs shell unit tests (clock parser, mount rules)
+        run: busybox sh sw/linux/test_rootfs_shell.sh
 
       - name: muldiv unit tests
         run: python run_core.py

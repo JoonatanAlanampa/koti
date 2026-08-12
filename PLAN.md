@@ -646,7 +646,19 @@ on the ladder; the first two are small and change how the machine feels.
     Two lines in `S99koti` or `/etc/fstab`. ⚠️ Keep the `sync` habit — ext2
     here has no journal.
 
-15. [ ] 🪤 **`wget` and `ping` are installed and cannot work.** Both are in the
+15. [~] 🪤 **WRAPPED 2026-08-12, NOT YET CONFIRMED ON HARDWARE.**
+    `/etc/profile.d/10-koti.sh` defines `ping` and `wget` as shell functions
+    that name the reason and print the three `koti-net` commands instead.
+    ⛔ **Functions, not shims in `$PATH`** — busybox installs its applets as
+    symlinks whose directory depends on the applet (`/bin/ping` but
+    `/usr/bin/wget`) and the default PATH puts `/bin` first, so a dropped-in
+    file would shadow one and not the other, which is worse than nothing. A
+    function shadows the name for the interactive shell only: scripts still get
+    the real applet and `command ping` reaches it.
+    ⚠️ `ip`/`ifconfig`/`netstat` are deliberately NOT wrapped — they report on
+    interfaces koti really has, and their output is truthful.
+
+    (original entry) 🪤 **`wget` and `ping` are installed and cannot work.** Both are in the
     rootfs, and koti has no IP address — the ESP32 owns the TCP stack. They are
     the first two commands anyone reaches for, and they fail in a way that
     reads as "the network is broken" when it is working. Drop them, or wrap
@@ -658,13 +670,45 @@ on the ladder; the first two are small and change how the machine feels.
     because of what changed since: **PS/2 is deleted, so there is no fallback
     input path.** If the keyboard misbehaves there is nothing else to type on.
 
-17. [ ] 🔴 **`koti-net repl` wedges the machine.** microcom never returns and
+17. [~] 🔴 **DE-ADVERTISED AND MADE RECOVERABLE 2026-08-12. ⛔ NOT DIAGNOSED —
+    do not read this as a fix.** It is out of the help text, it requires `-f`,
+    and it prints the recovery procedure before it runs.
+    ⭐ **One thing was plainly wrong independent of the cause and is fixed: it
+    used to `exec microcom`, REPLACING the shell.** That removed the only
+    recovery path there was — quit microcom and there is no shell to return to,
+    so the tty stays held and getty cannot respawn a login while it does.
+    Whatever makes microcom hang, `exec` is what turned "a stuck program" into
+    "a stuck machine". It is a child process now.
+    Unconfirmed candidates for the hang itself: microcom leaves the tty in raw
+    mode if it dies abnormally; a stale `cat $DEV` started outside the script
+    splits the byte stream (`reader_stop` only knows our own pid file); and on
+    hvc0 keystrokes reach BOTH consoles, so Ctrl-X may arrive somewhere other
+    than where it is awaited.
+
+    (original entry) 🔴 **`koti-net repl` wedges the machine.** microcom never returns and
     the console does not recover; on 2026-08-11 it took a `killall microcom`
     from a second session. It is a shipped subcommand listed in the help text.
     Diagnose or remove it — a command that hangs the computer should not be
     advertised.
 
-18. [ ] 🧹 **The card mounts unchecked on every boot** — `EXT2-fs (kotisd2):
+18. [~] 🧹 **CHECKED AT BOOT FROM 2026-08-12, NOT YET CONFIRMED ON HARDWARE.**
+    `S45kotisd` runs `e2fsck -p` before it mounts.
+    ⛔ **busybox could not supply this.** Its `fsck` applet is only a dispatcher
+    — it execs a `fsck.ext2` that did not exist, so `fsck /dev/kotisd2` on the
+    machine as it stood failed in a way that read like a broken card. The
+    checker had to come from **`BR2_PACKAGE_E2FSPROGS`**, asserted in
+    `check_rootfs.py` because an unmet package symbol is dropped by
+    `olddefconfig` in silence.
+    ⚠️ **Only on the unmounted, not-root filesystem** — e2fsck on a mounted rw
+    filesystem corrupts it, so if the card is `/` the earlier branch has already
+    exited. And a filesystem it cannot repair is **still mounted**, loudly:
+    refusing would hide the user's files behind a failure they cannot act on
+    from a machine with no rescue shell.
+    ⚠️ **Size**: the cpio was 1.18 MiB against a 2.5 MiB budget when this
+    landed. If a later addition presses on that budget, this is a fair thing to
+    reconsider — the degrade path (mount unchecked, say so) already exists.
+
+    (original entry) 🧹 **The card mounts unchecked on every boot** — `EXT2-fs (kotisd2):
     warning: mounting unchecked fs, running e2fsck is recommended`, seen again
     2026-08-12. Nothing ever fsck's it, ext2 has no journal, and this machine
     is powered off by pulling a charger. Slow-burn corruption risk on the one

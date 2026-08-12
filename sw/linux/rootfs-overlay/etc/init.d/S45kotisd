@@ -89,6 +89,49 @@ save_clock() {
 	date -u +%s > "$CLOCKFILE" 2>/dev/null
 }
 
+# ---------------------------------------------------------------------------
+# PLAN item 18: check the filesystem before mounting it.
+#
+# The kernel says `EXT2-fs (kotisd2): warning: mounting unchecked fs, running
+# e2fsck is recommended` at every boot, and until now nothing ever did. ext2 has
+# no journal and this machine is switched off by pulling a charger, so the
+# warning is not boilerplate — it is the accurate description of a slow-burn
+# risk on the only thing here that persists.
+#
+# ⛔ ONLY ON AN UNMOUNTED FILESYSTEM. e2fsck on a mounted rw filesystem
+# corrupts it, which is why this runs in the not-root, not-yet-mounted branch
+# and nowhere else. If the card is `/`, the branch above has already exited.
+#
+# `-p` is "preen": fix what is unambiguously safe, and refuse anything that
+# needs a human. Exit codes are a bitmask — 0 clean, 1 errors corrected (fine,
+# carry on), 2 corrected and a reboot is wanted, 4 and up left uncorrected.
+# ⚠️ A DIRTY FILESYSTEM IS STILL MOUNTED. Refusing to mount would hide the
+# user's files behind a failure they cannot act on from a machine with no
+# rescue shell; saying loudly what was found and carrying on is the same
+# choice /init makes about a missing card.
+check_card() {
+	# busybox's `fsck` applet is only a dispatcher and would exec a
+	# fsck.ext2 that does not exist, so probe for the real checker. A rootfs
+	# built without e2fsprogs mounts unchecked and says so, rather than
+	# failing in a way that looks like a broken card.
+	if ! command -v e2fsck > /dev/null 2>&1; then
+		echo "koti: no e2fsck — mounting $DEV unchecked"
+		return 0
+	fi
+	e2fsck -p "$DEV" > /dev/null 2>&1
+	rc=$?
+	if [ "$rc" -eq 0 ]; then
+		return 0
+	elif [ "$rc" -le 2 ]; then
+		echo "koti: e2fsck repaired $DEV (exit $rc) — mounting it"
+	else
+		echo "koti: ⚠ e2fsck could NOT repair $DEV (exit $rc)."
+		echo "koti:   Mounting anyway so your files are reachable, but run"
+		echo "koti:   'umount /mnt; e2fsck -f $DEV' and read what it says."
+	fi
+	return 0
+}
+
 case "$1" in
 	start)
 		# Already the root filesystem? Then there is nothing to mount and
@@ -112,6 +155,7 @@ case "$1" in
 			     "partition 2)"
 			exit 0
 		fi
+		check_card
 		if mount -t ext2 -o rw "$DEV" "$MP" 2>/dev/null; then
 			echo "koti: microSD mounted at $MP"
 			restore_clock

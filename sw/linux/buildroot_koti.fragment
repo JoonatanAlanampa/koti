@@ -174,3 +174,23 @@ BR2_ROOTFS_OVERLAY="../sw/linux/rootfs-overlay"
 # configured — rather than this symbol, because what stalls the boot is the
 # generated file, and more than one setting can produce it.
 BR2_SYSTEM_DHCP=""
+
+# ⚠️ e2fsck, AND BUSYBOX CANNOT SUPPLY IT. PLAN item 18: the card mounts with
+# `EXT2-fs (kotisd2): warning: mounting unchecked fs, running e2fsck is
+# recommended` at every single boot, nothing ever checks it, ext2 has no
+# journal, and this machine is switched off by pulling a charger out of a phone
+# adapter. That is a slow-burn corruption risk on the ONE thing that persists.
+#
+# busybox ships an `fsck` applet, but it is only a dispatcher — it execs
+# `fsck.<type>`, which does not exist here, so `fsck /dev/kotisd2` on the
+# machine as it stood would fail in a way that reads like a broken card. The
+# checker itself has to come from e2fsprogs.
+#
+# ⚠️ IT IS AFFORDABLE, WHICH IS NOT THE SAME AS FREE. The cpio budget in
+# check_rootfs.py is 2.5 MiB and the rootfs was 1.18 MiB when this was added —
+# about 1.35 MiB of headroom, against a few hundred KiB for a static musl
+# e2fsck. If a future addition pushes against that budget, this is a fair thing
+# to reconsider: the check runs at boot on a machine that is usually switched
+# off cleanly, and S45kotisd already degrades to mounting unchecked when the
+# binary is missing rather than refusing to boot.
+BR2_PACKAGE_E2FSPROGS=y

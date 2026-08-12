@@ -790,11 +790,24 @@ jobs:
           set -o pipefail
           python3 test/mkhex.py sw/sbi/sbi_sd.bin fw.hex
           python3 test/mkhex.py kimg/arch/riscv/boot/Image kernel.hex
-          # 700M, from a measurement rather than a guess: the marker arrives at
-          # 486,454,208 clocks with the committed rootfs (2026-08-07, and the
-          # same boot reached it at 164,201,083 with initramfs=init). 700M is
-          # ~1.4x that, about seven minutes here, and the simulation is
-          # DETERMINISTIC for a given image, so the margin covers a growing
+          # 1.2e9, from a measurement rather than a guess. The history matters
+          # because this number has now moved twice for the same reason:
+          #
+          #   164,201,083 clocks   initramfs=init (2026-08-07)
+          #   486,454,208 clocks   rootfs.cpio at 1.18 MiB
+          #   817,397,247 clocks   rootfs.cpio at 2.33 MiB  (run 31622958595)
+          #
+          # ⛔ THE 700M BUDGET WENT RED THE MOMENT e2fsprogs LANDED, and the
+          # boot was fine: 2026-08-12's run reached `Running sysctl:` and
+          # stopped on the clock limit with the marker one script away. The
+          # rootfs had doubled (PLAN item 18 needs a checker, and a static
+          # e2fsck is 1.15 MiB), and unpacking twice the initramfs on a 25 MHz
+          # machine costs 1.68x the clocks. Exactly what the warning below
+          # predicted, which is why it is worth keeping.
+          #
+          # 1.2e9 is ~1.47x the measurement — the same margin 700M had over
+          # 486M — and about 15 minutes here at 1.3M clocks/s. The simulation
+          # is DETERMINISTIC for a given image, so the margin covers a growing
           # rootfs rather than run-to-run noise.
           #
           # "For a given image" is exact, not a hedge: the same rootfs built by
@@ -808,7 +821,7 @@ jobs:
           # whether the rootfs got bigger, not whether the machine broke. Raise
           # the budget deliberately and say what made it cost more.
           if [ "${FULL:-no}" = "yes" ]; then
-            : "${MAXCLK:=700000000}"; : "${QUIET:=690000000}"
+            : "${MAXCLK:=1200000000}"; : "${QUIET:=1190000000}"
           else
             # 32M, and the number is a MEASUREMENT that moved. This budget
             # has to cover the four greps below, the last of which is
@@ -882,7 +895,7 @@ jobs:
       - name: The bench's verdict, under Verilator
         if: ${{ (inputs.trace || '0') == '0' && (inputs.tlen || '0') == '0' }}
         env:
-          FULL: ${{ inputs.full || 'no' }}
+          FULL: ${{ inputs.full || 'yes' }}
         run: |
           verdict=$(grep -E '^--- tb_boot: (PASS|INCOMPLETE|FAIL)' boot-vl.log | tail -1)
           echo "bench verdict (verilator): ${verdict:-<no verdict line at all>}"

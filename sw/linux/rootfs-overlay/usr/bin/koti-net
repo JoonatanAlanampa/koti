@@ -193,15 +193,70 @@ capture() { cat "$CAP" 2>/dev/null; }
 # into it and the second line arrives already indented, gets indented again,
 # and the block is a syntax error that looks like a corrupted link.
 #
-# ⚠️ MicroPython 1.14 has no raw-paste flow control, so the far end's UART
-# buffer is the only thing between us and a dropped line. Keep lines short —
-# well under 128 bytes — and pace them. At 115200 a 100-byte line is 8.7 ms on
-# the wire; the 150 ms below is two orders of margin, and this script sends
-# fewer than a dozen lines per command, so the cost is invisible.
+# ⛔⛔ FLOW CONTROL, DERIVED FROM THE ECHO — AND THE FIXED 150 ms DELAY IT
+# REPLACES WAS BUDGETING THE WRONG THING ENTIRELY.
+#
+# The old comment here read: "at 115200 a 100-byte line is 8.7 ms on the wire;
+# the 150 ms below is two orders of margin". That arithmetic is right and
+# irrelevant. What must finish before the next line is safe is not the
+# TRANSMISSION, it is the far end's EXECUTION — and `s.connect(...)` blocks for
+# a DNS lookup plus a TCP handshake, hundreds of milliseconds to seconds.
+# MicroPython 1.14 has no raw-paste flow control, so every byte sent during
+# that window must survive in the ESP32's UART buffer, and it does not.
+#
+# Measured 2026-08-12 with the ESP32 provably associated (True 1010) and the
+# hostname provably intact (len 11, byte-sum 1113):
+#
+#     )='exmple.com'     <- the 'a' of "example" dropped
+#     0='example.co'     <- the 'm' dropped
+#     p=socket.socket()  <- the 's' dropped
+#      .settimeout(20)   <- the 's' dropped
+#     OSError: -202, then OSError: 128 (ENOTCONN), then a wedged read loop
+#
+# ⇒ THIS IS THE ROOT CAUSE OF PLAN ITEM 19. Every -202 was truthful: a name
+# with a character missing genuinely does not resolve. It looked like DNS, then
+# the network, then contention, for as long as nobody compared the string the
+# far end HELD against the one it was SENT.
+#
+# ⭐ THE FIX IS THE LESSON THIS PROJECT HAS ALREADY LEARNED TWICE, one layer
+# up: LET THE FAR END SET THE PACE. tools/kdrive.py types at koti's console one
+# character at a time paced on the echo for exactly this reason, and tt-riscv's
+# testbench learned it before that. The REPL prints `>>> ` when it is ready for
+# another line; waiting for that is flow control, and it is correct whether the
+# previous line took 2 ms or 20 s.
+#
+# ⚠️ WAITING FOR GROWTH ALONE IS NOT ENOUGH, which is worth saying because it
+# is the obvious cheaper check. The REPL echoes a line as it READS it and only
+# then executes, so the echo of `s.connect(...)` arrives at once and the far
+# end is busy for seconds afterwards. Only the PROMPT means done.
+#
+# ⚠️ Two forks per poll at 250 ms, matching `expect` below rather than beating
+# it: on a 25 MHz core a tighter loop costs more in forks than it saves in
+# latency, which `expect` already found out the hard way.
+#
+# ⛔ NO RETRY HERE, DELIBERATELY. A line received but slow to echo would be
+# sent twice, and `s.send(...)` twice is not the same as once. This layer
+# PREVENTS the fault; the callers that care (the hostname, the connect) VERIFY
+# the result. Prevention and verification are different jobs.
 # ---------------------------------------------------------------------------
 send() {
+	_b0=$(wc -c < "$CAP" 2>/dev/null); : "${_b0:=0}"
 	printf '%s\r\n' "$1" > "$DEV"
-	usleep 150000
+	_dl=$(( $(date +%s) + 25 ))
+	while [ "$(date +%s)" -lt "$_dl" ]; do
+		usleep 250000
+		_b1=$(wc -c < "$CAP" 2>/dev/null); : "${_b1:=0}"
+		[ "$_b1" -le "$_b0" ] && continue
+		# Said something new AND back at a prompt. Two `>` not three:
+		# the first character of every burst from this link is destroyed.
+		case "$(tail -c 8 "$CAP" 2>/dev/null | tr -d '\r\n')" in
+			*'>>'*) return 0 ;;
+		esac
+	done
+	# Silence here used to become a corrupted variable three lines later,
+	# which is a much worse place to find out about it.
+	echo "koti-net: far end did not return to a prompt after: $1" >&2
+	return 1
 }
 
 # Poll the capture for a pattern. busybox has no `timeout`, and a fixed sleep

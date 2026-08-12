@@ -646,6 +646,79 @@ on the ladder; the first two are small and change how the machine feels.
     number is what makes koti a machine you read the web *on*. Self-contained,
     no hardware, and the first job that uses koti's own screen for something a
     terminal cannot do.
+    📌 Survey `lynx`/`links`/`w3m` before writing one — porting `w3m` to rv32
+    musl is plausibly less work than a renderer, and this is one of the few
+    places on this project where reading beats measuring.
+
+---
+
+## Items added 2026-08-12 from the user's four questions
+
+21. [ ] 🔊 **Sound. A PORT, not an invention — the jack is proven on this board.**
+    `console/fpga/ulx3s.lpf:107` wires the **onboard 3.5 mm jack as a 4-bit R2R
+    ladder per channel** (`audio_l[3]`→B3, `audio_l[2]`→C3, …) and the user
+    heard music out of it on 2026-08-04. ⚠️ **koti's own LPF has NO audio pins**
+    — the only occurrence of the word is a comment about the cartridge.
+    Work: 8 pins in the LPF, a sigma-delta or PWM block, one MMIO register.
+    ⚠️ **Scope it in three honest tiers, they are not the same job:**
+    - **a beep** (tone register: frequency + gate) — an evening;
+    - **sampled audio** — koti has no DMA, so at 8 kHz the CPU has ~3600 clocks
+      per sample. A polling loop works; a small fabric FIFO is what keeps the
+      CPU from being pinned to the DAC. A real project;
+    - **an ALSA device** — much bigger than the RTL that feeds it. A raw
+      `/dev/audio`-style write is the cheap 80%.
+
+22. [ ] 🤖 **`koti ask` — koti as a client of a frontier model. THE TLS QUESTION
+    IS SETTLED: the ESP32 can do it.** Measured on hardware 2026-08-12:
+    ```
+    zz ['ussl', 'ssl', 'ubinascii', 'ujson']            <- all import
+    zz ussl-ok ['__class__', '__name__', 'wrap_socket']
+    zz freeheap 4096736                                 <- 4 MB free (SPIRAM)
+    ```
+    A handshake needs ~40-50 KB against 4 MB, so headroom is not the issue.
+    The endpoint is a plain `POST https://api.anthropic.com/v1/messages` with
+    two headers (`x-api-key`, `anthropic-version: 2023-06-01`) — raw HTTP, no
+    SDK, which is exactly what a machine like this wants. Smallest/cheapest
+    model is `claude-haiku-4-5`.
+    ⭐ **`ujson` on the ESP32 is what makes it work at all.** The link loses one
+    byte per burst (see item 11), and a lost byte makes JSON unparseable — so
+    **parse at the far end and send back only the extracted text.** Do not try
+    to move raw JSON across this wire.
+    ⚠️ An API key would sit in clear text in the initramfs or on the card, and
+    every call costs real money. Decide both before building it.
+
+23. [ ] 🌡️ **Weather station — the separate ESP32 + DHT22, and it needs NO new
+    plumbing.** Have that ESP32 serve a tiny HTTP endpoint on the hotspot and
+    let koti fetch `http://<its-ip>/`: a **local IP means no DNS** (item 19)
+    and **plain HTTP means no TLS** (item 22). It works with `koti-net` as it
+    stands today.
+    `weather` is then a shell script: fetch, append to a log on the card, print
+    the last 10 days. ⇒ **it needs items 13 and 14** — a clock for the
+    timestamps and the card actually mounted to hold the log. That dependency
+    is the argument for doing those two first.
+    ⚠️ **Do not oversell it.** A DHT22 measures where it *is*, ±0.5 °C, one
+    reading per 2 s, and needs a pull-up. Indoors that is room conditions, not
+    weather; real weather means a forecast API, which needs item 22's TLS.
+
+⛔ **NON-GOAL, so nobody re-proposes it: an LLM running ON koti.**
+Not "hard" — infeasible by about four orders of magnitude, and the arithmetic
+is short enough to check. koti is ~29 MHz with an **iterative 32-cycle
+multiplier** (`M extension`, above) and no FPU ⇒ **~0.9M multiplies/second**.
+A 0.5B-parameter model needs ~1e9 multiply-accumulates **per token**:
+- 1e9 ÷ 0.9e6 ≈ **1100 s/token — 18 minutes per token**; a 100-token reply is
+  **~30 hours**. Assume a generous 10x from int8 tricks and it is still ~2
+  minutes per token.
+- Memory: 0.5B at 4-bit ≈ **300 MB against koti's 25 MB** — 12x over, with the
+  weights streaming off the microSD every token.
+⛔ **Claude Code specifically is not a porting effort either**: it is Node.js,
+and V8 has no RV32 backend at all.
+⇒ The reachable version of this wish is **item 22** — the intelligence lives on
+the other end of the wire and koti is the terminal. That is not a consolation
+prize; it is what a 1970s terminal was.
+
+📌 **Suggested order across the whole list, given the dependencies above:**
+13 (clock) → 14 (card mount) → 23 (weather, which uses both and needs nothing
+new) → 19 (DNS) → 22 (`koti ask`) → 20 (browser) → 21 (sound).
 
 ## Architecture decisions — ALL FOUR CLOSED (2026-08-03 / 2026-08-04)
 

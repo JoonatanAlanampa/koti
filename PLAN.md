@@ -866,7 +866,50 @@ on the ladder; the first two are small and change how the machine feels.
     exceeding hvc0's 2 s poll ceiling.
     ⇒ Check which bitstream is in the flash BEFORE debugging either driver.
 
-19. [ ] 🌐 **DNS: `getaddrinfo(name, 80)` → `OSError: -202`**, so only literal
+19. [~] 🌐 **DIAGNOSED 2026-08-12: IT IS NOT A DNS BUG. `-202` MEANS "NOT ON A
+    NETWORK", AND THIS ITEM'S PREMISE WAS WRONG.**
+    Measured on hardware, both directions of the experiment:
+    ```
+    associated      getaddrinfo("example.com",80) -> 104.20.23.154   first try
+    not associated  OSError -202, three times running, for the NAME and for a
+                    variable holding a byte-perfect "example.com"
+                    (len 11, byte-sum 1113 — checked against the host)
+    ```
+    ⭐ **THE MACHINE HAD BEEN SAYING SO ALL EVENING AND NOBODY ASKED:**
+    `print(w.isconnected(), w.status(), w.ifconfig())` →
+    **`False 1001 ('0.0.0.0','0.0.0.0','0.0.0.0','0.0.0.0')`**. 1001 is
+    STAT_CONNECTING; `w.scan()` even refused with `STA is connecting, scan are
+    not allowed!`. `-202` is lwIP's *host not found*, and with no association
+    there is no resolver and no route — so the error is technically correct and
+    completely misleading.
+    ⇒ **The cause on the night was an iPhone hotspot that had gone to sleep.**
+    iOS drops Personal Hotspot when nothing is attached. Same SSID and password
+    had worked two hours earlier.
+    ⛔ **TWO WRONG THEORIES DIED ON THE WAY, both recorded so nobody re-runs
+    them**: (1) *the PC's serial adapter contends for the ESP32's receive line*
+    — disproved by releasing COM3 entirely and getting `-202` anyway; (2) *the
+    link corrupts the hostname in transit* — disproved by the byte-sum above.
+    The `exFmple.com` that suggested it was **echo** corruption on the return
+    path, which is the already-documented burst defect, not the sent data.
+    ✅ **FIXED IN `koti-net` (needs the next card write to reach the machine):**
+    - `link_up()` runs before every `get`, so a fetch with no association fails
+      immediately with *"NOT ON A NETWORK"* and decodes the status code
+      (1001 still connecting / 1000 idle / 201 no such network / 202 wrong
+      password / 203 refused) instead of dialling and returning `-202`;
+    - both `join` failure paths now say **"YOU ARE NOT CONNECTED"** outright.
+      `address FAILED` and `no answer in 45 s` were both printed on the night
+      and read as cosmetic;
+    - `s.settimeout(20)` — see below, a separate defect found the same hour.
+    🔴 **AND A REAL WEDGING BUG, FOUND AND FIXED:** `get` entered its read loop
+    after a FAILED connect, and `s.recv()` on an unconnected socket blocks
+    forever *inside `exec()`*, where nothing on koti's side can interrupt it.
+    The ESP32 then swallowed every later command — including ones typed at
+    koti's own keyboard — and only an `off`/`wake` recovered it. It wedged
+    twice in one hour before being spotted.
+    ⏳ **Still to prove on hardware**: that the new messages appear and that a
+    by-name fetch works once the hotspot is awake.
+
+    (original entry) 🌐 **DNS: `getaddrinfo(name, 80)` → `OSError: -202`**, so only literal
     addresses can be dialled. Item 11 routes around it with `get URL [HOST]`.
     ⚠️ Forcing `8.8.8.8` via `ifconfig` did NOT help and may drop the
     association (a static ifconfig replaces the DHCP lease — re-`join` after).

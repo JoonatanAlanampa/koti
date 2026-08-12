@@ -481,6 +481,13 @@ cmd_join() {
 			| sed 's/^KOTI-IP /koti-net: address /'
 		_failed=1
 		capture | grep -qa 'KOTI-IP FAILED' || _failed=0
+		# Same lesson as the timeout path: `address FAILED` is not a cosmetic
+		# line, it is the reason every later command fails.
+		if [ "$_failed" -eq 1 ]; then
+			echo "koti-net: ⚠ NOT CONNECTED. A phone hotspot that has gone" >&2
+			echo "koti-net: to sleep looks exactly like this — check it is on," >&2
+			echo "koti-net: then join again." >&2
+		fi
 		# Scrub before returning, on BOTH paths: the capture holds the REPL's
 		# echo of w.connect('ssid','password'). 0600 keeps other users out;
 		# emptying it keeps the password from sitting in RAM for the rest of
@@ -490,6 +497,11 @@ cmd_join() {
 		return $_failed
 	fi
 	echo "koti-net: no answer from the ESP32 in 45 s" >&2
+	# ⚠️ SAY WHAT IT IMPLIES. This line alone was printed on 2026-08-12 and
+	# read as a cosmetic timeout; everything after it then failed with
+	# OSError -202, which looks like DNS and is not.
+	echo "koti-net: ⚠ YOU ARE NOT CONNECTED. Every fetch after this will" >&2
+	echo "koti-net: fail with a DNS-looking error that is not about DNS." >&2
 	# ⚠️ Deliberately NOT dumping the raw capture here, unlike `get` — this
 	# one contains the password. Re-run the individual steps with
 	# `koti-net py` if the exchange needs to be watched.
@@ -534,6 +546,59 @@ cmd_scan() {
 	return 1
 }
 
+# ---------------------------------------------------------------------------
+# Is the far end actually ON a network? Ask before dialling.
+#
+# ⛔ THIS EXISTS BECAUSE `-202` COST A WHOLE EVENING, AND IT NEVER MEANT WHAT
+# PLAN.md SAID IT MEANT. Item 19 recorded `getaddrinfo(name, 80) -> OSError:
+# -202` as a DNS defect, and it is not one. Measured 2026-08-12:
+#
+#   associated     -> getaddrinfo("example.com",80) = 104.20.23.154, first try
+#   not associated -> OSError -202, every time, for names AND for the variable
+#                     holding a byte-perfect "example.com" (len 11, sum 1113)
+#
+# -202 is lwIP's "host not found", and with no association there is no resolver
+# and no route, so nothing is found and the error is technically correct and
+# completely misleading. The status register said so plainly the whole time:
+#
+#   zz-st False 1001 ('0.0.0.0','0.0.0.0','0.0.0.0','0.0.0.0')
+#
+# 1001 is STAT_CONNECTING — the ESP32 was still trying to reach a phone hotspot
+# that had gone to sleep. `join` even reported `address FAILED`, and neither
+# the user nor I read that as "everything after this will fail".
+#
+# ⇒ Fail EARLY and say the true thing. A fetch that cannot work should not
+# reach the far end at all.
+link_up() {
+	capture_reset
+	# `w` only exists if a join has run in THIS repl session; a bare
+	# NameError is the honest answer to "have you joined?", so it is
+	# caught here rather than being allowed to look like a network fault.
+	send "print('KOTI'+'-UP', w.isconnected(), w.status())" 2>/dev/null
+	if ! expect 'KOTI-UP' 8; then
+		echo "koti-net: the ESP32 is not answering, or no 'koti-net join'" >&2
+		echo "koti-net: has run since it was woken." >&2
+		return 1
+	fi
+	_st=$(capture | grep -a 'KOTI-UP' | tail -n 1)
+	case "$_st" in
+		*True*) return 0 ;;
+	esac
+	echo "koti-net: NOT ON A NETWORK — this fetch cannot work." >&2
+	echo "koti-net: $_st" >&2
+	case "$_st" in
+		*1001*) echo "koti-net: status 1001 = still CONNECTING. The access point" >&2
+		        echo "koti-net: is not answering — a phone hotspot that has gone to" >&2
+		        echo "koti-net: sleep looks exactly like this. Check it is on, then" >&2
+		        echo "koti-net: run 'koti-net join' again." >&2 ;;
+		*1000*) echo "koti-net: status 1000 = IDLE. Run 'koti-net join SSID PASS'." >&2 ;;
+		*201*)  echo "koti-net: status 201 = no such network in range." >&2 ;;
+		*202*)  echo "koti-net: status 202 = wrong password." >&2 ;;
+		*203*)  echo "koti-net: status 203 = the access point refused it." >&2 ;;
+	esac
+	return 1
+}
+
 cmd_get() {
 	[ $# -ge 1 ] || die "usage: koti-net get URL [HOST]   (http only, no https)"
 	_u=${1#http://}
@@ -567,6 +632,9 @@ cmd_get() {
 		*"'"*) die "quote in URL or host: use 'koti-net repl' by hand" ;;
 	esac
 	reader_running || die "not awake — run 'koti-net wake' first"
+	# ⛔ BEFORE ANY OF THE WORK. Dialling without a link is what produced
+	# an evening of -202s that read as a name-server fault; see link_up.
+	link_up || return 1
 
 	capture_reset
 	send 'import socket, sys'
@@ -574,6 +642,31 @@ cmd_get() {
 	send "h='$_host'"
 	send "p='$_path'"
 	send 's=socket.socket()'
+	# ⛔ A TIMEOUT, BECAUSE A FAILED CONNECT WEDGES THE FAR END PERMANENTLY.
+	# Measured 2026-08-12: `s.connect(...)` raised OSError -202, and this
+	# command carried on regardless and ran its read loop anyway —
+	#
+	#     exec(c)
+	#     zz KOTI-BEGIN
+	#     (nothing, ever)
+	#
+	# because `s.recv(256)` on a socket that was never connected BLOCKS. The
+	# REPL never returned to `>>>`, so every later command — including ones
+	# typed by hand at koti's own keyboard — went into a far end that was no
+	# longer reading, and `get` reported "no complete reply" with an EMPTY
+	# capture. It took an off/wake power cycle of the ESP32 to recover.
+	#
+	# ⚠️ The read loop is inside exec(), so nothing between here and the END
+	# marker can be interrupted from this side. A timeout on the socket is the
+	# only thing that can end it, which is why it is set here at creation
+	# rather than being conditional on the connect working: by the time we
+	# could test for that, the loop is already running.
+	#
+	# 20 s is well above any real fetch on this link (the whole info.cern.ch
+	# page arrives in about two) and well below the 60 s deadline `expect`
+	# below applies, so a stall surfaces as a traceback the capture can show
+	# rather than as a hang with no evidence in it.
+	send 's.settimeout(20)'
 	# `a`, not `h`: connect to the ADDRESS, ask for the NAME. When no second
 	# argument was given the two are the same string and this is the ordinary
 	# case, unchanged.

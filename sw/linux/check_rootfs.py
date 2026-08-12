@@ -42,24 +42,40 @@ EF_RISCV_RVC = 0x0001
 EF_RISCV_FLOAT_ABI_SINGLE = 0x0002
 EF_RISCV_FLOAT_ABI_DOUBLE = 0x0004
 
-# THE SIZE BUDGET, and it is arithmetic rather than taste.
+# THE SIZE BUDGET.
 #
-# koti's usable window is 12 MiB — the kernel loads 4 MiB into a 16 MiB window
-# — and the boot log reports "Memory: 8468K/12288K available", so the kernel
-# and its early allocations already spend about 3.8 MB of it.
+# ⚠️ ITS ORIGINAL PREMISE IS STALE AND THE NUMBER IS KEPT ANYWAY. Read both
+# halves before changing it, because the tempting move is wrong.
 #
-# An initramfs then costs its own size TWICE at the peak: once as the cpio
-# embedded in the Image (freed later, with initmem, but present while it is
-# being unpacked) and once as the unpacked files living in tmpfs. So
+# As first derived, this was a hard physical wall:
 #
-#     3.8 MB + 2 x cpio  +  room to actually run programs  <=  12 MB
+#     koti's usable window is 12 MiB — the kernel loads 4 MiB into a 16 MiB
+#     window — and the boot log reported "Memory: 8468K/12288K available", so
+#     the kernel and its early allocations already spend about 3.8 MB of it.
+#     An initramfs costs its own size TWICE at the peak: once as the cpio
+#     embedded in the Image (freed later, with initmem, but present while it is
+#     being unpacked) and once as the unpacked files living in tmpfs. So
+#         3.8 MB + 2 x cpio + room to actually run programs <= 12 MB
+#     Leaving 3 MB to run in gives cpio <= 2.6 MB. Rounded down to 2.5 MiB.
 #
-# Leaving 3 MB to run in gives cpio <= 2.6 MB. Rounded down to 2.5 MiB.
+# ⛔ THAT 12 MiB IS NO LONGER TRUE. koti has had all 32 MB since 236d169
+# (2026-08-08), confirmed on hardware: MemTotal went 8796 -> 25020 kB. The wall
+# this number was measured against moved, and nobody updated the comment — so
+# the arithmetic above describes a machine that has not existed for four days.
 #
-# The first successful build was 4.09 MiB of glibc and would not have fitted;
-# it is what this limit was derived from. If a future rootfs needs more, the
-# honest move is to raise the RAM or move the rootfs to microSD (ladder item
-# 7), not to raise this number and find out at boot.
+# ⭐ THE LIMIT STAYS AT 2.5 MiB, AND NOW IT IS A DISCIPLINE RATHER THAN A WALL.
+# The reason is that the initramfs is not a transient: with no rootfs on the
+# card's p2, /init keeps it as `/` for the whole session, so every megabyte in
+# it is a megabyte the machine can never use for anything else — and it is
+# charged twice while unpacking. On 2026-08-12 BR2_PACKAGE_E2FSPROGS took the
+# cpio to 7.04 MiB and would have BOOTED FINE, silently spending about a
+# quarter of RAM on thirteen programs nothing calls. The gate caught a cost
+# that no boot log would ever have mentioned.
+#
+# ⇒ Raise this only against a MEASUREMENT (MemTotal after boot, and what the
+# machine still has to run in), never to make a build pass. The honest
+# alternatives are still the ones written here originally: trim the rootfs, or
+# move it to the microSD.
 MAX_CPIO_BYTES = 2560 * 1024
 
 # (symbol, expected). "n" means absent or "is not set" — kconfig writes one and

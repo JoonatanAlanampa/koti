@@ -714,9 +714,25 @@ on the ladder; the first two are small and change how the machine feels.
     exited. And a filesystem it cannot repair is **still mounted**, loudly:
     refusing would hide the user's files behind a failure they cannot act on
     from a machine with no rescue shell.
-    ⚠️ **Size**: the cpio was 1.18 MiB against a 2.5 MiB budget when this
-    landed. If a later addition presses on that budget, this is a fair thing to
-    reconsider — the degrade path (mount unchecked, say so) already exists.
+    ⛔⛔ **SIZE: THE FIRST ATTEMPT FAILED THE BUDGET AND THE ESTIMATE WAS WRONG
+    BY AN ORDER OF MAGNITUDE.** Run 31614542225 measured `rootfs.cpio` **1.18
+    MiB → 7.04 MiB** against a 2.5 MiB budget, because Buildroot installs
+    **fourteen** e2fsprogs programs and `BR2_STATIC_LIBS=y` gives each its own
+    libc. "A few hundred KiB for a static e2fsck" was reasoning about a binary
+    Buildroot never installs alone.
+    ⇒ `sw/linux/post-build.sh` deletes the other thirteen and keeps `e2fsck`
+    plus an `fsck.ext2` symlink (which also makes busybox's `fsck` dispatcher
+    work — it execs `fsck.<type>`, and that missing file is why item 18 could
+    not be done with busybox at all).
+    ⭐ **Nothing would have failed at boot.** koti has 32 MB, so a 7 MiB
+    initramfs fits; it would simply have spent ~a quarter of RAM, forever, on
+    programs nothing calls, with no boot log mentioning it. **That is what a
+    size gate is for — catching a cost that runs perfectly.**
+    📌 While fixing it: `check_rootfs.py`'s budget comment still described a
+    **12 MiB machine**, four days after `236d169` gave koti all 32 MB
+    (`MemTotal` 8796 → 25020 kB). The comment is corrected; **the 2.5 MiB
+    number is deliberately unchanged** — with no rootfs on p2 the initramfs is
+    `/` for the whole session, so it is a discipline now rather than a wall.
 
     (original entry) 🧹 **The card mounts unchecked on every boot** — `EXT2-fs (kotisd2):
     warning: mounting unchecked fs, running e2fsck is recommended`, seen again

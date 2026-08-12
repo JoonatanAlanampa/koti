@@ -186,11 +186,27 @@ BR2_SYSTEM_DHCP=""
 # machine as it stood would fail in a way that reads like a broken card. The
 # checker itself has to come from e2fsprogs.
 #
-# ⚠️ IT IS AFFORDABLE, WHICH IS NOT THE SAME AS FREE. The cpio budget in
-# check_rootfs.py is 2.5 MiB and the rootfs was 1.18 MiB when this was added —
-# about 1.35 MiB of headroom, against a few hundred KiB for a static musl
-# e2fsck. If a future addition pushes against that budget, this is a fair thing
-# to reconsider: the check runs at boot on a machine that is usually switched
-# off cleanly, and S45kotisd already degrades to mounting unchecked when the
-# binary is missing rather than refusing to boot.
+# ⛔⛔ AND IT IS NOT ONE BINARY. THE ESTIMATE HERE WAS WRONG BY AN ORDER OF
+# MAGNITUDE AND check_rootfs.py IS WHAT CAUGHT IT.
+#
+# This comment used to predict "a few hundred KiB for a static musl e2fsck"
+# against 1.35 MiB of headroom. What actually happened, measured in run
+# 31614542225:
+#
+#     rootfs.cpio  1.18 MiB  ->  7.04 MiB     (budget 2.50 MiB, FAILED)
+#
+# because Buildroot installs FOURTEEN programs — e2fsck, mke2fs, tune2fs,
+# badblocks, dumpe2fs, e2undo, e2freefrag, filefrag, logsave, mklost+found,
+# e4crypt, chattr, lsattr, fsck — and BR2_STATIC_LIBS=y gives every one of them
+# its own copy of libc and libext2fs. Reasoning about "a static e2fsck" was
+# reasoning about a binary Buildroot never installs on its own.
+#
+# ⇒ sw/linux/post-build.sh DELETES the other thirteen and leaves e2fsck plus an
+# fsck.ext2 symlink. Item 18 needs a checker, not a filesystem toolkit.
+#
+# ⭐ NOTHING WOULD HAVE FAILED AT BOOT. koti has 32 MB now, so a 7 MiB
+# initramfs fits — it would simply have spent about a quarter of the machine's
+# RAM, forever, to make one boot-time check possible, and no boot log would
+# have mentioned it. That is the whole value of a size gate: it catches a cost
+# that runs perfectly.
 BR2_PACKAGE_E2FSPROGS=y

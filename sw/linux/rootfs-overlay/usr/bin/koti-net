@@ -638,8 +638,58 @@ cmd_get() {
 
 	capture_reset
 	send 'import socket, sys'
-	send "a='$_addr'"
-	send "h='$_host'"
+
+	# ⛔⛔ SEND THE HOSTNAME, THEN CHECK IT ARRIVED, AND RETRY IF IT DID NOT.
+	# THIS IS THE REAL CAUSE OF PLAN ITEM 19's `-202`, MEASURED 2026-08-12.
+	#
+	# The far end drops characters when lines arrive back to back. `send`
+	# paces at 150 ms and MicroPython 1.14 has NO raw-paste flow control, so
+	# with eight lines in a row its input buffer loses bytes. Captured while
+	# the ESP32 was provably associated (`True 1010 172.20.10.2`):
+	#
+	#     )='exmple.com'      <- the 'a' of example is gone   (10 chars, not 11)
+	#     0='example.co'      <- the 'm' is gone
+	#     s.connect(socket.getaddrinfo(a,80)[0][-1])
+	#     OSError: -202
+	#
+	# ⇒ `-202` was TRUTHFUL the whole time: `exmple.com` really does not
+	# resolve. Item 19 spent months recorded as a DNS defect because the error
+	# was read before the variable was. A single `koti-net py 'a="example.com"'`
+	# arrives byte-perfect — len 11, byte-sum 1113 — so this is specifically a
+	# BURST problem, which is why the same fetch worked some mornings and not
+	# others and never looked deterministic.
+	#
+	# ⚠️ A BIGGER DELAY IS THE WRONG FIX. It would slow every command to hide a
+	# fault that would still fire on a slow day, and there is no delay that is
+	# provably enough on a link with no flow control. Checking is cheap, exact,
+	# and says so out loud when it retries.
+	#
+	# Length alone is the discriminator: a dropped character always shortens
+	# the string, and it costs one `${#}` here against a byte-sum that busybox
+	# would need `od` and a pipeline to compute.
+	_want="${#_addr} ${#_host}"
+	_try=1
+	while : ; do
+		send "a='$_addr'"
+		send "h='$_host'"
+		capture_reset
+		send "print('KOTI'+'-VA', len(a), len(h))"
+		_got=""
+		expect 'KOTI-VA' 8 && _got=$(capture | grep -a 'KOTI-VA' | tail -n 1)
+		case "$_got" in
+			*"$_want"*) break ;;
+		esac
+		if [ "$_try" -ge 4 ]; then
+			echo "koti-net: the link kept dropping characters from the" >&2
+			echo "koti-net: hostname (wanted lengths '$_want', got '$_got')." >&2
+			echo "koti-net: giving up rather than dialling a corrupted name," >&2
+			echo "koti-net: which is what -202 has always really been." >&2
+			return 1
+		fi
+		echo "koti-net: hostname garbled in transit, retrying ($_try)" >&2
+		_try=$((_try + 1))
+	done
+
 	send "p='$_path'"
 	send 's=socket.socket()'
 	# ⛔ A TIMEOUT, BECAUSE A FAILED CONNECT WEDGES THE FAR END PERMANENTLY.

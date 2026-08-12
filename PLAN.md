@@ -591,7 +591,13 @@ defects:
 Measured at koti's own shell the day networking closed, not inferred. None was
 on the ladder; the first two are small and change how the machine feels.
 
-13. [~] 🕐 **BUILT 2026-08-12, NOT YET CONFIRMED ON HARDWARE.** `koti-net time`
+13. [x] 🕐✅ **CONFIRMED ON HARDWARE 2026-08-12 — koti wakes up knowing what day
+    it is.** Set the clock, `poweroff`, BTN0, and the next boot printed
+    `koti: clock restored from the card: Wed Aug 12 15:53:35 UTC 2026`, with
+    `date` reading 15:53:57 — the 22 s the boot took — instead of 1970.
+    ⭐ `date -s @1786550000` returned exactly the instant `days_from_civil`
+    computed, so the epoch arithmetic and busybox agree on real hardware.
+    ⏳ Only `koti-net time` itself is unproven (blocked by item 27). `koti-net time`
     sets the clock from the `Date:` header of any HTTP reply, and `get` does the
     same on its own while the clock is still unset (never afterwards, so
     browsing cannot move a correct clock). The time is then written to
@@ -623,7 +629,11 @@ on the ladder; the first two are small and change how the machine feels.
     (a €2 DS3231 on the spare gp/gn pins) is the follow-up if the time should
     survive a power cycle, and is a separate, larger job.
 
-14. [~] 💾 **BUILT 2026-08-12, NOT YET CONFIRMED ON HARDWARE.**
+14. [x] 💾✅ **CONFIRMED ON HARDWARE 2026-08-12.** `koti: microSD mounted at
+    /mnt` on both boots, and `mount | grep kotisd` answers
+    `/dev/kotisd2 on /mnt type ext2 (rw,relatime,errors=continue)`.
+    ⭐ The `stop` path works too: after `poweroff` the next boot found the
+    filesystem CLEAN, which only happens if S45kotisd unmounted it.
     `sw/linux/rootfs-overlay/etc/init.d/S45kotisd` mounts `/dev/kotisd2` at
     `/mnt` at every boot, and says which of four things happened.
     ⛔ **A script, not an `/etc/fstab` line, and the reason is item 7**: the card
@@ -656,7 +666,9 @@ on the ladder; the first two are small and change how the machine feels.
     Two lines in `S99koti` or `/etc/fstab`. ⚠️ Keep the `sync` habit — ext2
     here has no journal.
 
-15. [~] 🪤 **WRAPPED 2026-08-12, NOT YET CONFIRMED ON HARDWARE.**
+15. [x] 🪤✅ **CONFIRMED ON HARDWARE 2026-08-12.** `ping 8.8.8.8` answers
+    `ping: koti has no IP address of its own, so this cannot work.` and prints
+    the three koti-net commands.
     `/etc/profile.d/10-koti.sh` defines `ping` and `wget` as shell functions
     that name the reason and print the three `koti-net` commands instead.
     ⛔ **Functions, not shims in `$PATH`** — busybox installs its applets as
@@ -675,12 +687,29 @@ on the ladder; the first two are small and change how the machine feels.
     them to say `use koti-net`. (Genuinely fixed only by item 11's IP-address
     caveat, which is a much bigger job.)
 
-16. [ ] 🔴 **Duplicate keystrokes, undiagnosed** — the first USB login echoed
+16. [ ] 🔴 **Duplicate/lost keystrokes — A MECHANISM AT LAST, 2026-08-12.**
+    Observed on the bench: `/etc/init.d/S45kotisd start` arrived as `tart`
+    (22 characters gone), `date` as `ddate`, and `ps` RAN TWICE.
+    ⭐ **`ps` showed TWO `-sh` processes (PIDs 80 and 81)** — the documented
+    doubled console — and both are fed from the SAME single-entry input. Two
+    consumers popping one byte register do not each get a copy: they SPLIT the
+    stream, which is precisely the shape of the corruption seen. That also
+    explains why a long line is shredded while a short one usually survives.
+    ⚠️ It is the same class of defect as the two-`cat` capture split that
+    `koti-net`'s `reader_start` already documents, one layer down.
+    📌 Next step is to test it deliberately: log in on ONE console only and see
+    whether the corruption stops. If it does, the doubled getty is the cause and
+    the 2026-08-09 decision to keep hvc0's echo has a cost nobody had priced.
+
+    (original entry) 🔴 **Duplicate keystrokes, undiagnosed** — the first USB login echoed
     `rooo. .. .t. .t`, never reproduced. Recorded at item 8 and repeated here
     because of what changed since: **PS/2 is deleted, so there is no fallback
     input path.** If the keyboard misbehaves there is nothing else to type on.
 
-17. [~] 🔴 **DE-ADVERTISED AND MADE RECOVERABLE 2026-08-12. ⛔ NOT DIAGNOSED —
+17. [~] 🔴 **DE-ADVERTISED AND MADE RECOVERABLE 2026-08-12. ⛔ STILL UNTESTED ON
+    HARDWARE — `koti-net` now dies BEFORE the gate**, at the top-of-script
+    `[ -c "$DEV" ]` check: `koti-net: /dev/ttyKOTI0 does not exist`. See item 27.
+    The `-f` gate is therefore unexercised on the bench. ⛔ NOT DIAGNOSED —
     do not read this as a fix.** It is out of the help text, it requires `-f`,
     and it prints the recovery procedure before it runs.
     ⭐ **One thing was plainly wrong independent of the cause and is fixed: it
@@ -701,7 +730,11 @@ on the ladder; the first two are small and change how the machine feels.
     Diagnose or remove it — a command that hangs the computer should not be
     advertised.
 
-18. [~] 🧹 **CHECKED AT BOOT FROM 2026-08-12, NOT YET CONFIRMED ON HARDWARE.**
+18. [x] 🧹✅ **CONFIRMED ON HARDWARE 2026-08-12, AND IT EARNED ITS PLACE ON THE
+    FIRST BOOT IT EXISTED FOR.** `koti: e2fsck repaired /dev/kotisd2 (exit 1)
+    — mounting it`: the machine had been powered off without `sync`, the
+    filesystem was genuinely dirty, and the checker fixed it. The next boot,
+    after a clean shutdown, printed nothing — correct, because rc was 0.
     `S45kotisd` runs `e2fsck -p` before it mounts.
     ⛔ **busybox could not supply this.** Its `fsck` applet is only a dispatcher
     — it execs a `fsck.ext2` that did not exist, so `fsck /dev/kotisd2` on the
@@ -739,6 +772,28 @@ on the ladder; the first two are small and change how the machine feels.
     2026-08-12. Nothing ever fsck's it, ext2 has no journal, and this machine
     is powered off by pulling a charger. Slow-burn corruption risk on the one
     thing that persists.
+
+27. [ ] 🔌🔴 **NEW 2026-08-12: `/dev/ttyKOTI0` DOES NOT EXIST on the running
+    machine, so koti has no network at all.** `koti-net` dies immediately with
+    `does not exist — is koti_esp bound? check dmesg`, which blocks items 13's
+    network half, 17, 19, 22 and 23.
+    ⚠️ **NOT caused by this batch** — nothing in it touches `koti_esp.c`, the
+    devicetree or `src/`. Both boot logs show `kotisd`, the USB keyboard and
+    SLIP registering, and **no esp/serial line at all**.
+    📌 **First hypothesis to test, and it is cheap: the running bitstream.**
+    ⛔ The DTB lives in the FIRMWARE inside the BITSTREAM, so the `serial@70000`
+    node comes from whatever bitstream is in the config flash — not from the
+    kernel. A `fujprog` load goes to SRAM and is LOST on a power cycle, so a
+    board that was networking earlier today can lose the node simply by being
+    power-cycled back onto an older flashed bitstream. That also fits the second
+    symptom below.
+    🔴 **Second symptom, possibly the same cause: COM3 INPUT DOES NOT REACH
+    koti.** Output is perfect (the whole boot log arrives, and
+    `echo COM3-TEST > /dev/hvc0` appears), but nothing typed from the PC ever
+    echoes. Every command that ran on 2026-08-12 was typed at koti's own
+    keyboard; `tools/kdrive.py` achieved nothing, despite `echo_wait=3.0`
+    exceeding hvc0's 2 s poll ceiling.
+    ⇒ Check which bitstream is in the flash BEFORE debugging either driver.
 
 19. [ ] 🌐 **DNS: `getaddrinfo(name, 80)` → `OSError: -202`**, so only literal
     addresses can be dialled. Item 11 routes around it with `get URL [HOST]`.
@@ -805,7 +860,10 @@ on the ladder; the first two are small and change how the machine feels.
     reading per 2 s, and needs a pull-up. Indoors that is room conditions, not
     weather; real weather means a forecast API, which needs item 22's TLS.
 
-24. [~] 🧹 **BUILT 2026-08-12, NOT YET CONFIRMED ON HARDWARE.**
+24. [x] 🧹✅ **CONFIRMED ON HARDWARE 2026-08-12.** `koti peek mtime` returned
+    `0x00020010  0x72C2DF98 (CLINT cycle counter, low 32 …)` — a live counter
+    read through /dev/mem. `koti peek kbd` REFUSED, with the keystroke warning.
+    `koti help why is the date wrong` printed the CLOCK section.
     `/usr/bin/koti` — `koti peek` and `koti help`, and neither uses a model.
     - **`koti peek`** is a table of physical addresses (from `koti.dts` and
       `src/project.sv`) plus `devmem`. ✅ `CONFIG_DEVMEM=y` and

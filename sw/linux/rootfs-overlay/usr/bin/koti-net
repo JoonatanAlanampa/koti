@@ -720,7 +720,28 @@ cmd_get() {
 	# `a`, not `h`: connect to the ADDRESS, ask for the NAME. When no second
 	# argument was given the two are the same string and this is the ordinary
 	# case, unchanged.
-	send 's.connect(socket.getaddrinfo(a,80)[0][-1])'
+	#
+	# ⛔⛔ THE CONNECT IS CHECKED, BECAUSE ITS SILENT FAILURE CAUSES BOTH OF
+	# THIS COMMAND'S HISTORIC BUGS. Measured 2026-08-12: a connect that failed
+	# left the socket unconnected, the code carried on regardless, `s.send`
+	# raised `OSError: 128` (ENOTCONN), and the read loop below then blocked
+	# forever in `recv()` inside `exec()` — wedging the ESP32 until it was
+	# power-cycled. Worse, the connect's own traceback was erased by the next
+	# command's capture_reset, so the evidence for WHY was gone by the time
+	# anyone looked.
+	#
+	# Putting the connect and its success marker inside ONE exec() is what
+	# makes the failure legible: if connect raises, the print never runs, the
+	# marker never appears, and we stop here with the traceback still in the
+	# capture instead of marching on into a wedge.
+	send "c1=\"s.connect(socket.getaddrinfo(a,80)[0][-1])
+print('zz','KOTI'+'-CN')\""
+	send 'exec(c1)'
+	if ! expect 'KOTI-CN' 30; then
+		echo "koti-net: could not connect to $_addr. The far end said:" >&2
+		capture >&2
+		return 1
+	fi
 	# 🪤 `.encode()` ON THE WHOLE REQUEST, not b'GET '+p. `h` and `p` are str
 	# and MicroPython refuses bytes+str exactly as CPython does — the error
 	# arrives as a TypeError traceback echoed back through the REPL, which is

@@ -700,7 +700,64 @@ on the ladder; the first two are small and change how the machine feels.
     reading per 2 s, and needs a pull-up. Indoors that is room conditions, not
     weather; real weather means a forecast API, which needs item 22's TLS.
 
-⛔ **NON-GOAL, so nobody re-proposes it: an LLM running ON koti.**
+24. [ ] 🧹 **The housekeeper, tier 1: NO MODEL AT ALL.** The two example
+    questions want different machines, and one of them wants no intelligence:
+    - **"what is in memory location x" is not an AI question** — it is
+      `devmem`. Deterministic, instant, exact. A neural net in front of it
+      would be slower *and* occasionally wrong. koti has genuinely interesting
+      things to peek at (`esp_rx_count`, `VGA_BASE`, the SDRAM window,
+      `/proc`), so `koti peek 0x...` is an hour's work and zero weights.
+    - **"how do I do X" is retrieval, not generation** — the answer is already
+      in `MANUAL.md` and `koti-help`; the job is finding the right section.
+      A command table plus `grep` covers most of it in ~200 lines of shell.
+    ⇒ Build this first whatever else happens: it makes koti self-documenting,
+    and it is the fallback the next two items degrade *to* rather than fail
+    into.
+
+25. [ ] 🧠⭐ **The housekeeper, tier 2: A TINY INTENT CLASSIFIER — TRAINED ON
+    THE PC, RUNNING ON koti. This is the one where self-built weights genuinely
+    pay, and it is small enough to understand end to end.**
+    The model does not answer anything. It maps a fuzzily-worded question onto
+    one of N known intents, and the intent then runs a **deterministic** action
+    from item 24. ⇒ a misclassification shows the wrong help section; it can
+    never invent a fact. That safety property is the reason to build it this
+    way round.
+    **Architecture that suits THIS machine** (hashed bag-of-words / char
+    n-grams → embedding → one hidden layer → softmax):
+    - vocab 4096 × 128-dim embedding = **524K params ≈ 512 KB at int8**;
+    - ⭐ **the embedding table costs almost nothing at inference because it is a
+      LOOKUP, not a matmul** — only the ~10 words actually present contribute,
+      as 10 × 128 = **1280 adds, no multiplies**;
+    - hidden 128×64 = 8192 MACs, output 64×50 = 3200 MACs;
+    - **≈ 11K MACs total ⇒ ~12 ms** even at koti's slow 0.9M MAC/s.
+    ⇒ **Instant on the real machine, half a megabyte on the card.** No
+    attention, no sequence model, no float — integer dot products.
+    **Training is a laptop job of minutes**, and the interesting work is the
+    data: ~10-20 phrasings per intent, written by hand. ⚠️ **Training never
+    happens on koti** — train on the PC or in CI, ship the weights to the
+    microSD, koti does inference only. Same split as the kernel: heavy build in
+    the cloud, artifact on the card.
+    📌 Have it emit a confidence; below a threshold, fall through to item 24's
+    `grep`. The model is then a pure improvement over the fallback, never a
+    regression.
+
+26. [ ] 🔬 **The housekeeper, tier 3: a ~5M-parameter TERNARY generative model.**
+    A learning project, not the thing that makes koti useful — but the
+    arithmetic is real, and it is the item that corrects the non-goal below.
+    **Ternary weights {−1, 0, +1} remove the multiplier from the loop**: a MAC
+    becomes an add or a subtract, so koti goes from ~0.9M to **~10M MAC/s**, a
+    ~10x speed-up for free. At ~2N ops per token that is **~5M parameters ≈ 1
+    token/second**, and at ~1.6 bits/weight **~1 MB of weights** against 25 MB
+    of RAM.
+    ⚠️ What stays true is what 5M parameters can *do*: a narrow learned domain.
+    Not facts, not reasoning, not open questions. Attempt it to learn how, not
+    to make the machine useful.
+
+⛔ **NON-GOAL, so nobody re-proposes it: a FRONTIER-CLASS LLM running ON koti.**
+⚠️ **Read the scope of this before quoting it: it rules out a ~0.5B model doing
+multiplies, NOT items 25 and 26.** A tiny classifier is milliseconds and a few
+hundred KB; a ternary 5M-param model is ~1 token/second. Those are buildable.
+What is not:
 Not "hard" — infeasible by about four orders of magnitude, and the arithmetic
 is short enough to check. koti is ~29 MHz with an **iterative 32-cycle
 multiplier** (`M extension`, above) and no FPU ⇒ **~0.9M multiplies/second**.
@@ -712,13 +769,19 @@ A 0.5B-parameter model needs ~1e9 multiply-accumulates **per token**:
   weights streaming off the microSD every token.
 ⛔ **Claude Code specifically is not a porting effort either**: it is Node.js,
 and V8 has no RV32 backend at all.
-⇒ The reachable version of this wish is **item 22** — the intelligence lives on
-the other end of the wire and koti is the terminal. That is not a consolation
-prize; it is what a 1970s terminal was.
+⇒ **There are two reachable versions of this wish, and they are different
+wishes.** Item 22 rents someone else's model over a wire — koti as a terminal,
+which is what a 1970s terminal was and no bad thing. Items 24-26 put weights
+you built yourself on the machine. ⭐ **The second one is the one that fits this
+project's spine** — physics → cells → CPU → Linux → **your own weights** is the
+same move one layer up. Renting is useful; building is the point.
 
 📌 **Suggested order across the whole list, given the dependencies above:**
-13 (clock) → 14 (card mount) → 23 (weather, which uses both and needs nothing
-new) → 19 (DNS) → 22 (`koti ask`) → 20 (browser) → 21 (sound).
+13 (clock) → 14 (card mount) → **24 (housekeeper, no model — a day, and it
+makes koti self-documenting)** → 23 (weather, which uses 13+14 and needs no new
+plumbing) → **25 (the intent classifier — the first self-built weights)** →
+19 (DNS) → 22 (`koti ask`) → 20 (browser) → 21 (sound) → 26 (ternary model,
+whenever curiosity outranks utility).
 
 ## Architecture decisions — ALL FOUR CLOSED (2026-08-03 / 2026-08-04)
 

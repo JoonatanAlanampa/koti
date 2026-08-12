@@ -36,6 +36,18 @@
 
 DEV=/dev/kotisd2
 MP=/mnt
+# Default; each branch below sets it once the mount state is actually known.
+#
+# ⛔ IT IS NOT ALWAYS UNDER /mnt. If the card is the ROOT filesystem — which is
+# what /init does whenever p2 carries an executable /sbin/init — then /mnt is
+# empty and the persistent place is `/`. Leaving this hardcoded meant the clock
+# silently stopped surviving reboots in exactly the configuration where the card
+# is most obviously present, with no error: restore_clock would find no file and
+# return 0, which is indistinguishable from a first boot.
+#
+# The decision lives in the `case` below rather than in the functions, so
+# restore_clock and save_clock stay pure functions of $CLOCKFILE and can be
+# tested without a card (sw/linux/test_rootfs_shell.sh does exactly that).
 CLOCKFILE=$MP/.koti-clock
 
 # ---------------------------------------------------------------------------
@@ -139,6 +151,7 @@ case "$1" in
 		# "which root am I on" that docs/MANUAL.md says to read, not infer.
 		if grep -q "^$DEV / " /proc/mounts 2>/dev/null; then
 			echo "koti: the microSD IS / — nothing to mount"
+			CLOCKFILE=/.koti-clock
 			restore_clock
 			exit 0
 		fi
@@ -158,6 +171,7 @@ case "$1" in
 		check_card
 		if mount -t ext2 -o rw "$DEV" "$MP" 2>/dev/null; then
 			echo "koti: microSD mounted at $MP"
+			CLOCKFILE=$MP/.koti-clock
 			restore_clock
 		else
 			echo "koti: $DEV would not mount at $MP — carrying on without it"
@@ -168,9 +182,17 @@ case "$1" in
 		# unmount is what makes the write durable, and after it the file is
 		# unreachable.
 		if grep -q " $MP " /proc/mounts 2>/dev/null; then
+			CLOCKFILE=$MP/.koti-clock
 			save_clock
 			sync
 			umount "$MP" 2>/dev/null
+		elif grep -q "^$DEV / " /proc/mounts 2>/dev/null; then
+			# Root is the card: nothing to unmount, but the clock still
+			# wants saving, and `sync` is the only thing that makes it
+			# durable on a journal-less filesystem.
+			CLOCKFILE=/.koti-clock
+			save_clock
+			sync
 		fi
 		;;
 	*)

@@ -127,9 +127,24 @@ cmd_peek() {
 		_safe=$(echo "$_row" | cut -d'|' -f3)
 		_desc=$(echo "$_row" | cut -d'|' -f4)
 	else
+		# ⛔ VALIDATE THE HEX DIGITS, NOT JUST THE `0x`. $(( )) does not
+		# return an error for a malformed number — it ABORTS THE SHELL, so
+		# `koti peek 0xZZ` printed
+		#     koti: line 141: 0xZZ: value too great for base
+		# and died, with no `koti:` sentence and nothing about what to type
+		# instead. A command whose job is to answer questions exactly must
+		# not fail in the voice of the shell it happens to be written in.
+		# `|| die` cannot catch it, because there is no exit status to
+		# catch — which is why this is a check and not a trap.
 		case "$_what" in
-			0x*|0X*) _addr=$_what ;;
+			0x*|0X*)
+				case "${_what#0[xX]}" in
+					''|*[!0-9a-fA-F]*)
+						die "'$_what' is not a hex address" ;;
+				esac
+				_addr=$_what ;;
 			*[!0-9]*) die "no such name '$_what' (koti peek --list), and it is not an address" ;;
+			''*) die "empty address" ;;
 			*) _addr=$_what ;;
 		esac
 		_safe=y

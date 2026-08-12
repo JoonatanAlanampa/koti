@@ -726,16 +726,26 @@ cmd_time() {
 # the initramfs would produce a file that looks like a saved clock, is thrown
 # away at power-off, and is never restored — the failure would present as "the
 # clock save does not work" with a perfectly good file sitting there.
-CLOCKFILE=/mnt/.koti-clock
+# ⚠️ THE FILE IS NOT ALWAYS UNDER /mnt, and hardcoding it there made this
+# silently useless in one of the two supported configurations. If the card is
+# the ROOT filesystem — what /init does whenever p2 carries an executable
+# /sbin/init — then /mnt is empty and `/` is the persistent place. The old
+# version refused to save on that machine and blamed the mount.
+# S45kotisd picks the same two paths by the same rule; they have to agree, or
+# the boot restores from a file this never writes.
 clock_save() {
-	if ! grep -q ' /mnt ' /proc/mounts 2>/dev/null; then
-		echo "koti-net: /mnt is not mounted; the time will not survive a" \
-		     "power cycle" >&2
+	if grep -q ' /mnt ' /proc/mounts 2>/dev/null; then
+		_cf=/mnt/.koti-clock
+	elif grep -q '^/dev/kotisd2 / ' /proc/mounts 2>/dev/null; then
+		_cf=/.koti-clock
+	else
+		echo "koti-net: the microSD is not mounted, so the time will not" \
+		     "survive a power cycle" >&2
 		return 1
 	fi
-	date -u +%s > "$CLOCKFILE" 2>/dev/null || return 1
+	date -u +%s > "$_cf" 2>/dev/null || return 1
 	sync
-	echo "koti-net: saved to $CLOCKFILE, so the next boot starts here."
+	echo "koti-net: saved to $_cf, so the next boot starts here."
 }
 
 # ---------------------------------------------------------------------------

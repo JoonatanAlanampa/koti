@@ -309,6 +309,24 @@ eq "no saved file is not an error" "" "$(try_restore "" 0)"
 eq "a corrupt clock file is ignored" "" "$(try_restore "not-a-number" 0)"
 eq "a partially written clock file is ignored" "" "$(try_restore "17865435xx" 0)"
 
+# ⛔ THE CLOCK FILE IS NOT ALWAYS UNDER /mnt. When the card is the ROOT
+# filesystem (what /init does whenever p2 carries an executable /sbin/init)
+# /mnt is empty and `/` is the persistent place. Hardcoding /mnt made the
+# clock silently stop surviving reboots in exactly that configuration, with
+# no error — restore_clock finds no file and returns 0, which is
+# indistinguishable from a first boot. Both scripts must pick the same two
+# paths, or the boot restores from a file koti-net never writes.
+# Presence of each path, not a count: counting occurrences would go red on a
+# harmless refactor and say nothing about the behaviour.
+for pat in 'CLOCKFILE=/\.koti-clock' 'CLOCKFILE=$MP/\.koti-clock'; do
+	if grep -q "$pat" "$SD"; then ok
+	else bad "S45kotisd never sets $pat — one card layout loses its clock"; fi
+done
+for pat in '_cf=/\.koti-clock' '_cf=/mnt/\.koti-clock'; do
+	if grep -q "$pat" "$NET"; then ok
+	else bad "koti-net never sets $pat — one card layout cannot save"; fi
+done
+
 # save_clock must refuse to write the epoch back: doing so would carry 1970
 # forward as if it were a real observation and make restore_clock a permanent
 # no-op on a machine that had never been told the time.
@@ -382,6 +400,16 @@ for name in kbd esp sd_ctrl plic_claim; do
 done
 # Raw addresses inside those windows must be refused too — the table is a
 # convenience, not the guard.
+# ⛔ A MALFORMED HEX ADDRESS MUST BE REFUSED WITH A SENTENCE. $(( )) does not
+# return an error for one, it ABORTS THE SHELL — `koti peek 0xZZ` died with
+# `value too great for base (error token is "0xZZ")` and no `koti:` line at
+# all. A command whose whole job is answering exactly must not fail in the
+# voice of the shell it happens to be written in.
+for junk in 0xZZ 0x 0xdeadbeefZ; do
+	if koti peek "$junk" 2>&1 | grep -qi 'koti:'; then ok
+	else bad "koti peek $junk did not refuse with a koti: message"; fi
+done
+
 for addr in 0x00050010 0x00060004 0x00070004 0x00E00004; do
 	if koti peek "$addr" > /dev/null 2>&1; then
 		bad "koti peek $addr (an unsafe window) was NOT refused"

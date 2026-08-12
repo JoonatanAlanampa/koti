@@ -706,10 +706,17 @@ on the ladder; the first two are small and change how the machine feels.
     because of what changed since: **PS/2 is deleted, so there is no fallback
     input path.** If the keyboard misbehaves there is nothing else to type on.
 
-17. [~] 🔴 **DE-ADVERTISED AND MADE RECOVERABLE 2026-08-12. ⛔ STILL UNTESTED ON
-    HARDWARE — `koti-net` now dies BEFORE the gate**, at the top-of-script
-    `[ -c "$DEV" ]` check: `koti-net: /dev/ttyKOTI0 does not exist`. See item 27.
-    The `-f` gate is therefore unexercised on the bench. ⛔ NOT DIAGNOSED —
+17. [x] 🔴✅ **THE GATE IS CONFIRMED ON HARDWARE 2026-08-12** (after item 27 was
+    fixed, which is what let `koti-net` run at all):
+    ```
+    # koti-net repl
+    koti-net: 'repl' has hung this machine before and is not
+    koti-net: diagnosed (PLAN item 17). Use 'koti-net py' for
+    koti-net: one-shot commands, which is what it is for.
+    koti-net: If you really want it: koti-net repl -f
+    ```
+    ⛔ **THE HANG ITSELF IS STILL NOT DIAGNOSED** — only the gate and the
+    `exec` removal are proven. Do not read a passing refusal as a fixed bug. —
     do not read this as a fix.** It is out of the help text, it requires `-f`,
     and it prints the recovery procedure before it runs.
     ⭐ **One thing was plainly wrong independent of the cause and is fixed: it
@@ -773,7 +780,36 @@ on the ladder; the first two are small and change how the machine feels.
     is powered off by pulling a charger. Slow-burn corruption risk on the one
     thing that persists.
 
-27. [ ] 🔌🔴 **NEW 2026-08-12: `/dev/ttyKOTI0` DOES NOT EXIST on the running
+27. [x] 🔌✅ **FIXED 2026-08-12 THE SAME EVENING, AND IT WAS ONE CAUSE BEHIND TWO
+    SYMPTOMS.** The board was running the bitstream flashed on 2026-08-08 for
+    the standalone milestone. Two things landed AFTER it, both on 2026-08-10:
+    - `e2b7d2b` added the `serial@70000` DT node ⇒ **no `/dev/ttyKOTI0`**;
+    - `8588168` "hvc0 can be typed at: console_getchar reads the UART receiver"
+      ⇒ **COM3 input reached nothing**, because that firmware never read the
+      UART receiver at all. An hour went into that symptom looking at the
+      ESP32, at pacing and at kdrive; the console was output-only by
+      construction and no amount of driver work could have found it.
+    ⛔ **EVERY `fujprog` LOAD SINCE HAS GONE TO SRAM, WHICH A POWER CYCLE
+    DISCARDS.** That is why networking worked in the morning and died the moment
+    we power-cycled for the card write. A board can silently travel BACKWARDS in
+    time by being switched off.
+    ✅ `fujprog -j flash koti-bram.bit` (a78900b, 140.72 s) fixed both:
+    ```
+    70000.serial: ttyKOTI0 at MMIO 0x70000 (irq = 1, ...) is a koti_esp
+    koti_esp 70000.serial: koti ESP32 link on irq 1, 115200 baud, 64-byte FIFOs
+    ```
+    and COM3 typing reached the login prompt on the first try afterwards.
+    📌 **The diagnosis was made from commit ancestry, not from the bench**:
+    `git merge-base --is-ancestor` proved the local bitstream contained both
+    commits, and `git diff a78900b..HEAD -- src/ sw/sbi/ koti.dts` was empty, so
+    it was still current. That is the cheap move to reach for first whenever
+    hardware behaves like an older version of itself.
+    ⚠️ **STANDING RULE THIS ESTABLISHES: after any `fujprog` WITHOUT `-j flash`,
+    the next power cycle reverts the machine.** If two unrelated things break at
+    once after a power cycle, check which bitstream is in the flash BEFORE
+    debugging either.
+
+    (original entry) 🔌🔴 **`/dev/ttyKOTI0` DOES NOT EXIST on the running
     machine, so koti has no network at all.** `koti-net` dies immediately with
     `does not exist — is koti_esp bound? check dmesg`, which blocks items 13's
     network half, 17, 19, 22 and 23.

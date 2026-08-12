@@ -636,6 +636,16 @@ on the ladder; the first two are small and change how the machine feels.
     the same rule `sdboot.c` and `/init` already apply one layer down.
     ⏳ **Still to prove on the board**: that S45 runs before the login prompt and
     that `mount | grep kotisd` is no longer empty.
+    ⛔⛔ **AND THE COROLLARY NOBODY HAD WRITTEN DOWN: if p2 ever holds a rootfs,
+    every change in the initramfs silently stops taking effect.** `/init`
+    switch_roots onto the card whenever p2 carries an executable `/sbin/init`,
+    so the card's older userspace would win and `S45kotisd`, `koti-net`, `koti`
+    and `10-koti.sh` would all be shadowed — on a machine that boots perfectly
+    and shows no error at all. The probe failing (this item's own cause) is
+    what keeps root in RAM today. ⇒ **`sdkernel.py write` puts a new kernel on
+    p1 and is what a rootfs update needs; `writefs` is a different decision**
+    that moves root onto the card, and after it every future initramfs edit
+    needs `writefs` again or it does nothing.
 
     (original entry) 💾 **The microSD is NOT MOUNTED after boot** — `mount | grep kotisd`
     returns nothing on a booted machine. `rootfs-overlay/init:70` mounts the

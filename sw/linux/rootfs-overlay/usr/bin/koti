@@ -19,7 +19,7 @@
 #   invent a fact about this machine, because it does not produce sentences.
 #
 # ⭐ THAT SAFETY PROPERTY IS THE REASON TO BUILD IT THIS WAY ROUND, and it is
-# also why this is the FALLBACK for PLAN items 25 and 26. A classifier that
+# also why this is the FALLBACK for PLAN item 25. A classifier that
 # gets a question wrong degrades to `koti help`'s grep; it never degrades to a
 # confident invention. Build the floor first.
 #

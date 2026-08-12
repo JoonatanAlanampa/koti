@@ -839,10 +839,10 @@ on the ladder; the first two are small and change how the machine feels.
       in `MANUAL.md` and `koti-help`; the job is finding the right section.
       A command table plus `grep` covers most of it in ~200 lines of shell.
     ⇒ Build this first whatever else happens: it makes koti self-documenting,
-    and it is the fallback the next two items degrade *to* rather than fail
-    into.
+    and it is the fallback item 25 degrades *to* rather than fails into.
 
-25. [ ] 🧠⭐ **The housekeeper, tier 2: A TINY INTENT CLASSIFIER — TRAINED ON
+25. [ ] 🧠⭐ **The housekeeper, tier 2 and the LAST tier — A TINY INTENT
+    CLASSIFIER — TRAINED ON
     THE PC, RUNNING ON koti. This is the one where self-built weights genuinely
     pay, and it is small enough to understand end to end.**
     The model does not answer anything. It maps a fuzzily-worded question onto
@@ -869,23 +869,27 @@ on the ladder; the first two are small and change how the machine feels.
     `grep`. The model is then a pure improvement over the fallback, never a
     regression.
 
-26. [ ] 🔬 **The housekeeper, tier 3: a ~5M-parameter TERNARY generative model.**
-    A learning project, not the thing that makes koti useful — but the
-    arithmetic is real, and it is the item that corrects the non-goal below.
-    **Ternary weights {−1, 0, +1} remove the multiplier from the loop**: a MAC
-    becomes an add or a subtract, so koti goes from ~0.9M to **~10M MAC/s**, a
-    ~10x speed-up for free. At ~2N ops per token that is **~5M parameters ≈ 1
-    token/second**, and at ~1.6 bits/weight **~1 MB of weights** against 25 MB
-    of RAM.
-    ⚠️ What stays true is what 5M parameters can *do*: a narrow learned domain.
-    Not facts, not reasoning, not open questions. Attempt it to learn how, not
-    to make the machine useful.
+26. ~~**The housekeeper, tier 3: a ~5M-parameter ternary generative model.**~~
+    ⛔ **REMOVED FROM THE ROADMAP 2026-08-12 (user directive: "remove the
+    ternary 5M-param from the roadmap").** Not parked, not deferred — off the
+    list. Do not re-propose it, and do not treat items 24/25 as steps toward it.
+    📌 The tier structure it capped is gone with it: **the housekeeper is two
+    tiers now** — 24 (no model) and 25 (the intent classifier), and 25 is the
+    end of that line rather than the middle of it.
+    ⚠️ One number is kept below, and only because the non-goal needs it: the
+    ternary arithmetic is what proves that "an LLM on koti is infeasible" is a
+    statement about **0.5B models doing multiplies**, not about small
+    self-built weights. Deleting it outright would let the non-goal be quoted
+    against item 25, which is buildable and measured.
 
 ⛔ **NON-GOAL, so nobody re-proposes it: a FRONTIER-CLASS LLM running ON koti.**
 ⚠️ **Read the scope of this before quoting it: it rules out a ~0.5B model doing
-multiplies, NOT items 25 and 26.** A tiny classifier is milliseconds and a few
-hundred KB; a ternary 5M-param model is ~1 token/second. Those are buildable.
-What is not:
+multiplies. It does NOT rule out item 25**, which is milliseconds and a few
+hundred KB, and it is not an argument against small self-built weights in
+general — ternary weights {−1, 0, +1} turn a MAC into an add and would put koti
+at ~10M MAC/s, so the wall is the model size, not the machine. (That was item
+26; it is off the roadmap by user directive and the figure survives only to keep
+this paragraph honest.) What is genuinely out of reach:
 Not "hard" — infeasible by about four orders of magnitude, and the arithmetic
 is short enough to check. koti is ~29 MHz with an **iterative 32-cycle
 multiplier** (`M extension`, above) and no FPU ⇒ **~0.9M multiplies/second**.
@@ -899,7 +903,7 @@ A 0.5B-parameter model needs ~1e9 multiply-accumulates **per token**:
 and V8 has no RV32 backend at all.
 ⇒ **There are two reachable versions of this wish, and they are different
 wishes.** Item 22 rents someone else's model over a wire — koti as a terminal,
-which is what a 1970s terminal was and no bad thing. Items 24-26 put weights
+which is what a 1970s terminal was and no bad thing. Items 24-25 put weights
 you built yourself on the machine. ⭐ **The second one is the one that fits this
 project's spine** — physics → cells → CPU → Linux → **your own weights** is the
 same move one layer up. Renting is useful; building is the point.
@@ -907,9 +911,8 @@ same move one layer up. Renting is useful; building is the point.
 📌 **Suggested order across the whole list, given the dependencies above:**
 13 (clock) → 14 (card mount) → **24 (housekeeper, no model — a day, and it
 makes koti self-documenting)** → 23 (weather, which uses 13+14 and needs no new
-plumbing) → **25 (the intent classifier — the first self-built weights)** →
-19 (DNS) → 22 (`koti ask`) → 20 (browser) → 21 (sound) → 26 (ternary model,
-whenever curiosity outranks utility).
+plumbing) → **25 (the intent classifier — the first self-built weights, and the
+end of that line)** → 19 (DNS) → 22 (`koti ask`) → 20 (browser) → 21 (sound).
 
 ## Architecture decisions — ALL FOUR CLOSED (2026-08-03 / 2026-08-04)
 

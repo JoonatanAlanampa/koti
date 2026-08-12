@@ -372,8 +372,25 @@ Software, in order:
        session is one bitstream**: `image: esptest`, watch COM3, read the
        VERDICT line.
 
-11. [~] 🌐 **Networking. The wire, the driver and the stack exist; the far end
-       is the open item.** (2026-08-10/11)
+11. [x] 🌐 **Networking. DONE 2026-08-12 — koti fetched and displayed a real
+       web page.** `koti-net get http://188.184.67.127/ info.cern.ch` returned
+       `HTTP/1.1 200 OK`, `Content-Length: 646`, and the complete HTML of
+       info.cern.ch, 874 bytes, rendered on the HDMI monitor. Run through the
+       documented three-command sequence unaided, on the real board.
+       ⚠️ Read the "no IP address" caveat at the end of this item before
+       calling koti networked — it is still a modem client, not a network
+       layer, and that caveat is the one part of this item still open.
+       Two defects had to be fixed first, both invisible in simulation:
+       - **`join` dialled before the radio was up.** `w.connect()` 150 ms after
+         `w.active(True)` returns None like a good connect and then never
+         associates, so it reported `address FAILED` about a network on the air
+         with a correct password. 3 s of settle → `1010 True 172.20.10.2`.
+       - **Every burst from the ESP32 loses its first character**, so an
+         unpadded `print('KOTI-BEGIN')` arrives as `OTI-BEGIN` and `get` times
+         out with the whole page already captured. Markers now print `zz`
+         first. ⛔ NOT an `esp_uart.sv` defect — that FIFO pops only when
+         non-empty and reads `fifo[rptr]` combinationally.
+       (built 2026-08-10/11, finished 2026-08-12)
        ✅ (a) the link — `src/esp_uart.sv` at `0x0007_0000` on the ESP32's own
        pair (`wifi_rxd` K3 / `wifi_txd` K4), 64-byte FIFOs both ways, PLIC
        source 2.
@@ -382,8 +399,9 @@ Software, in order:
        the only way to wake the ESP32 from Linux.
        ✅ (c) the stack — `CONFIG_NET`/`INET`/`SLIP` are on. The old text here
        said `grep -c CONFIG_NET` = 0; that has not been true since 2026-08-10.
-       🔴 (d) the far end — **`sw/linux/rootfs-overlay/usr/bin/koti-net`, and
-       it has never run on hardware.**
+       ✅ (d) the far end — `sw/linux/rootfs-overlay/usr/bin/koti-net`, **run
+       on hardware 2026-08-12 and it fetched a page.** `wake`, `join`, `scan`,
+       `get` and `off` are all measured on the real board.
 
        ⛔ **THE "STOCK ESP-AT" PLAN WAS WRONG FOR THIS BOARD, and it was wrong
        in the cheap direction.** The far end is not an unknown to be chosen: it
@@ -396,11 +414,14 @@ Software, in order:
        the way to a real IP address on koti, and it still costs custom ESP32
        firmware; it is no longer on the path to the first page.
 
-       🔴 **`image: esptest` STILL GATES ALL OF IT** and is still unrun: an
-       awake ESP32 is a second driver on the microSD bus koti boots from
-       (`sd_clk`=GPIO14, `sd_cmd`=GPIO15, `sd_d`=GPIO2/4/12/13). Procedure in
-       `fpga/ulx3s/README.md` § 2e. If the card does not survive, the answer is
-       an Ethernet Pmod nobody owns, and `koti-net` is wasted work.
+       ✅ **`image: esptest` RAN 2026-08-11 AND THE CARD SURVIVES.** 25
+       consecutive passes, unanimous: block 0 read identically with the ESP32
+       held in reset, awake, and back in reset, while the link carried 477
+       bytes. An awake ESP32 is a second driver on the microSD bus koti boots
+       from (`sd_clk`=GPIO14, `sd_cmd`=GPIO15, `sd_d`=GPIO2/4/12/13), and it
+       is measurably harmless. Procedure and results in `fpga/ulx3s/README.md`
+       § 2e. ⇒ **the Ethernet-Pmod fallback is dead** and `koti-net` was not
+       wasted work. `koti-net off` when done remains the right habit.
 
        ⚠️ Even when it all works, **koti has no IP address** — `ping`, `wget`
        and `ip` still fail. The ESP32 owns the TCP stack. Do not report this
@@ -562,6 +583,69 @@ defects:
   `test_koti_boot_and_timer`, `test_vga_text` and `test_hello_c` went too;
   those are substantially covered by `tb_boot`, `tb_fpga_bram` and the real
   hardware, which is why they are not listed as gaps.
+
+---
+
+## Open items found 2026-08-12, by asking the running machine
+
+Measured at koti's own shell the day networking closed, not inferred. None was
+on the ladder; the first two are small and change how the machine feels.
+
+13. [ ] 🕐 **koti does not know what day it is.** `date` answers
+    `Thu Jan  1 01:01:50 UTC 1970`. There is no `rtc` node in `koti.dts` and no
+    `ntpd` in the rootfs, so every boot restarts at the epoch and every file
+    saved to the card is stamped 1970.
+    ⭐ **The fix became free on 2026-08-12**: the HTTP reply that closed item 11
+    carried `Date: Wed, 12 Aug 2026 14:06:38 GMT`. koti is already receiving
+    the correct time and discarding it — `koti-net` can `date -s` from the Date
+    header of any fetch. No NTP, no daemon, no hardware, no battery. A real RTC
+    (a €2 DS3231 on the spare gp/gn pins) is the follow-up if the time should
+    survive a power cycle, and is a separate, larger job.
+
+14. [ ] 💾 **The microSD is NOT MOUNTED after boot** — `mount | grep kotisd`
+    returns nothing on a booted machine. `rootfs-overlay/init:70` mounts the
+    card at `/mnt` to probe for `/sbin/init`, does not find one, and
+    **`umount`s it at line 77**; nothing mounts it again.
+    ⇒ item 7's "koti saves files to the microSD" is true, but every boot you
+    must `mount /dev/kotisd2 /mnt` by hand before you can reach what you saved.
+    Two lines in `S99koti` or `/etc/fstab`. ⚠️ Keep the `sync` habit — ext2
+    here has no journal.
+
+15. [ ] 🪤 **`wget` and `ping` are installed and cannot work.** Both are in the
+    rootfs, and koti has no IP address — the ESP32 owns the TCP stack. They are
+    the first two commands anyone reaches for, and they fail in a way that
+    reads as "the network is broken" when it is working. Drop them, or wrap
+    them to say `use koti-net`. (Genuinely fixed only by item 11's IP-address
+    caveat, which is a much bigger job.)
+
+16. [ ] 🔴 **Duplicate keystrokes, undiagnosed** — the first USB login echoed
+    `rooo. .. .t. .t`, never reproduced. Recorded at item 8 and repeated here
+    because of what changed since: **PS/2 is deleted, so there is no fallback
+    input path.** If the keyboard misbehaves there is nothing else to type on.
+
+17. [ ] 🔴 **`koti-net repl` wedges the machine.** microcom never returns and
+    the console does not recover; on 2026-08-11 it took a `killall microcom`
+    from a second session. It is a shipped subcommand listed in the help text.
+    Diagnose or remove it — a command that hangs the computer should not be
+    advertised.
+
+18. [ ] 🧹 **The card mounts unchecked on every boot** — `EXT2-fs (kotisd2):
+    warning: mounting unchecked fs, running e2fsck is recommended`, seen again
+    2026-08-12. Nothing ever fsck's it, ext2 has no journal, and this machine
+    is powered off by pulling a charger. Slow-burn corruption risk on the one
+    thing that persists.
+
+19. [ ] 🌐 **DNS: `getaddrinfo(name, 80)` → `OSError: -202`**, so only literal
+    addresses can be dialled. Item 11 routes around it with `get URL [HOST]`.
+    ⚠️ Forcing `8.8.8.8` via `ifconfig` did NOT help and may drop the
+    association (a static ifconfig replaces the DHCP lease — re-`join` after).
+    First thing to check is whether DHCP handed the ESP32 a usable resolver.
+
+20. [ ] 📄 **A reader for what `get` returns.** `koti-net get` prints raw HTML;
+    something that strips tags, wraps to 80 columns and follows a link by
+    number is what makes koti a machine you read the web *on*. Self-contained,
+    no hardware, and the first job that uses koti's own screen for something a
+    terminal cannot do.
 
 ## Architecture decisions — ALL FOUR CLOSED (2026-08-03 / 2026-08-04)
 

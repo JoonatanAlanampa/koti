@@ -88,8 +88,20 @@ dmesg | grep '^koti: root'  # the decision, in /init's own words
 | `/` after the switch | microSD p2, ext2 | **yes** |
 | `/dev/kotisd2` | microSD partition 2, ext2 | **yes** |
 
-If `/` is still the initramfs, the card is not mounted anywhere and you reach it
-by hand:
+If `/` is still the initramfs, **`/etc/init.d/S45kotisd` mounts the card at
+`/mnt` for you at every boot** and says so:
+
+```
+koti: microSD mounted at /mnt
+```
+
+Anything you write under `/mnt` persists; anything you write elsewhere does not.
+Until 2026-08-12 nothing mounted it and every session had to do it by hand,
+which is why older notes tell you to.
+
+If the mount did not happen the line says why (`no /dev/kotisd2 — microSD not
+mounted`, or `would not mount`), and the machine boots regardless. To do it
+yourself:
 
 ```sh
 mount /dev/kotisd2 /mnt
@@ -98,8 +110,9 @@ sync
 umount /mnt
 ```
 
-If the switch happened, `/dev/kotisd2` is already `/` — mounting it again on
-`/mnt` is not what you want, and writing to `/` persists directly.
+If the switch happened, `/dev/kotisd2` is already `/` — the script says
+`koti: the microSD IS /` and mounts nothing, because writing to `/` persists
+directly.
 
 ⚠️ **ext2 has no journal.** Run `sync` before pulling the power, or you lose
 whatever was still sitting in the page cache. This is the single easiest way to
@@ -131,7 +144,9 @@ ESP32 runs MicroPython with a working WiFi stack. `koti-net` drives it:
 ```
 koti-net wake                     # release the ESP32 from reset
 koti-net join <ssid> <password>   # prints the address it was given
+koti-net scan                     # list the networks it can actually see
 koti-net get http://example.com/  # the page, on standard output
+koti-net time                     # set the clock from a server's Date header
 koti-net off                      # put it back into reset
 ```
 
@@ -245,8 +260,15 @@ for a subset of it.
 - **No `man`.** There are no manual pages in the rootfs — that is what this
   file and `koti-help` are for. `busybox <applet> --help` works for most
   applets and is the fastest reference on the machine.
-- **The clock has no battery.** `date` starts from the epoch every boot;
-  there is no RTC and no network time.
+- **The clock has no battery, and the fix is approximate.** There is no RTC
+  chip and no NTP. `koti-net time` sets the clock from the `Date:` header any
+  HTTP reply already carries — accurate to a second or two, which is right for
+  file timestamps and wrong for anything else. It then writes the time to the
+  card, and `S45kotisd` restores it at the next boot, so the machine starts
+  from **when it was last running** rather than from 1970. That is monotonic,
+  not correct: after a week unplugged it believes it is still last Tuesday
+  until you run `koti-net time` again. A `date` that says 1970 means the card
+  is not mounted or has never held a saved time.
 
 ## If something goes wrong
 

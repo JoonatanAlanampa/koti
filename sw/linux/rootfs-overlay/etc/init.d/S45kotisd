@@ -1,0 +1,136 @@
+#!/bin/sh
+#
+# S45kotisd — mount the microSD, so what koti saved is there when it boots.
+#
+# PLAN item 14. `mount | grep kotisd` returned NOTHING on a booted machine, and
+# the reason is a detail of /init: it mounts the card at /mnt to look for
+# /sbin/init (rootfs-overlay/init:70), does not find one, and unmounts it again
+# at line 77. Nothing ever mounts it back. So item 7's "koti saves files to the
+# microSD" was true and useless — every session had to `mount /dev/kotisd2
+# /mnt` by hand before it could reach anything it had saved.
+#
+# ⛔ WHY THIS IS A SCRIPT AND NOT A LINE IN /etc/fstab. Two reasons, and the
+# first is the one that matters:
+#
+#   1. The card may already BE the root filesystem. /init switch_roots onto
+#      /dev/kotisd2 when it carries an executable /sbin/init, and which of the
+#      two happened is CARD STATE — no file in this tree knows it. An fstab
+#      entry would then mount the live root a second time at /mnt, which is
+#      legal, confusing, and exactly the kind of thing that looks fine until
+#      something writes through the wrong one.
+#   2. Overriding /etc/fstab means reproducing Buildroot's own entries (proc,
+#      sysfs, devpts, tmpfs) from the overlay, where they would silently stop
+#      tracking upstream. Adding a file costs nothing and takes nothing over.
+#
+# ⚠️ EVERY FAILURE PATH HERE ENDS IN A BOOTING MACHINE THAT SAYS WHY. That is
+# the same rule sw/sbi/sdboot.c applies to the kernel transport and /init
+# applies to the root filesystem: a missing card is a normal condition on a
+# bring-up board, not a reason to stop.
+#
+# ⚠️ ext2 has NO JOURNAL and this machine is switched off by pulling a charger.
+# `sync` before you do that. The `stop` case below unmounts cleanly, which
+# helps only on the shutdowns that are clean.
+#
+# Copyright (c) 2026 Joonatan Alanampa
+# SPDX-License-Identifier: Apache-2.0
+
+DEV=/dev/kotisd2
+MP=/mnt
+CLOCKFILE=$MP/.koti-clock
+
+# ---------------------------------------------------------------------------
+# The fake hardware clock — second half of PLAN item 13.
+#
+# koti has no RTC and no battery, so the kernel starts at the epoch and `date`
+# answers 1970 on every boot. koti-net can fetch the real time out of any HTTP
+# reply's Date header, but that needs the network up and the ESP32 awake, and
+# the ESP32 shares the microSD bus — not something to do at every boot.
+#
+# So: the last known time is written to the card, and restored here if it is
+# LATER than what the kernel started with.
+#
+# ⚠️ IT IS MONOTONIC, NOT ACCURATE, and the difference is the whole design.
+# This does not know the time; it knows a time that has definitely already
+# passed. After a week unplugged the machine believes it is the moment it was
+# switched off — wrong, but wrong in the one direction that keeps file
+# timestamps in the order the files were written. `koti-net time` corrects it
+# in one command. A DS3231 on the spare gp/gn pins corrects it permanently and
+# is a separate job (a DT node plus a driver).
+# ---------------------------------------------------------------------------
+restore_clock() {
+	[ -r "$CLOCKFILE" ] || return 0
+	saved=$(cat "$CLOCKFILE" 2>/dev/null)
+	case "$saved" in
+		''|*[!0-9]*)
+			echo "koti: $CLOCKFILE is not an epoch, ignoring it"
+			return 0 ;;
+	esac
+	now=$(date -u +%s 2>/dev/null)
+	case "$now" in ''|*[!0-9]*) now=0 ;; esac
+	# ⛔ NEVER BACKWARDS. If the clock is already later than the saved value,
+	# something has set it properly this boot (koti-net time, or a future
+	# RTC) and this file is the stale one. Restoring unconditionally would
+	# let a shutdown from last week overwrite a clock that is correct now.
+	if [ "$saved" -gt "$now" ]; then
+		if date -s "@$saved" > /dev/null 2>&1; then
+			echo "koti: clock restored from the card: $(date -u)"
+			echo "koti: (that is when this machine was last running, not" \
+			     "now — run 'koti-net time' for the real thing)"
+		fi
+	fi
+}
+
+save_clock() {
+	# Only worth saving a time that was actually set; writing 1970 back would
+	# just carry the epoch forward and make restore_clock a no-op forever.
+	yr=$(date -u +%Y 2>/dev/null)
+	case "$yr" in ''|*[!0-9]*) return 0 ;; esac
+	[ "$yr" -ge 2000 ] || return 0
+	date -u +%s > "$CLOCKFILE" 2>/dev/null
+}
+
+case "$1" in
+	start)
+		# Already the root filesystem? Then there is nothing to mount and
+		# saying so is more useful than silence — it answers the question
+		# "which root am I on" that docs/MANUAL.md says to read, not infer.
+		if grep -q "^$DEV / " /proc/mounts 2>/dev/null; then
+			echo "koti: the microSD IS / — nothing to mount"
+			restore_clock
+			exit 0
+		fi
+		if grep -q " $MP " /proc/mounts 2>/dev/null; then
+			echo "koti: $MP is already mounted"
+			exit 0
+		fi
+		if [ ! -b "$DEV" ]; then
+			# The ordinary cause is an empty slot. The block driver
+			# registers whether or not a card answers, so the absence
+			# shows up here as a missing partition rather than as a
+			# missing disk.
+			echo "koti: no $DEV — microSD not mounted (no card, or no" \
+			     "partition 2)"
+			exit 0
+		fi
+		if mount -t ext2 -o rw "$DEV" "$MP" 2>/dev/null; then
+			echo "koti: microSD mounted at $MP"
+			restore_clock
+		else
+			echo "koti: $DEV would not mount at $MP — carrying on without it"
+		fi
+		;;
+	stop)
+		# rcK runs this on a clean shutdown. Save the clock first: the
+		# unmount is what makes the write durable, and after it the file is
+		# unreachable.
+		if grep -q " $MP " /proc/mounts 2>/dev/null; then
+			save_clock
+			sync
+			umount "$MP" 2>/dev/null
+		fi
+		;;
+	*)
+		echo "Usage: $0 {start|stop}"
+		exit 1
+		;;
+esac

@@ -36,6 +36,38 @@ jobs:
       - name: drivers carry no known-wrong constructs
         run: python sw/linux/check_drivers.py
 
+      # ⛔ THE ROOTFS SHELL HAD NEVER BEEN EXECUTED BY ANYTHING. check_rootfs.py
+      # checks Buildroot symbols and check_initramfs.py checks that the cpio
+      # matches the overlay — neither runs a line of it. So `koti-net`, which
+      # decides what year the machine thinks it is out of a string parsed off a
+      # wire that corrupts its first byte, reached the card as a green build
+      # nobody had run. The first execution of that parser found a real defect
+      # (day and year swapped, so every good Date header was refused as
+      # implausible), and the round trip that would otherwise have found it is
+      # ~70 minutes plus a card shuffle.
+      #
+      # ⚠️ busybox, not bash: koti's shell is busybox ash, and `$((08))` is an
+      # octal literal there and an error — a bug that would surface on two
+      # hours out of twenty-four. Testing under the shell we ship to is the
+      # whole point; -n keeps it honest about what it cannot cover.
+      - name: install busybox (koti's actual shell)
+        run: sudo apt-get install -y busybox-static
+
+      - name: rootfs shell scripts parse under busybox ash
+        run: |
+          for f in sw/linux/rootfs-overlay/init \
+                   sw/linux/rootfs-overlay/etc/init.d/S45kotisd \
+                   sw/linux/rootfs-overlay/etc/init.d/S99koti \
+                   sw/linux/rootfs-overlay/usr/bin/koti-net \
+                   sw/linux/rootfs-overlay/usr/bin/koti-help \
+                   sw/linux/rootfs-overlay/usr/bin/koti-status; do
+            echo "-- $f"
+            busybox sh -n "$f"
+          done
+
+      - name: koti-net clock parser unit tests
+        run: busybox sh sw/linux/test_koti_net.sh
+
       - name: muldiv unit tests
         run: python run_core.py
         working-directory: test

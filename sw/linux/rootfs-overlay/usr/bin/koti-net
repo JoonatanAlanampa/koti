@@ -227,6 +227,132 @@ expect() {
 }
 
 # ---------------------------------------------------------------------------
+# The clock, taken out of a reply that was already on the wire.
+#
+# PLAN item 13: `date` answered `Thu Jan  1 01:01:50 UTC 1970` on a booted
+# machine. There is no rtc node in koti.dts, no battery and no ntpd, so every
+# boot restarts at the epoch and every file written to the card is stamped
+# 1970 — which makes the card's timestamps worse than useless, because they
+# look like data.
+#
+# ⭐ THE FIX COSTS NOTHING BECAUSE THE TIME IS ALREADY ARRIVING. Every HTTP
+# reply carries the server's clock in a Date header; the fetch that closed item
+# 11 brought back `Date: Wed, 12 Aug 2026 14:06:38 GMT` and threw it away. So
+# this is not a new capability, it is not discarding one.
+#
+# ⚠️ WHAT THIS IS NOT: it is not NTP. Accuracy is the server's clock plus the
+# transit and the parse — call it a second or two, which is the right order for
+# file timestamps and the wrong one for anything that needs a real time source.
+# It does not survive a power cycle either; a €2 DS3231 on the spare gp/gn pins
+# is the follow-up, and it is a separate, larger job (a DT node and a driver).
+#
+# ⚠️ It also means a server can set this machine's clock. That is why `get`
+# only does it when the clock is obviously unset (below), rather than on every
+# fetch: an already-correct clock is never overwritten by whatever you browse.
+# ---------------------------------------------------------------------------
+
+# Days from 1970-01-01 to a proleptic-Gregorian Y-M-D. Howard Hinnant's
+# days_from_civil, which is exact, needs no table and no leap-year special
+# cases beyond the ones the arithmetic already contains.
+#
+# ⛔ THE EPOCH IS COMPUTED HERE RATHER THAN HANDED TO `date -s` AS A STRING,
+# and that is deliberate. busybox's date parses several human formats, but
+# WHICH ones depends on how it was configured (`-D FMT` is behind
+# FEATURE_DATE_ISOFMT, and the bare `YYYY-MM-DD hh:mm:ss` branch has moved
+# between versions). `date -s @SECONDS` is parsed by one unconditional branch
+# and has no timezone in it at all — there is nothing left to be ambiguous
+# about, which is what you want in the one place that decides what year it is.
+days_from_civil() {
+	_y=$1; _m=$2; _d=$3
+	[ "$_m" -le 2 ] && _y=$((_y - 1))
+	_era=$((_y / 400))
+	_yoe=$((_y - _era * 400))
+	if [ "$_m" -gt 2 ]; then _mp=$((_m - 3)); else _mp=$((_m + 9)); fi
+	_doy=$(( (153 * _mp + 2) / 5 + _d - 1 ))
+	_doe=$(( _yoe * 365 + _yoe / 4 - _yoe / 100 + _doy ))
+	echo $(( _era * 146097 + _doe - 719468 ))
+}
+
+month_num() {
+	case "$1" in
+		Jan) echo 1 ;; Feb) echo 2 ;; Mar) echo 3 ;; Apr) echo 4 ;;
+		May) echo 5 ;; Jun) echo 6 ;; Jul) echo 7 ;; Aug) echo 8 ;;
+		Sep) echo 9 ;; Oct) echo 10 ;; Nov) echo 11 ;; Dec) echo 12 ;;
+		*) return 1 ;;
+	esac
+}
+
+# Set the clock from the Date header sitting in $CAP. Returns 1 if there
+# is not one, which is not an error at any caller — a fetch that worked is
+# still a fetch that worked.
+clock_from_capture() {
+	# ⛔ MATCH `ate:`, NOT `Date:`, AND THIS IS NOT SLOPPINESS. The first
+	# character of every burst from the ESP32 is destroyed (the long note in
+	# cmd_get has the measurements), so a Date header that happens to open a
+	# burst arrives as `ate: Wed, 12 Aug 2026 ...`. Anchoring on the D would
+	# make this work most of the time and fail at random, which is the worst
+	# behaviour available for a clock.
+	#
+	# Nothing else in an HTTP response matches: Last-Modified and Expires
+	# carry the same value format but neither contains the substring `ate:`.
+	# Taking the first match keeps it in the header block, which is where the
+	# Date header is.
+	_dl=$(tr -d '\r' < "$CAP" 2>/dev/null | sed -n \
+		's/.*ate: *[A-Za-z]*,* *\([0-9][0-9]*\) \([A-Za-z][A-Za-z][A-Za-z]\) \([0-9][0-9][0-9][0-9]\) \([0-9][0-9]\):\([0-9][0-9]\):\([0-9][0-9]\) GMT.*/\1 \2 \3 \4 \5 \6/p' \
+		| head -n 1)
+	[ -n "$_dl" ] || return 1
+
+	# shellcheck disable=SC2086
+	set -- $_dl
+	_mnum=$(month_num "$2") || return 1
+	# Strip a leading zero before arithmetic: `08` is an OCTAL literal to
+	# ash's $(( )) and `09` is a syntax error, so an hour of 08 or 09 —
+	# i.e. two hours out of every twenty-four — would fail here and nowhere
+	# else. Caught by testing the parser against a whole day, not one sample.
+	#
+	# ⚠️ THE ORDER IS DAY MONTH YEAR, because that is the order RFC 1123 puts
+	# them in and the sed above captures them positionally. Reading it as
+	# year-first assigns 12 to the year and 2026 to the day, which the
+	# plausibility guard below then rejects as "an implausible server date
+	# (12)" — a correct-looking refusal of a perfectly good header. That was
+	# the state of this function until sw/linux/test_koti_net.sh ran it.
+	_dd=${1#0}; _yy=$3
+	_hh=${4#0}; _mi=${5#0}; _ss=${6#0}
+	[ -n "$_hh" ] || _hh=0
+	[ -n "$_mi" ] || _mi=0
+	[ -n "$_ss" ] || _ss=0
+	[ -n "$_dd" ] || _dd=0
+
+	# A server with a broken clock should not be able to send this machine to
+	# 1902 or 2251. The window is wide enough to be uncontroversial and narrow
+	# enough that a garbled year cannot survive it.
+	if [ "$_yy" -lt 2020 ] || [ "$_yy" -gt 2199 ]; then
+		echo "koti-net: ignoring an implausible server date ($_yy)" >&2
+		return 1
+	fi
+
+	_days=$(days_from_civil "$_yy" "$_mnum" "$_dd")
+	_epoch=$(( _days * 86400 + _hh * 3600 + _mi * 60 + _ss ))
+	if date -s "@$_epoch" > /dev/null 2>&1; then
+		echo "koti-net: clock set from the server's Date header: $(date -u)"
+		return 0
+	fi
+	echo "koti-net: could not set the clock (date -s @$_epoch failed)" >&2
+	return 1
+}
+
+# True when the clock has obviously never been set. koti boots at the epoch,
+# so any year still in the 1970s is the untouched value rather than a plausible
+# wrong one — no need to guess at a tolerance.
+clock_unset() {
+	_yr=$(date -u +%Y 2>/dev/null)
+	case "$_yr" in
+		''|*[!0-9]*) return 0 ;;
+	esac
+	[ "$_yr" -lt 2000 ]
+}
+
+# ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
 cmd_wake() {
@@ -542,11 +668,74 @@ cmd_get() {
 			| sed -n '/KOTI-BEGIN/,/KOTI-END/p' \
 			| sed -e '1s/.*KOTI-BEGIN//' -e '$s/KOTI-END.*//' \
 			| sed -e '/./,$!d'
+		# The reply is STILL in the capture, and it has the server's clock
+		# in it. Only when this machine's own clock has never been set —
+		# see clock_unset — so ordinary browsing cannot move a correct
+		# clock around. `koti-net time` is how you ask for it deliberately.
+		if clock_unset; then
+			clock_from_capture || true
+		fi
 		return 0
 	fi
 	echo "koti-net: no complete reply in 60 s. Raw capture follows:" >&2
 	capture >&2
 	return 1
+}
+
+# ---------------------------------------------------------------------------
+# time — ask a server what time it is, deliberately.
+#
+# The default target is the address+host pair that is already known to answer
+# on this link (item 11's fetch), so `koti-net time` needs no arguments and no
+# name server. Any other http:// URL works; the Date header is a required
+# response header, so essentially every server sends one.
+# ---------------------------------------------------------------------------
+cmd_time() {
+	reader_running || die "not awake — run 'koti-net wake' first"
+	_tu=${1:-http://188.184.67.127/}
+	_th=${2:-info.cern.ch}
+	echo "koti-net: asking $_th what time it is."
+	# The page itself is not interesting here; the header block is. cmd_get
+	# leaves the whole reply in $CAP, which is what clock_from_capture reads.
+	if ! cmd_get "$_tu" "$_th" > /dev/null; then
+		echo "koti-net: the fetch failed; clock unchanged" >&2
+		return 1
+	fi
+	clock_from_capture || {
+		echo "koti-net: that reply carried no Date header" >&2
+		return 1
+	}
+	clock_save
+}
+
+# Second half of item 13: make the answer survive a power cycle, approximately.
+#
+# ⚠️ THIS IS A FAKE HARDWARE CLOCK AND THE NAME MATTERS. It does not know the
+# time; it knows a time that has definitely already happened. The last known
+# time is written to the card, and the next boot restores it if it is LATER
+# than what the kernel starts with — so the clock never goes backwards and a
+# file saved after a reboot is never stamped before one saved before it.
+#
+# It is what a Raspberry Pi does for the same reason (no RTC, no battery), and
+# the honest description is "monotonic, not accurate": after a week unplugged
+# the machine believes it is still the moment it was switched off. `koti-net
+# time` corrects it in one command; a €2 DS3231 corrects it permanently and is
+# PLAN item 13's follow-up.
+#
+# ⛔ It writes only when /mnt is actually a mount point. Writing this file into
+# the initramfs would produce a file that looks like a saved clock, is thrown
+# away at power-off, and is never restored — the failure would present as "the
+# clock save does not work" with a perfectly good file sitting there.
+CLOCKFILE=/mnt/.koti-clock
+clock_save() {
+	if ! grep -q ' /mnt ' /proc/mounts 2>/dev/null; then
+		echo "koti-net: /mnt is not mounted; the time will not survive a" \
+		     "power cycle" >&2
+		return 1
+	fi
+	date -u +%s > "$CLOCKFILE" 2>/dev/null || return 1
+	sync
+	echo "koti-net: saved to $CLOCKFILE, so the next boot starts here."
 }
 
 cmd_repl() {
@@ -565,6 +754,7 @@ case "${1:-help}" in
 	join)	shift; cmd_join "$@" ;;
 	scan)	shift; cmd_scan "$@" ;;
 	get)	shift; cmd_get "$@" ;;
+	time)	shift; cmd_time "$@" ;;
 	py)	shift; cmd_py "$@" ;;
 	repl)	shift; cmd_repl "$@" ;;
 	*)
@@ -575,6 +765,7 @@ koti-net — talk to the internet through the onboard ESP32.
   koti-net join SSID [PASS]      join a WiFi network, print the address
   koti-net scan                  list the networks the ESP32 can actually see
   koti-net get http://URL [HOST] fetch a page to stdout
+  koti-net time [URL [HOST]]     set koti's clock from a server's Date header
   koti-net py 'CODE'             run one line of MicroPython, print the reply
   koti-net status                link state and byte counter
   koti-net repl                  hand the link to microcom, interactively
@@ -587,6 +778,12 @@ the ADDRESS in the URL and the NAME as the second argument:
 
 That connects to the address and asks for the name, so a virtual host serves
 the page instead of redirecting. It needs no name server at all.
+
+koti has no battery-backed clock, so it boots in 1970. `time` fixes that from
+the Date header every HTTP reply already carries, and saves it to the microSD
+so the next boot starts from the last known time rather than the epoch. `get`
+does the same thing on its own, but ONLY while the clock is still unset — so
+browsing can never move a clock that is already right.
 
 The ESP32 runs stock MicroPython 1.14 and owns the TCP stack; koti drives it
 over /dev/ttyKOTI0. koti itself has no IP address, so wget and ping still do

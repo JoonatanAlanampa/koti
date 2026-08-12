@@ -591,7 +591,28 @@ defects:
 Measured at koti's own shell the day networking closed, not inferred. None was
 on the ladder; the first two are small and change how the machine feels.
 
-13. [ ] 🕐 **koti does not know what day it is.** `date` answers
+13. [~] 🕐 **BUILT 2026-08-12, NOT YET CONFIRMED ON HARDWARE.** `koti-net time`
+    sets the clock from the `Date:` header of any HTTP reply, and `get` does the
+    same on its own while the clock is still unset (never afterwards, so
+    browsing cannot move a correct clock). The time is then written to
+    `/mnt/.koti-clock` and restored by `S45kotisd` at the next boot, so a reboot
+    starts from **when the machine was last running** instead of the epoch.
+    ⚠️ **Monotonic, not accurate** — after a week unplugged it believes it is
+    still the moment it was switched off. That is the point: file timestamps
+    stay in the order the files were written. A DS3231 is still the real fix.
+    ⭐ **The parser had a defect that the first execution of it found**: it read
+    the RFC 1123 value year-first, assigning the day (12) to the year, so the
+    plausibility guard rejected every good header as "an implausible server date
+    (12)" — a correct-looking refusal. `sw/linux/test_koti_net.sh` caught it in
+    two seconds; the round trip that would otherwise have caught it is ~70
+    minutes and a card shuffle. ⛔ **Nothing in this repo had ever executed a
+    line of the rootfs shell** before that test existed. It runs in `core-tests`
+    under **busybox ash**, not bash — `$((08))` is an octal literal there, so
+    two hours out of every twenty-four were a live trap.
+    ⏳ **Still to prove on the board**: that `date -s @N` takes, that `/mnt` is
+    mounted when `clock_save` runs, and that a reboot restores it.
+
+    (original entry) 🕐 **koti does not know what day it is.** `date` answers
     `Thu Jan  1 01:01:50 UTC 1970`. There is no `rtc` node in `koti.dts` and no
     `ntpd` in the rootfs, so every boot restarts at the epoch and every file
     saved to the card is stamped 1970.
@@ -602,7 +623,21 @@ on the ladder; the first two are small and change how the machine feels.
     (a €2 DS3231 on the spare gp/gn pins) is the follow-up if the time should
     survive a power cycle, and is a separate, larger job.
 
-14. [ ] 💾 **The microSD is NOT MOUNTED after boot** — `mount | grep kotisd`
+14. [~] 💾 **BUILT 2026-08-12, NOT YET CONFIRMED ON HARDWARE.**
+    `sw/linux/rootfs-overlay/etc/init.d/S45kotisd` mounts `/dev/kotisd2` at
+    `/mnt` at every boot, and says which of four things happened.
+    ⛔ **A script, not an `/etc/fstab` line, and the reason is item 7**: the card
+    may already BE the root filesystem, and which of the two happened is CARD
+    STATE that no file in this tree knows. An fstab entry would mount the live
+    root a second time at `/mnt` — legal, and exactly the kind of thing that
+    looks fine until something writes through the wrong one. So it checks
+    `/proc/mounts` first and says `the microSD IS /`.
+    Every failure path ends in a booting machine that names the reason, which is
+    the same rule `sdboot.c` and `/init` already apply one layer down.
+    ⏳ **Still to prove on the board**: that S45 runs before the login prompt and
+    that `mount | grep kotisd` is no longer empty.
+
+    (original entry) 💾 **The microSD is NOT MOUNTED after boot** — `mount | grep kotisd`
     returns nothing on a booted machine. `rootfs-overlay/init:70` mounts the
     card at `/mnt` to probe for `/sbin/init`, does not find one, and
     **`umount`s it at line 77**; nothing mounts it again.

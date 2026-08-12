@@ -321,6 +321,25 @@ cmd_join() {
 	send 'import network, time'
 	send 'w=network.WLAN(network.STA_IF)'
 	send 'w.active(True)'
+	# ⛔ LET THE RADIO COME UP BEFORE DIALLING. `send` returns after 150 ms,
+	# and `w.active(True)` only ASKS for the interface; the ESP32's WiFi task
+	# is still starting when the next line lands. A connect issued into that
+	# window does not fail loudly — it returns None like a good connect and
+	# then never associates, so the 30-second wait below expires and this
+	# reports `address FAILED` about a network that is on the air and a
+	# password that is correct.
+	#
+	# Measured on hardware 2026-08-12, and it cost most of a session. Three
+	# joins failed this way while a scan run in the same REPL a minute later
+	# listed the target SSID among four:
+	#
+	#     zz True                                   <- active(True)
+	#     zz 4 1000                                 <- 4 APs, status IDLE
+	#     zz [b'ESP32S2', b'DNA-WLAN-2G-1470', ...] <- the target, right there
+	#
+	# With three seconds in front of the connect, the same credentials gave
+	# `zz 1010 True 172.20.10.2` — STAT_GOT_IP — on the first attempt.
+	sleep 3
 	send "w.connect('$_ssid','$_pass')"
 	# The block goes through exec() so it stays ONE line — see the note on
 	# the friendly REPL's auto-indent above. 60 half-seconds: a cold DHCP
@@ -349,6 +368,43 @@ cmd_join() {
 	# one contains the password. Re-run the individual steps with
 	# `koti-net py` if the exchange needs to be watched.
 	capture_reset
+	return 1
+}
+
+# ---------------------------------------------------------------------------
+# scan — the command that tells "your network is not there" apart from
+# "this script dialled too early", which is the only question worth asking when
+# a join fails. It exists because on 2026-08-12 three joins reported `address
+# FAILED` and every hypothesis pointed at the phone; a scan settled it in one
+# shot by listing the target SSID among four visible networks.
+# ---------------------------------------------------------------------------
+cmd_scan() {
+	reader_running || die "not awake — run 'koti-net wake' first"
+	capture_reset
+	send 'import network, time'
+	send 'w=network.WLAN(network.STA_IF)'
+	send 'w.active(True)'
+	sleep 3
+	send 'r=w.scan()'
+	# ⛔ EIGHT SECONDS, AND `koti-net py 'w.scan()'` IS THE WRONG TOOL HERE.
+	# `py` waits two, and a scan sweeps thirteen channels — it is not a round
+	# trip, it is a survey. Measured 2026-08-12: the two-second version
+	# returned `[]` and that empty list was read as "the radio is dead" for a
+	# good while. The same scan given eight seconds returned four networks.
+	# An instrument that reports "nothing" when it means "not yet" is worse
+	# than no instrument, because the answer is confident and wrong.
+	sleep 8
+	# Marker concatenated so the REPL's echo of this line cannot match it, and
+	# padded because the first character of every burst is destroyed — see the
+	# long note in cmd_get.
+	send "print('zz','KOTI'+'-SCAN',len(r),[x[0] for x in r])"
+	if expect 'KOTI-SCAN' 20; then
+		capture | grep -a 'KOTI-SCAN' | tail -n 1 \
+			| sed 's/.*KOTI-SCAN /koti-net: visible: /'
+		return 0
+	fi
+	echo "koti-net: no scan result in 20 s; raw capture follows:" >&2
+	capture >&2
 	return 1
 }
 
@@ -423,12 +479,37 @@ cmd_get() {
 	# does; the call that works everywhere else raises TypeError here, echoed
 	# back as a traceback. Writing the bytes through untouched is both shorter
 	# and exactly what a page fetch wants.
-	send "c=\"print('KOTI'+'-BEGIN')\nwhile 1:\n d=s.recv(256)\n if not d:break\n sys.stdout.write(d)\""
+	# ⛔ THE `zz` IS NOT DEBRIS — IT IS A SACRIFICIAL BYTE, AND WITHOUT IT THIS
+	# COMMAND TIMES OUT ON A PERFECT RESPONSE.
+	#
+	# Every burst the ESP32 sends arrives with its FIRST CHARACTER destroyed.
+	# Measured repeatedly on 2026-08-12, in the same capture, minutes apart:
+	#
+	#     print(6*7)          -> i2      (42)
+	#     print(w.active(..)) -> prue    (True)
+	#     print("zz",len(r))  -> )z 4    (zz 4)
+	#     HTTP/1.1 200 OK     -> rTTP/1.1 200 OK
+	#
+	# and it is the same thing two earlier sessions wrote off as harmless
+	# garble: `MicroPython v1.14` arriving as `oicroPython v1.14`, and
+	# esptest's `ets Jul 29 2019` as `ts Jul 29 2019`. One byte, every burst,
+	# always the first. fpga/ulx3s/README.md has the mechanism: the ESP32's
+	# transmit line and the FPGA's share one net back to the FTDI, so koti
+	# collides with the far end's opening character.
+	#
+	# It is NOT an esp_uart.sv defect — that FIFO pops only when non-empty and
+	# reads fifo[rptr] combinationally. Do not go looking for it there.
+	#
+	# So an unpadded `print('KOTI-BEGIN')` reaches the capture as `OTI-BEGIN`,
+	# the grep below never matches, and `get` reports "no complete reply in
+	# 60 s" while /tmp/koti-net.cap holds the entire page. Printing two junk
+	# characters in front of the marker donates them to the collision instead.
+	send "c=\"print('zz','KOTI'+'-BEGIN')\nwhile 1:\n d=s.recv(256)\n if not d:break\n sys.stdout.write(d)\""
 	# The trailing print() matters: a body that does not end in a newline
 	# would otherwise leave the end marker glued to the last line of the page,
 	# where the anchored match below never sees it and the fetch times out
 	# with the whole page already in hand.
-	send "c+=\"\nprint()\nprint('KOTI'+'-END')\""
+	send "c+=\"\nprint()\nprint('zz','KOTI'+'-END')\""
 	send 'exec(c)'
 	send 's.close()'
 
@@ -482,6 +563,7 @@ case "${1:-help}" in
 	off|sleep) shift; cmd_off "$@" ;;
 	status)	shift; cmd_status "$@" ;;
 	join)	shift; cmd_join "$@" ;;
+	scan)	shift; cmd_scan "$@" ;;
 	get)	shift; cmd_get "$@" ;;
 	py)	shift; cmd_py "$@" ;;
 	repl)	shift; cmd_repl "$@" ;;
@@ -491,6 +573,7 @@ koti-net — talk to the internet through the onboard ESP32.
 
   koti-net wake                  release the ESP32 and wait for MicroPython
   koti-net join SSID [PASS]      join a WiFi network, print the address
+  koti-net scan                  list the networks the ESP32 can actually see
   koti-net get http://URL [HOST] fetch a page to stdout
   koti-net py 'CODE'             run one line of MicroPython, print the reply
   koti-net status                link state and byte counter

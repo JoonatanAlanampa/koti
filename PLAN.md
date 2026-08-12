@@ -687,7 +687,42 @@ on the ladder; the first two are small and change how the machine feels.
     them to say `use koti-net`. (Genuinely fixed only by item 11's IP-address
     caveat, which is a much bigger job.)
 
-16. [ ] 🔴 **Duplicate/lost keystrokes — A MECHANISM AT LAST, 2026-08-12.**
+16. [~] 🔎 **MEASURED 2026-08-12: THE KEYBOARD IS INNOCENT. It is contention
+    between two INPUT SOURCES, not a broken input device.**
+    Controlled test on hardware, using the gateware's own counters (which
+    nobody had ever read) via `devmem` — no code change, no rebuild:
+    ```
+    # echo KOTI16-ALPHA        <- 17 chars + Enter = 18 keypresses
+    KOTI16-ALPHA
+    enq_count  0x88 -> 0x9A     = +18          exactly
+    0x60004    0x00555100       -> wptr=10 rptr2=10 rptr=10
+    ```
+    18 offered, 18 counted, both readers level, `conerr=0`, nothing lapped.
+    `wptr` 8→10 is the same 18 wrapped in a 4-bit pointer over an 8-entry FIFO
+    (8+18=26, mod 16 = 10) — consistent to the digit.
+    ⛔ **AND THE HARDWARE CANNOT SPLIT KEYSTROKES BY CONSTRUCTION.**
+    `src/usb_kbd.sv` gives each consumer its OWN read pointer (`rptr` for the
+    firmware/hvc0, `rptr2` for `koti_kbd.c`/tty1) precisely so that "one
+    keypress reaches the console AND /dev/input/eventN". My first hypothesis —
+    two readers racing over one single-entry register — was **wrong**, and the
+    RTL says so in its own comments.
+    ⇒ **What actually correlates with every corrupted sample is TWO INPUT
+    SOURCES active at once**: `tart`, `ddate` and `datedate` all happened while
+    a COM3 driver and the physical keyboard were typing into the same shell,
+    or while two shells echoed. A single source typing alone is clean.
+    ⚠️ **So this is the cost of the doubled console** (`BR2_TARGET_GENERIC_GETTY_PORT`
+    + the tty1 getty), which is a DESIGN CHOICE made 2026-08-09 for the UART
+    echo diagnostic — not a defect. It is also `docs/MANUAL.md`'s "everything
+    runs twice", same root.
+    📌 **The diagnostic it was kept for is now obsolete**: item 10b made hvc0
+    two-way, so a PC can type at koti directly and watch its own echo. Removing
+    the keyboard mirror from `console_getchar` would end the doubling — but it
+    is a FIRMWARE change (bitstream rebuild + ~140 s flash), so it is the
+    user's call, not a bug fix to slip in.
+    ⏳ Left open deliberately: the operational rule ("do not type from two
+    places at once") is free and works today.
+
+    (superseded framing) 🔴 **Duplicate/lost keystrokes — a mechanism, 2026-08-12.**
     Observed on the bench: `/etc/init.d/S45kotisd start` arrived as `tart`
     (22 characters gone), `date` as `ddate`, and `ps` RAN TWICE.
     ⭐ **`ps` showed TWO `-sh` processes (PIDs 80 and 81)** — the documented

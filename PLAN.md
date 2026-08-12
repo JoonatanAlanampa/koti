@@ -779,7 +779,30 @@ on the ladder; the first two are small and change how the machine feels.
     reading per 2 s, and needs a pull-up. Indoors that is room conditions, not
     weather; real weather means a forecast API, which needs item 22's TLS.
 
-24. [ ] 🧹 **The housekeeper, tier 1: NO MODEL AT ALL.** The two example
+24. [~] 🧹 **BUILT 2026-08-12, NOT YET CONFIRMED ON HARDWARE.**
+    `/usr/bin/koti` — `koti peek` and `koti help`, and neither uses a model.
+    - **`koti peek`** is a table of physical addresses (from `koti.dts` and
+      `src/project.sv`) plus `devmem`. ✅ `CONFIG_DEVMEM=y` and
+      `STRICT_DEVMEM` off were **checked in the built kernel's own
+      `config-koti.txt`** before writing it, so this is not another applet
+      that ships and cannot work (item 15).
+      ⛔ **It REFUSES registers that change when read**, by name and by raw
+      address: the keyboard and ESP32 queues pop, and **the PLIC claim
+      register is the worst of them** — `src/plic.sv:70`, `inflight` is set by
+      a claim and cleared only by a matching complete, so a stray peek does
+      not lose one keystroke, it wedges that source permanently, on a machine
+      with no PS/2 fallback left. `--force` overrides, loudly.
+    - **`koti help QUESTION`** is a keyword table over `koti-help`'s sections,
+      which are addressable now (`koti-help STORAGE`, `koti-help -l`).
+      ⛔ **Retrieval, not generation: the worst it can do is show the wrong
+      section of something a person wrote.** It cannot invent a fact.
+      🪤 **A generic keyword wins ties and silently misroutes everything
+      containing it** — `can` in WHAT IS HERE beat `compile` in WHAT IS NOT
+      HERE. Keywords must name a subject. 13 real questions are gated in CI.
+    📌 The interface is question-in, section-name-out **so item 25's classifier
+    is a swap, not a rewrite** — and this is what it degrades to.
+
+    (original entry) 🧹 **The housekeeper, tier 1: NO MODEL AT ALL.** The two example
     questions want different machines, and one of them wants no intelligence:
     - **"what is in memory location x" is not an AI question** — it is
       `devmem`. Deterministic, instant, exact. A neural net in front of it

@@ -59,6 +59,7 @@ jobs:
                    sw/linux/rootfs-overlay/etc/init.d/S45kotisd \
                    sw/linux/rootfs-overlay/etc/init.d/S99koti \
                    sw/linux/rootfs-overlay/etc/profile.d/10-koti.sh \
+                   sw/linux/rootfs-overlay/usr/bin/koti \
                    sw/linux/rootfs-overlay/usr/bin/koti-net \
                    sw/linux/rootfs-overlay/usr/bin/koti-help \
                    sw/linux/rootfs-overlay/usr/bin/koti-status; do

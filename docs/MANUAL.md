@@ -204,7 +204,7 @@ not exactly like their GNU counterparts: expect fewer long options.
 | **system** | `uname` `dmesg` `date` `hostname` `id` `whoami` `env` `printenv` `lsmod` `sysctl` `reboot` `poweroff` |
 | **maths** | `bc` `dc` `expr` `factor` `seq` |
 | **console** | `clear` `reset` `chvt` `openvt` `loadkmap` `dumpkmap` `setfont`-ish via `loadfont` |
-| **koti** | `koti-help` (this manual), `koti-status` (what the machine is and is doing) |
+| **koti** | `koti-help` (this manual), `koti-status` (what the machine is and is doing), `koti help <question>` (find the right section), `koti peek` (read the hardware) |
 
 ### Everything else
 

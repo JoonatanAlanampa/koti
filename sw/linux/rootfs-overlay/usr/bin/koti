@@ -1,0 +1,272 @@
+#!/bin/sh
+# koti — the housekeeper. PLAN item 24, tier 1: NO MODEL AT ALL.
+#
+# ⛔ READ THIS BEFORE ADDING INTELLIGENCE TO IT, BECAUSE THE POINT OF THIS FILE
+# IS THAT IT HAS NONE.
+#
+# The two questions that started item 24 want different machines, and one of
+# them wants no machine:
+#
+#   "what is in memory location x" IS NOT AN AI QUESTION. It is a read. A
+#   neural network in front of `devmem` would be slower AND occasionally
+#   wrong, which is the worst trade available. So `koti peek` is a table of
+#   addresses and a call to devmem, and it is exact.
+#
+#   "how do I do X" IS RETRIEVAL, NOT GENERATION. The answer is already
+#   written in docs/MANUAL.md and koti-help; the job is finding the right
+#   section. So `koti help` is a keyword table, and the worst thing it can do
+#   is show you the wrong section of a document a human wrote. It cannot
+#   invent a fact about this machine, because it does not produce sentences.
+#
+# ⭐ THAT SAFETY PROPERTY IS THE REASON TO BUILD IT THIS WAY ROUND, and it is
+# also why this is the FALLBACK for PLAN items 25 and 26. A classifier that
+# gets a question wrong degrades to `koti help`'s grep; it never degrades to a
+# confident invention. Build the floor first.
+#
+# Copyright (c) 2026 Joonatan Alanampa
+# SPDX-License-Identifier: Apache-2.0
+set -u
+
+die() { echo "koti: $*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# The map. Addresses are PHYSICAL and come from sw/linux/koti.dts and
+# src/project.sv, which are the two places that decide them.
+#
+# Columns: name | address | safe | one line.
+#
+# ⛔ THE `safe` COLUMN IS NOT DECORATION. Several of these registers CHANGE
+# WHEN YOU READ THEM — the USB keyboard queue and the ESP32 receive FIFO both
+# pop on a read, and the PLIC's claim register claims an interrupt. A peek at
+# one of those does not observe the machine, it perturbs it: the byte you read
+# is a byte the driver will never see, and the symptom lands later and
+# somewhere else, as a dropped keystroke or a corrupted page fetch. An
+# instrument that quietly damages what it measures is worse than no instrument,
+# so those windows are listed but refused without --force.
+# ---------------------------------------------------------------------------
+map() {
+cat <<'EOF'
+led|0x00010000|y|LED register, uo[7:2] on the board
+gpio|0x00010008|y|GPIO in, ui[7:0]
+qspi_cfg|0x0001000C|y|quad-SPI enable bits (0 = plain 1-bit SPI)
+msip|0x00020000|y|CLINT software interrupt pending
+mtimecmp|0x00020008|y|CLINT timer compare, low 32
+mtimecmp_hi|0x0002000C|y|CLINT timer compare, high 32
+mtime|0x00020010|y|CLINT cycle counter, low 32 - increments every clock
+mtime_hi|0x00020014|y|CLINT cycle counter, high 32
+vga_ctrl|0x00040000|y|video control: bit0 VGA_EN, bit1 UART on blue LSB
+vga_base|0x00040004|y|address of the text buffer being displayed
+vga_colour|0x00040008|y|{bg[13:8], fg[5:0]}
+sd_ctrl|0x00050000|n|microSD controller - status/data, reads pop
+kbd|0x00060000|n|USB keyboard FIFO - A READ EATS A KEYSTROKE
+esp|0x00070000|n|ESP32 link FIFO - A READ EATS A RECEIVED BYTE
+plic_prio1|0x00C00004|y|PLIC priority of source 1 (the USB keyboard)
+plic_prio2|0x00C00008|y|PLIC priority of source 2 (the ESP32 link)
+plic_pending|0x00C01000|y|PLIC pending bits, read-only
+plic_enable|0x00C02000|y|PLIC enable bits for the context
+plic_threshold|0x00E00000|y|PLIC priority threshold
+plic_claim|0x00E00004|n|PLIC claim/complete - READING IT CLAIMS AN INTERRUPT
+ram|0x01000000|y|start of the 32 MB SDRAM
+EOF
+}
+
+# The windows a raw address falls into, for the same reason. Ranges rather than
+# exact addresses, because a peek two words into the ESP32 window is as
+# destructive as one at its base.
+unsafe_window() {
+	_a=$1
+	if   [ "$_a" -ge $((0x00050000)) ] && [ "$_a" -lt $((0x00060000)) ]; then
+		echo "the microSD controller"
+	elif [ "$_a" -ge $((0x00060000)) ] && [ "$_a" -lt $((0x00070000)) ]; then
+		echo "the USB keyboard queue - a read eats a keystroke"
+	elif [ "$_a" -ge $((0x00070000)) ] && [ "$_a" -lt $((0x00080000)) ]; then
+		echo "the ESP32 link queue - a read eats a received byte"
+	elif [ "$_a" -eq $((0x00E00004)) ]; then
+		# ⛔ THE WORST ONE ON THE LIST, and it is a single word rather than a
+		# window. src/plic.sv:70 says it plainly: `inflight` is set by a
+		# claim and cleared only by a MATCHING complete, so a claim nobody
+		# completes wedges that source permanently. A stray peek here does
+		# not lose one keystroke, it stops the keyboard interrupt for good
+		# — and the machine that has no PS/2 fallback any more is this one.
+		echo "the PLIC claim register - a read CLAIMS an interrupt and can wedge it"
+	else
+		return 1
+	fi
+}
+
+cmd_peek() {
+	_force=0
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			-f|--force) _force=1; shift ;;
+			-l|--list)
+				printf '%-12s %-12s %s\n' NAME ADDRESS WHAT
+				map | while IFS='|' read -r n a s d; do
+					[ "$s" = y ] || d="$d  [needs --force]"
+					printf '%-12s %-12s %s\n' "$n" "$a" "$d"
+				done
+				echo
+				echo "koti peek NAME, or koti peek 0xADDRESS [COUNT]."
+				echo "Some registers change when read; those need --force."
+				return 0 ;;
+			*) break ;;
+		esac
+	done
+	[ $# -ge 1 ] || die "usage: koti peek [--list] NAME|0xADDRESS [COUNT]"
+
+	_what=$1
+	_count=${2:-1}
+	case "$_count" in
+		''|*[!0-9]*) die "count must be a number, not '$_count'" ;;
+	esac
+
+	# A name resolves through the table; anything else is taken as an address.
+	_row=$(map | grep -i "^$_what|" | head -n 1)
+	if [ -n "$_row" ]; then
+		_addr=$(echo "$_row" | cut -d'|' -f2)
+		_safe=$(echo "$_row" | cut -d'|' -f3)
+		_desc=$(echo "$_row" | cut -d'|' -f4)
+	else
+		case "$_what" in
+			0x*|0X*) _addr=$_what ;;
+			*[!0-9]*) die "no such name '$_what' (koti peek --list), and it is not an address" ;;
+			*) _addr=$_what ;;
+		esac
+		_safe=y
+		_desc=""
+	fi
+
+	# $(( )) understands 0x here, which is what makes the range checks below
+	# work on a name and an address alike.
+	_n=$((_addr)) 2>/dev/null || die "cannot read '$_addr' as a number"
+	if [ -z "$_desc" ]; then
+		_w=$(unsafe_window "$_n") && { _safe=n; _desc="in $_w"; }
+	fi
+
+	if [ "$_safe" != y ] && [ "$_force" -ne 1 ]; then
+		echo "koti: $_addr $_desc" >&2
+		echo "koti: reading it CHANGES it, so this is refused. If you meant" >&2
+		echo "koti: it, add --force and expect the driver to lose whatever" >&2
+		echo "koti: you just took." >&2
+		return 1
+	fi
+
+	command -v devmem > /dev/null 2>&1 || die "no devmem in this rootfs"
+	[ -r /dev/mem ] || die "/dev/mem is not readable - are you root?"
+
+	_i=0
+	while [ "$_i" -lt "$_count" ]; do
+		_this=$((_n + _i * 4))
+		# devmem prints `0x........`; print the address beside it so a
+		# multi-word dump is readable, and the name once at the top.
+		_val=$(devmem "$_this" 32 2>/dev/null) || {
+			die "devmem could not read $(printf '0x%08X' "$_this")"
+		}
+		printf '0x%08X  %s\n' "$_this" "$_val"
+		_i=$((_i + 1))
+	done
+	[ -n "$_desc" ] && echo "($_desc)"
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# help — retrieval, not generation.
+#
+# The table maps words a person might type onto a section of koti-help. It is
+# deliberately generous: several words point at the same section, because the
+# cost of a wrong match is showing a section somebody wrote, and the cost of no
+# match is the person concluding the machine has nothing to say.
+#
+# ⛔ NO WORD THAT APPEARS IN ORDINARY QUESTIONS. "what", "how", "can", "do"
+# score for whichever section happens to list them and dilute the real signal —
+# "can I compile something" answered with WHAT IS HERE, because `can` matched
+# there and tied with `compile` in WHAT IS NOT HERE, and a tie goes to the
+# first row. A keyword must be about a SUBJECT, or it is noise with a vote.
+#
+# 📌 This is the thing PLAN item 25's classifier would REPLACE and fall back
+# to. Keep the interface — question in, section name out — so that swap is a
+# swap and not a rewrite.
+# ---------------------------------------------------------------------------
+topics() {
+cat <<'EOF'
+STORAGE|save write file files persist store disk card sd microsd mount unmount lost survive ext2 sync fsck
+CLOCK|time clock date day today year when timestamp epoch 1970 ntp rtc
+INTERNET|net internet web wifi online download fetch page url http browse ping wget address ip esp32 modem dns
+KEYBOARD|key keyboard layout type typing character letter altgr keymap finnish
+THE TWO CONSOLES|console screen monitor serial terminal double twice echo doubled tty hvc0 tty1 display
+PEEKING|peek memory address register mmio devmem hardware poke inspect location
+WHAT IS HERE|command commands program tool editor edit vi busybox applet shell
+WHAT IS NOT HERE|compile compiler gcc package install apt python float fpu man manual missing
+SHUTTING DOWN|off shutdown power halt reboot poweroff switch stop
+EOF
+}
+
+cmd_help() {
+	if [ $# -eq 0 ]; then
+		echo "koti help — ask a question in ordinary words, get the section"
+		echo "of the manual that answers it. For example:"
+		echo
+		echo "    koti help how do I save a file"
+		echo "    koti help why is the date wrong"
+		echo "    koti help everything runs twice"
+		echo
+		echo "Sections (koti-help SECTION prints one directly):"
+		koti-help -l | sed 's/^/    /'
+		return 0
+	fi
+
+	# Score every section by how many of its keywords appear in the question.
+	# ⚠️ WHOLE WORDS, and the spaces around $word matter: without them "sd"
+	# matches inside "used" and "ip" inside "typing", so a question about
+	# typing would answer with the network section. Measured while writing
+	# this, not imagined.
+	_q=$(echo " $* " | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' ' ')
+	_best=""
+	_bestn=0
+	# A pipeline's last stage runs in a subshell in some shells, so the loop
+	# reads from a here-doc-ish temporary rather than from a pipe: assigning
+	# _best inside `map | while` would be discarded on the way out.
+	_tmp=/tmp/koti-help.$$
+	topics > "$_tmp"
+	while IFS='|' read -r _sec _words; do
+		_n=0
+		for _w in $_words; do
+			case "$_q" in
+				*" $_w "*) _n=$((_n + 1)) ;;
+			esac
+		done
+		if [ "$_n" -gt "$_bestn" ]; then
+			_bestn=$_n
+			_best=$_sec
+		fi
+	done < "$_tmp"
+	rm -f "$_tmp"
+
+	if [ -z "$_best" ]; then
+		echo "koti: nothing in the manual obviously answers that." >&2
+		echo "koti: try 'koti-help' for all of it, or one of:" >&2
+		koti-help -l | sed 's/^/    /' >&2
+		return 1
+	fi
+	koti-help "$_best"
+}
+
+case "${1:-}" in
+	peek)	shift; cmd_peek "$@" ;;
+	help)	shift; cmd_help "$@" ;;
+	*)
+		cat <<'EOF'
+koti — the housekeeper.
+
+  koti peek --list        the hardware worth looking at, by name
+  koti peek NAME [COUNT]  read it (koti peek mtime)
+  koti peek 0xADDR [N]    read any physical address
+  koti help QUESTION      find the section of the manual that answers it
+
+Neither command uses a model. `peek` is a table and a read, so it is exact;
+`help` is a keyword table over koti-help, so the worst it can do is show you
+the wrong section of something a person wrote. See koti-help for the manual
+itself and koti-status for what the machine is doing.
+EOF
+		;;
+esac

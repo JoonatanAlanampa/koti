@@ -320,6 +320,99 @@ NOW=$past
 save_clock
 eq "save_clock writes a real time" "$past" "$(cat "$CLOCKFILE" 2>/dev/null)"
 
+# ---------------------------------------------------------------------------
+# `koti` — the housekeeper. PLAN item 24.
+#
+# Two things are worth a gate here and the second is the important one.
+#
+# The retrieval table is checked against the questions a person would actually
+# type, because its failure mode is silent: a keyword that is too generic wins
+# ties and quietly misroutes every question containing it. That is not
+# hypothetical — "can I compile something" answered with WHAT IS HERE, because
+# `can` was a keyword there and tied with `compile` in WHAT IS NOT HERE.
+#
+# ⛔ AND THE SAFETY REFUSAL, WHICH IS THE ONE THAT CAN DAMAGE THE MACHINE.
+# `koti peek` reads physical memory, and several of koti's registers CHANGE
+# when read: the keyboard and ESP32 queues pop, and the PLIC's claim register
+# claims an interrupt that only a matching complete clears (src/plic.sv:70 —
+# a claim nobody completes wedges that source for good, on a machine with no
+# PS/2 fallback left). A regression that turned the refusal into a pass would
+# be invisible until someone lost a keystroke or a keyboard.
+# ---------------------------------------------------------------------------
+echo "== koti (housekeeper) =="
+BIN=$here/rootfs-overlay/usr/bin
+PATH="$BIN:$PATH"
+export PATH
+
+for pair in \
+	"STORAGE:how do I save a file" \
+	"STORAGE:where does the microsd get mounted" \
+	"CLOCK:why is the date wrong" \
+	"CLOCK:what year does it think it is" \
+	"INTERNET:how do I get on the internet" \
+	"INTERNET:why does wget not work" \
+	"THE TWO CONSOLES:everything runs twice" \
+	"PEEKING:what is in memory location 0x40004" \
+	"WHAT IS NOT HERE:can I compile something" \
+	"WHAT IS NOT HERE:is there a package manager" \
+	"WHAT IS HERE:what commands are there" \
+	"SHUTTING DOWN:how do I turn it off" \
+	"KEYBOARD:the keyboard types the wrong character"
+do
+	want=${pair%%:*}
+	q=${pair#*:}
+	# shellcheck disable=SC2086
+	eq "help '$q'" "$want" "$(koti help $q 2>/dev/null | head -n 1)"
+done
+
+# A question about nothing must SAY so rather than pick a section at random.
+if koti help xyzzy plugh > /dev/null 2>&1; then
+	bad "koti help answered a question with no keywords in it"
+else
+	ok
+fi
+
+echo "== koti peek refuses what a read would damage =="
+for name in kbd esp sd_ctrl plic_claim; do
+	if koti peek "$name" > /dev/null 2>&1; then
+		bad "koti peek $name was NOT refused"
+	else
+		ok
+	fi
+done
+# Raw addresses inside those windows must be refused too — the table is a
+# convenience, not the guard.
+for addr in 0x00050010 0x00060004 0x00070004 0x00E00004; do
+	if koti peek "$addr" > /dev/null 2>&1; then
+		bad "koti peek $addr (an unsafe window) was NOT refused"
+	else
+		ok
+	fi
+done
+# ...and a safe one must get past the guard. It cannot actually read anything
+# here (no /dev/mem on a build machine), so the check is that it fails LATER,
+# for the devmem reason, rather than at the refusal.
+out=$(koti peek mtime 2>&1)
+case "$out" in
+	*"refused"*) bad "koti peek mtime was refused as unsafe" ;;
+	*) ok ;;
+esac
+
+# Every address in the table must parse as a number, and every row must carry
+# all four fields. A typo here is a wrong answer delivered with confidence,
+# which is exactly what this command exists not to do.
+map_rows=$(awk '/^map\(\) \{/{p=1;next} /^EOF$/{p=0} p' "$BIN/koti" | grep '|')
+echo "$map_rows" | while IFS='|' read -r n a s d; do
+	[ -n "$n" ] && [ -n "$a" ] && [ -n "$d" ] || echo "BADROW:$n"
+	case "$s" in y|n) ;; *) echo "BADSAFE:$n" ;; esac
+	case "$a" in 0x*) ;; *) echo "BADADDR:$n" ;; esac
+done > "$TMP/maprows"
+if [ -s "$TMP/maprows" ]; then
+	bad "koti peek map has malformed rows: $(cat "$TMP/maprows")"
+else
+	ok
+fi
+
 echo
 if [ "$fails" -eq 0 ]; then
 	echo "test_rootfs_shell: PASS ($checks checks)"

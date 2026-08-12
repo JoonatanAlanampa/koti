@@ -7,10 +7,28 @@
 # is the short form; docs/MANUAL.md is the long one and they are kept in step
 # by hand -- if you add a section there, add its heading here.
 #
+# ⭐ SECTIONS ARE ADDRESSABLE NOW (PLAN item 24). `koti-help STORAGE` prints one
+# section, unpaged; `koti-help -l` lists them. That is what makes retrieval
+# possible at all -- `koti help "how do I save a file"` is a keyword table in
+# /usr/bin/koti that resolves to a section name and calls this. No model, no
+# weights, and it cannot invent an answer, because every answer it can give is
+# a section somebody wrote.
+#
+# 🪤 A NAMED SECTION IS NOT PAGED, DELIBERATELY. `more` waits for a keypress at
+# the end, and on the serial console that reads as a hung machine (it cost a
+# session on 2026-08-12 via koti-status). Whole-manual output still pages,
+# because 90 lines on an 80x60 screen genuinely needs it.
+#
+# ⚠️ HEADINGS ARE PARSED, NOT LISTED: a heading is a line starting at column 0
+# in capitals. Adding a section needs no table here -- but indenting one, or
+# writing it in lower case, silently removes it from `-l` and from every
+# `koti help` question that would have found it.
+#
 # Copyright (c) 2026 Joonatan Alanampa
 # SPDX-License-Identifier: Apache-2.0
 
-exec more <<'EOF'
+manual() {
+cat <<'EOF'
 koti - a computer built from the transistor up.
 RV32IMA + Zicsr, sv32 MMU, 32 MB SDRAM, Linux 6.12, on an ULX3S 85F at 25 MHz.
 
@@ -23,14 +41,38 @@ WHAT IS HERE
   vi is the editor. `less` and `more` page. `tree` is here. `bc` and `dc` do
   arithmetic. `tar`, `gzip`, `xz`, `unzip` handle archives.
 
+  koti's own commands: `koti-help` (this), `koti-status` (what the machine is
+  doing), `koti-net` (the internet, through the ESP32), and `koti` -- which
+  has `koti peek` for looking at the hardware and `koti help` for finding the
+  right section of this manual by asking a question.
+
 STORAGE
-  /            RAM (initramfs). ANYTHING WRITTEN HERE IS LOST AT POWER-OFF.
-  /dev/kotisd2 the microSD's second partition, ext2, and it is writable:
-                   mount /dev/kotisd2 /mnt
-                   ... work ...
-                   sync ; umount /mnt
+  /mnt         the microSD's second partition, ext2, MOUNTED FOR YOU AT BOOT.
+               Write here and it survives a power cycle.
+  /            RAM (initramfs), unless the boot log said it switched to the
+               card. ANYTHING WRITTEN HERE IS LOST AT POWER-OFF.
+
+  The boot log says which happened: `koti: microSD mounted at /mnt`, or
+  `koti: the microSD IS /` if the card is the root filesystem, or a line
+  naming the reason it is neither. `mount | grep kotisd` confirms it.
+
   ⚠️ ext2 has NO JOURNAL. `sync` before pulling the power or you will lose
-  whatever was still in the page cache.
+  whatever was still in the page cache. The card is checked with e2fsck at
+  every boot, which repairs the ordinary damage and tells you about the rest.
+
+CLOCK
+  koti has no battery and no clock chip, so the kernel starts at the epoch.
+  Two things fix that, and neither is NTP:
+
+    koti-net time     asks a web server what time it is, from the Date header
+                      every HTTP reply already carries. Accurate to a second
+                      or two, and it saves the answer to the card.
+
+  At the next boot that saved time is restored, so the machine starts from
+  when it was LAST RUNNING rather than from 1970. That is monotonic, not
+  correct: after a week unplugged it believes it is still last Tuesday, and
+  file timestamps stay in the order the files were written. If `date` says
+  1970, either the card is not mounted or it has never been told the time.
 
 THE TWO CONSOLES
   The monitor (tty1) is the one you type at. The serial line (hvc0) is a
@@ -44,19 +86,33 @@ KEYBOARD
 
 INTERNET
   koti has no address of its own -- no MAC, no PHY -- so ip, ping and wget
-  exist as busybox applets and still fail. What it has instead is a modem:
-  the ESP32 next to the FPGA, reached over /dev/ttyKOTI0.
+  cannot work. What it has instead is a modem: the ESP32 next to the FPGA,
+  reached over /dev/ttyKOTI0.
     koti-net wake                     release the ESP32 from reset
     koti-net join <ssid> <password>   prints the address it was given
-    koti-net get http://example.com/  the page, on standard output
+    koti-net scan                     the networks it can actually see
+    koti-net get http://ADDR/ [HOST]  the page, on standard output
+    koti-net time                     set the clock from a server
     koti-net off                      put it back into reset
   The address belongs to the ESP32, not to koti. http only, no https.
+  Names do not resolve yet, so give the ADDRESS in the URL and the NAME as
+  the second argument; the server then serves the right site.
   Waking it puts a second driver on the microSD bus (the ESP32's GPIOs ARE
   the card's wires) -- measured harmless over 25 runs, but `koti-net off`
   when you are done is the right habit.
 
+PEEKING
+  `koti peek` reads the hardware directly, through /dev/mem.
+    koti peek --list        everything worth looking at, by name
+    koti peek mtime         the cycle counter, by name
+    koti peek 0x40004       any physical address
+  It refuses addresses whose registers change when you read them -- the
+  keyboard and ESP32 receive queues would lose a byte to the peek.
+
 WHAT IS NOT HERE
-  NO package manager, no compiler, no floating point (koti has no FPU).
+  NO package manager, no compiler, no floating point (koti has no FPU), and
+  no manual pages -- this file is what there is. `busybox <applet> --help`
+  covers the applets.
 
 SHUTTING DOWN
   sync, then pull the power. `poweroff` and `halt` stop the CPU (the firmware
@@ -65,3 +121,33 @@ SHUTTING DOWN
 MORE
   docs/MANUAL.md in the repository, which this summarises.
 EOF
+}
+
+# A heading is a line beginning at column 0 in capitals. Everything else is
+# body text, which is always indented.
+is_heading_re='^[A-Z][A-Z0-9 ()/-]*$'
+
+case "${1:-}" in
+	-l|--list)
+		manual | grep -E "$is_heading_re"
+		;;
+	"")
+		# ⚠️ `more` waits for a key at the end of the last screen. That is
+		# right in front of a person and wrong in a pipe, so page only
+		# when standard output is really a terminal.
+		if [ -t 1 ]; then manual | more; else manual; fi
+		;;
+	*)
+		want=$(echo "$1" | tr '[:lower:]' '[:upper:]')
+		out=$(manual | awk -v want="$want" -v hre="$is_heading_re" '
+			$0 ~ hre { show = (index($0, want) == 1) }
+			show { print }
+		')
+		if [ -z "$out" ]; then
+			echo "koti-help: no section starting '$1'. Sections are:" >&2
+			manual | grep -E "$is_heading_re" >&2
+			exit 1
+		fi
+		printf '%s\n' "$out"
+		;;
+esac

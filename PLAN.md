@@ -869,27 +869,16 @@ on the ladder; the first two are small and change how the machine feels.
     `grep`. The model is then a pure improvement over the fallback, never a
     regression.
 
-26. ~~**The housekeeper, tier 3: a ~5M-parameter ternary generative model.**~~
-    ⛔ **REMOVED FROM THE ROADMAP 2026-08-12 (user directive: "remove the
-    ternary 5M-param from the roadmap").** Not parked, not deferred — off the
-    list. Do not re-propose it, and do not treat items 24/25 as steps toward it.
-    📌 The tier structure it capped is gone with it: **the housekeeper is two
-    tiers now** — 24 (no model) and 25 (the intent classifier), and 25 is the
-    end of that line rather than the middle of it.
-    ⚠️ One number is kept below, and only because the non-goal needs it: the
-    ternary arithmetic is what proves that "an LLM on koti is infeasible" is a
-    statement about **0.5B models doing multiplies**, not about small
-    self-built weights. Deleting it outright would let the non-goal be quoted
-    against item 25, which is buildable and measured.
+⛔ **26 was removed from the roadmap 2026-08-12 by user directive.** The number
+is retired with it; **there is no item 26**, and the housekeeper is two tiers —
+24 and 25.
 
 ⛔ **NON-GOAL, so nobody re-proposes it: a FRONTIER-CLASS LLM running ON koti.**
 ⚠️ **Read the scope of this before quoting it: it rules out a ~0.5B model doing
-multiplies. It does NOT rule out item 25**, which is milliseconds and a few
-hundred KB, and it is not an argument against small self-built weights in
-general — ternary weights {−1, 0, +1} turn a MAC into an add and would put koti
-at ~10M MAC/s, so the wall is the model size, not the machine. (That was item
-26; it is off the roadmap by user directive and the figure survives only to keep
-this paragraph honest.) What is genuinely out of reach:
+multiplies. It does NOT rule out item 25**, whose own arithmetic is in its
+entry — ~11K MACs, about 12 ms, a few hundred KB — and which is therefore
+governed by its measurements, not by this paragraph. **What is out of reach is
+a model of that size, not the idea of weights on koti.**
 Not "hard" — infeasible by about four orders of magnitude, and the arithmetic
 is short enough to check. koti is ~29 MHz with an **iterative 32-cycle
 multiplier** (`M extension`, above) and no FPU ⇒ **~0.9M multiplies/second**.

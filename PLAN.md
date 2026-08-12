@@ -970,8 +970,45 @@ on the ladder; the first two are small and change how the machine feels.
     ⇒ Build this first whatever else happens: it makes koti self-documenting,
     and it is the fallback item 25 degrades *to* rather than fails into.
 
-25. [ ] 🧠⭐ **The housekeeper, tier 2 and the LAST tier — A TINY INTENT
-    CLASSIFIER — TRAINED ON
+25. [~] 🧠🔬 **BUILT AND MEASURED 2026-08-12 — AND IT LOSES TO THE GREP IT WAS
+    MEANT TO REPLACE. NOT SHIPPED.**
+    `sw/koti-intent/` holds the trainer (pure Python, no numpy — the input is
+    sparse, so it trains in 1.5 s and runs anywhere) and 110 hand-written
+    phrasings labelled with koti-help's own section names.
+    ```
+    HELD OUT   model 5/21 = 24%     keyword table 16/21 = 76%
+    TRAIN      82/82 = 100%
+    held-out tokens UNSEEN in training: mean 46%
+    ```
+    ⛔ **THE PIPELINE IS NOT BROKEN — 100% on train, 24% held out is textbook
+    memorisation**, and a sweep over epochs (5…120) and lr (0.05…0.25) never
+    beat 19%. With 9 classes, chance is 11%.
+    ⭐ **THE CAUSE IS THE DATA, AND THE NUMBER THAT SAYS SO IS 46%.** Nearly
+    half the tokens in a held-out question were never seen in training, so the
+    discriminative word (`wifi`, `finnish`, `reboot`) is usually the one the
+    model has never had a gradient for. The keyword table wins because it
+    encodes a human's knowledge of the WHOLE vocabulary directly; the model has
+    to infer that vocabulary from 82 examples and cannot.
+    ⛔⛔ **AND THE PROPOSED SAFETY MECHANISM DOES NOT WORK AS DESIGNED.** This
+    entry used to say "emit a confidence; below a threshold, fall through to
+    item 24's grep — the model is then a pure improvement, never a regression".
+    Measured, the model is **confidently wrong**: 0.96 on a wrong INTERNET, 0.99
+    on a wrong SHUTTING DOWN. A threshold cannot separate them, so the fallback
+    would not fire and the regression would ship. Any future version has to
+    demonstrate CALIBRATION, not just accuracy.
+    📌 **What would actually fix it, in order:** (1) ~10x the phrasings, until
+    the unseen-token rate is low — that is hours of writing, not tuning, and it
+    is the honest path; (2) then re-run `train.py --eval`, which scores the
+    model AND the table on the same held-out slice and is the gate; (3) only
+    then build the C inference side and put weights on the card.
+    ⚠️ **Zero-init embeddings were tried and made it WORSE** (29% → 24%), so
+    unseen-word noise is not the dominant term. Do not re-derive that.
+    ⭐ The trainer, the data and the eval harness are committed and cost
+    nothing to keep; what is NOT committed is a `koti-intent.bin`, because
+    shipping 100 KB of weights that lose to a 200-line shell function would be
+    the exact "green badge that means less than it looks" this project hunts.
+
+    (original plan) 🧠⭐ **A TINY INTENT CLASSIFIER — TRAINED ON
     THE PC, RUNNING ON koti. This is the one where self-built weights genuinely
     pay, and it is small enough to understand end to end.**
     The model does not answer anything. It maps a fuzzily-worded question onto

@@ -1,0 +1,136 @@
+# intents.txt — the training data for PLAN item 25, and the part that matters.
+#
+# ⛔ THE MODEL DOES NOT ANSWER ANYTHING. It maps a fuzzily-worded question onto
+# one of the sections of koti-help, and the section then gets printed verbatim.
+# So the worst a misclassification can do is show you the wrong page of a
+# document a person wrote. It cannot invent a fact about this machine. That
+# safety property is the whole reason to build it this way round, and it is why
+# the labels below are EXACTLY koti-help's section headings — not a new
+# taxonomy that would have to be kept in step with one.
+#
+# ⚠️ THE LABELS ARE A CONTRACT. `koti help` already maps question -> section
+# name with a keyword table; this replaces the table at the same interface, so
+# a wrong label here is a wrong answer on the machine. If you add a section to
+# koti-help, add phrasings for it here, or the classifier can never choose it.
+#
+# ⭐ WRITE THE PHRASINGS THE WAY A PERSON ACTUALLY ASKS, including the sloppy
+# ones. The keyword table already handles questions that contain the obvious
+# noun; the only thing a model buys is the phrasings that DON'T — "will i lose
+# my work", "why does it say 1970", "everything happens twice". Those are the
+# rows that earn the weights. A file full of "how do I use storage" would
+# train a model that adds nothing over a grep.
+#
+# Format: INTENT | question
+# Blank lines and # comments ignored.
+
+STORAGE | how do i save a file
+STORAGE | where do my files go
+STORAGE | does this survive a reboot
+STORAGE | how do i write to the sd card
+STORAGE | will i lose my work
+STORAGE | where is the microsd mounted
+STORAGE | is the card mounted
+STORAGE | what happens when i pull the power
+STORAGE | where should i put things i want to keep
+STORAGE | does anything persist
+STORAGE | how do i unmount the card
+STORAGE | is my file still there after switching off
+STORAGE | which directory is permanent
+STORAGE | do i need to sync
+STORAGE | why did my file disappear
+
+CLOCK | why is the date wrong
+CLOCK | what year does it think it is
+CLOCK | how do i set the time
+CLOCK | why does it say 1970
+CLOCK | is there a real time clock
+CLOCK | how do i fix the date
+CLOCK | does the time survive a reboot
+CLOCK | what time is it
+CLOCK | why is the timestamp wrong
+CLOCK | can it get the time from the internet
+CLOCK | my files have the wrong date on them
+CLOCK | is there a battery for the clock
+CLOCK | how does it know what day it is
+CLOCK | the clock is behind
+
+INTERNET | how do i get online
+INTERNET | why does wget not work
+INTERNET | how do i browse the web
+INTERNET | can it fetch a page
+INTERNET | how do i connect to wifi
+INTERNET | does it have an ip address
+INTERNET | why does ping fail
+INTERNET | how do i download something
+INTERNET | is there a network
+INTERNET | how do i join a network
+INTERNET | can this machine reach the internet
+INTERNET | what is the esp32 for
+INTERNET | how do i fetch a web page
+INTERNET | why is there no network interface
+
+KEYBOARD | the keyboard types the wrong character
+KEYBOARD | how do i type a bracket
+KEYBOARD | what layout is the keyboard
+KEYBOARD | why is the wrong letter coming out
+KEYBOARD | how do i get an at sign
+KEYBOARD | is it a finnish keyboard
+KEYBOARD | the letters come out wrong
+KEYBOARD | how do i type a backslash
+KEYBOARD | where is the pipe character
+KEYBOARD | i cannot type a quote
+
+THE TWO CONSOLES | everything runs twice
+THE TWO CONSOLES | why is the output doubled
+THE TWO CONSOLES | why do i see two prompts
+THE TWO CONSOLES | what is hvc0
+THE TWO CONSOLES | why does it echo twice
+THE TWO CONSOLES | which console am i on
+THE TWO CONSOLES | why does my command run twice
+THE TWO CONSOLES | the screen and the serial port disagree
+THE TWO CONSOLES | i am logged in twice
+THE TWO CONSOLES | duplicate output everywhere
+
+PEEKING | what is in memory location
+PEEKING | how do i read a register
+PEEKING | can i look at the hardware
+PEEKING | how do i peek at an address
+PEEKING | what is at that address
+PEEKING | how do i read mmio
+PEEKING | show me a register
+PEEKING | read physical memory
+PEEKING | what is the cycle counter doing
+PEEKING | dump an address
+
+WHAT IS HERE | what commands are there
+WHAT IS HERE | what can i run
+WHAT IS HERE | is there an editor
+WHAT IS HERE | do you have vi
+WHAT IS HERE | what programs are installed
+WHAT IS HERE | what tools are available
+WHAT IS HERE | which shell is this
+WHAT IS HERE | how do i edit a file
+WHAT IS HERE | is there a pager
+WHAT IS HERE | list the utilities
+
+WHAT IS NOT HERE | can i compile something
+WHAT IS NOT HERE | is there a package manager
+WHAT IS NOT HERE | can i install things
+WHAT IS NOT HERE | is there a compiler
+WHAT IS NOT HERE | does it have python
+WHAT IS NOT HERE | can it do floating point
+WHAT IS NOT HERE | is there a man page
+WHAT IS NOT HERE | why is gcc missing
+WHAT IS NOT HERE | can i apt get something
+WHAT IS NOT HERE | is there an fpu
+
+SHUTTING DOWN | how do i turn it off
+SHUTTING DOWN | how do i shut down
+SHUTTING DOWN | can i reboot
+SHUTTING DOWN | how do i power off safely
+SHUTTING DOWN | what is the right way to switch off
+SHUTTING DOWN | does poweroff work
+SHUTTING DOWN | is it safe to pull the plug
+SHUTTING DOWN | how do i restart the machine
+SHUTTING DOWN | halt the system
+SHUTTING DOWN | i want to switch it off

@@ -853,7 +853,12 @@ cmd_get() {
 	done
 
 	send "p='$_path'"
-	send 's=socket.socket()'
+	# ⚠️ The socket is NOT created here any more, and neither is its timeout
+	# set here — both moved into the single exec below, because every command
+	# boundary between the repair and the last byte read is a window for DHCP
+	# to re-apply the lease and reset the connection. The note that follows is
+	# still exactly why the timeout exists; only where it is applied changed.
+	#
 	# ⛔ A TIMEOUT, BECAUSE A FAILED CONNECT WEDGES THE FAR END PERMANENTLY.
 	# Measured 2026-08-12: `s.connect(...)` raised OSError -202, and this
 	# command carried on regardless and ran its read loop anyway —
@@ -878,7 +883,6 @@ cmd_get() {
 	# page arrives in about two) and well below the 60 s deadline `expect`
 	# below applies, so a stall surfaces as a traceback the capture can show
 	# rather than as a hang with no evidence in it.
-	send 's.settimeout(20)'
 	# `a`, not `h`: connect to the ADDRESS, ask for the NAME. When no second
 	# argument was given the two are the same string and this is the ordinary
 	# case, unchanged.
@@ -942,13 +946,34 @@ cmd_get() {
 	#
 	# `g`, not `c`: `c` is the read-loop program a few lines below, and reusing
 	# the name here would be legal and confusing.
-	send "c1=\"g=w.ifconfig()\nd=int(g[3].split('.')[0])\nif d==0 or d>=224: w.ifconfig((g[0],g[1],g[2],g[2]))\ns.connect(socket.getaddrinfo(a,80)[0][-1])\nprint('zz','KOTI'+'-CN')\""
-	send 'exec(c1)'
-	if ! expect 'KOTI-CN' 30; then
-		echo "koti-net: could not connect to $_addr. The far end said:" >&2
-		capture >&2
-		return 1
-	fi
+	# ⛔⛔ ONE exec FOR THE WHOLE TRANSACTION — repair, socket, connect, request
+	# AND the read loop. Not for tidiness: splitting it does not work, because
+	# DHCP re-applies the lease in the GAPS BETWEEN COMMANDS and reconfiguring
+	# the interface tears down a connection that is already open.
+	#
+	# Measured 2026-08-13 with the repair and connect in one exec and the
+	# request as the next command:
+	#
+	#     >>> s.send(('GET '+p+' HTTP/1.0...').encode())
+	#     OSError: [Errno 104] ECONNRESET
+	#
+	# ⭐ ECONNRESET, **not** -202 — the name had resolved and the connect had
+	# succeeded, and the connection died in the seconds before the request went
+	# out. `w.ifconfig()` read back at that moment showed `254.128.0.0` again.
+	#
+	# ⛔ AND THE ORDERING IS NOT THE CAUSE, which was the first guess and was
+	# wrong. Both orderings — socket created before the repair, and after it —
+	# return 200 OK when run as a SINGLE repl line. That A/B is what leaves the
+	# gap itself as the only difference, and it is why this is one exec rather
+	# than a reordered sequence of several.
+	#
+	# 🪤 `req` IS BUILT OUTSIDE, deliberately. The request carries `\r\n`, which
+	# must survive as a two-character escape into the code exec() parses;
+	# written inline it needs doubling at every level, and one missed backslash
+	# puts a real CR inside a string literal. As an ordinary repl line the
+	# escaping stays single-level — and building it touches no network, so it
+	# opens no gap that matters.
+	#
 	# 🪤 `.encode()` ON THE WHOLE REQUEST, not b'GET '+p. `h` and `p` are str
 	# and MicroPython refuses bytes+str exactly as CPython does — the error
 	# arrives as a TypeError traceback echoed back through the REPL, which is
@@ -957,7 +982,9 @@ cmd_get() {
 	# HTTP/1.0 with Connection: close so the far end ends the body by closing
 	# the socket, which is the only framing that needs no chunked-transfer
 	# parser at this end.
-	send "s.send(('GET '+p+' HTTP/1.0\r\nHost: '+h+'\r\nConnection: close\r\n\r\n').encode())"
+	send "req=('GET '+p+' HTTP/1.0\r\nHost: '+h+'\r\nConnection: close\r\n\r\n').encode()"
+	# `n` for the resolver octet, because `d` is the read loop's buffer below.
+	send "c1=\"g=w.ifconfig()\nn=int(g[3].split('.')[0])\nif n==0 or n>=224: w.ifconfig((g[0],g[1],g[2],g[2]))\ns=socket.socket()\ns.settimeout(20)\ns.connect(socket.getaddrinfo(a,80)[0][-1])\nprint('zz','KOTI'+'-CN')\ns.send(req)\""
 	# ⛔ BOTH MARKERS ARE PRINTED BY ONE exec(), and the reason is the single
 	# nastiest property of driving a REPL: IT ECHOES WHAT YOU TYPE. Sending
 	# `print(begin)`, then the read loop, then `print(end)` as three commands
@@ -1001,14 +1028,30 @@ cmd_get() {
 	# the grep below never matches, and `get` reports "no complete reply in
 	# 60 s" while /tmp/koti-net.cap holds the entire page. Printing two junk
 	# characters in front of the marker donates them to the collision instead.
-	send "c=\"print('zz','KOTI'+'-BEGIN')\nwhile 1:\n d=s.recv(256)\n if not d:break\n sys.stdout.write(d)\""
+	send "c1+=\"\nprint('zz','KOTI'+'-BEGIN')\nwhile 1:\n d=s.recv(256)\n if not d:break\n sys.stdout.write(d)\""
 	# The trailing print() matters: a body that does not end in a newline
 	# would otherwise leave the end marker glued to the last line of the page,
 	# where the anchored match below never sees it and the fetch times out
 	# with the whole page already in hand.
-	send "c+=\"\nprint()\nprint('zz','KOTI'+'-END')\""
-	send 'exec(c)'
-	send 's.close()'
+	send "c1+=\"\nprint()\nprint('zz','KOTI'+'-END')\ns.close()\""
+	# ⛔ THE ONLY exec, and everything that touches the network is inside it.
+	# Appending to `c1` rather than starting a new `c` is the whole point: the
+	# connect and the read must not be two exec()s with a gap between them.
+	send 'exec(c1)'
+
+	# The connect check survives the merge, but it moved AFTER the exec, which
+	# is the only place it can now live. `send` above already waited for the
+	# far end to come back to a prompt, so by here the whole transaction has
+	# either finished or raised, and the marker is in the capture or it is not.
+	#
+	# Without this a failed connect would sit in the 60 s wait below for an END
+	# marker that cannot arrive, and then report a timeout — which is how a
+	# refused connection came to look like a slow one.
+	if ! grep -qa 'KOTI-CN' "$CAP" 2>/dev/null; then
+		echo "koti-net: could not connect to $_addr. The far end said:" >&2
+		capture >&2
+		return 1
+	fi
 
 	if expect 'KOTI-END' 60; then
 		# ⛔ STRIP THE MARKER TEXT, DO NOT DELETE THE MARKER LINE. The old

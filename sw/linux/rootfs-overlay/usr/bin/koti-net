@@ -242,7 +242,25 @@ capture() { cat "$CAP" 2>/dev/null; }
 send() {
 	_b0=$(wc -c < "$CAP" 2>/dev/null); : "${_b0:=0}"
 	printf '%s\r\n' "$1" > "$DEV"
-	_dl=$(( $(date +%s) + 25 ))
+	# ⛔ THIS DEADLINE MUST EXCEED THE LONGEST BOUNDED THING THE FAR END DOES,
+	# and 25 did not. `cmd_join` waits for association with
+	# `exec("for _ in range(60):\n ... time.sleep(0.5)")` — **30 seconds** when
+	# it fails. Measured on hardware 2026-08-13, driving the board over COM3
+	# with the hotspot asleep:
+	#
+	#     koti-net: far end did not return to a prompt after: exec("for _ in
+	#     range(60):\n if w.isconnected(): break\n time.sleep(0.5)")
+	#     koti-net: address FAILED
+	#
+	# Nothing was wrong with the transport. A join that legitimately takes its
+	# full 30 s made this layer announce a fault in ITSELF, on top of the real
+	# and correctly-reported failure — two errors for one cause, with the
+	# invented one printed first and blaming the wire.
+	#
+	# ⚠️ Not larger than necessary either: this is how long a genuinely wedged
+	# far end costs per send, and `get`'s socket timeout (20 s) plus transfer
+	# also has to fit under it.
+	_dl=$(( $(date +%s) + 40 ))
 	while [ "$(date +%s)" -lt "$_dl" ]; do
 		usleep 250000
 		_b1=$(wc -c < "$CAP" 2>/dev/null); : "${_b1:=0}"

@@ -249,7 +249,29 @@ send() {
 		[ "$_b1" -le "$_b0" ] && continue
 		# Said something new AND back at a prompt. Two `>` not three:
 		# the first character of every burst from this link is destroyed.
-		case "$(tail -c 8 "$CAP" 2>/dev/null | tr -d '\r\n')" in
+		#
+		# ⛔⛔ ONLY THE BYTES THAT ARRIVED SINCE THIS COMMAND WAS SENT.
+		# Looking at the tail of the WHOLE capture, as this did until
+		# 2026-08-13, finds the PREVIOUS command's prompt — it is still
+		# sitting in the last 8 bytes — and returns after the first echoed
+		# character:
+		#
+		#     capture: "import socket, sys\r\n>>> "   then one byte "a"
+		#     tail -c 8 -> "s>>> a"  -> matches -> return 0
+		#
+		# ⇒ every send NOT immediately preceded by `capture_reset` returned
+		# in one 250 ms tick regardless of the far end, which is the old
+		# fixed delay wearing this function's name. Since `capture_reset` is
+		# called about once per command and a command is five to ten sends,
+		# that was nearly all of them — including the `c1=`/`exec(c1)` pair,
+		# where the whole point is not to write while the far end is busy.
+		# Measured with the capture replayed a byte at a time.
+		#
+		# `tail -c "$(( _b1 - _b0 ))"` is exactly the new bytes. Deliberately
+		# not `tail -c +N`: this shell is busybox ash and `-c N` is the form
+		# already proven on the machine.
+		case "$(tail -c "$(( _b1 - _b0 ))" "$CAP" 2>/dev/null \
+		        | tr -d '\r\n' | tail -c 8)" in
 			*'>>'*) return 0 ;;
 		esac
 	done

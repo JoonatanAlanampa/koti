@@ -459,6 +459,65 @@ def main():
                            f"busybox would only discover this while running "
                            f"it on the machine.")
 
+    # ---- 5b. no send() argument may contain a REAL newline -------------------
+    #
+    # WHY THIS IS A SEPARATE CHECK FROM `sh -n`. koti-net talks to a MicroPython
+    # repl one line at a time, and every block it needs goes inside
+    # `exec("...\n...")` with a LITERAL backslash-n, because the repl
+    # auto-indents and will not take a pasted block. Write that string across
+    # two source lines instead and the shell hands `send` an argument holding a
+    # real 0x0A, `printf '%s\r\n'` sends it as-is, and the far end sees two
+    # lines — the first an unterminated string literal.
+    #
+    # ⛔ THE SHELL IS STILL VALID, so `sh -n` above says ok: the newline is
+    # inside a quoted string, which is legal and ordinary in shell. It is only
+    # wrong in this one respect — that the argument is Python destined for a
+    # line-oriented repl. Nothing else in the repository executes that Python,
+    # so no other gate can see it.
+    #
+    # ⛔ AND IT FAILS SILENTLY AT RUNTIME. `send` waits for output plus a
+    # prompt, and a SyntaxError traceback is both, so it returns success; the
+    # variable is simply never defined and the NEXT command fails with
+    # something unrelated. That is how this reached a card: introduced in
+    # 9feb791, `sh -n` green, 98 unit tests green, and `get` would have blamed
+    # the network on every fetch. Found 2026-08-13 by reading the bytes `send`
+    # writes, and this check exists so nobody has to read them again.
+    for p in overlay_files():
+        rel = str(p.relative_to(OVERLAY)).replace("\\", "/")
+        try:
+            src = p.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if "send " not in src:
+            continue
+        offenders = []
+        for m in re.finditer(r"\bsend\s+(['\"])", src):
+            quote = m.group(1)
+            i = m.end()
+            # Single quotes take no escapes in shell; double quotes do.
+            while i < len(src):
+                c = src[i]
+                if quote == '"' and c == "\\" and i + 1 < len(src):
+                    i += 2
+                    continue
+                if c == quote:
+                    break
+                if c == "\n":
+                    offenders.append(src.count("\n", 0, m.start()) + 1)
+                    break
+                i += 1
+        if offenders:
+            print(f"  FAIL overlay {rel} has send() arguments spanning a "
+                  f"newline (line(s) {', '.join(str(n) for n in offenders)})")
+            bad.append(f"sw/linux/rootfs-overlay/{rel}: a send() argument "
+                       f"contains a real newline at line(s) "
+                       f"{', '.join(str(n) for n in offenders)}. The repl "
+                       f"reads it as two lines and the first is an "
+                       f"unterminated string. Put it on one line with a "
+                       f"literal \\n, as the working `c=` does.")
+        else:
+            print(f"  ok   overlay {rel} sends no argument across a newline")
+
     # ---- 6. freshness: the fragment, by recorded hash ------------------------
     if not PROVENANCE.exists():
         print(f"  FAIL {PROVENANCE.name} missing")

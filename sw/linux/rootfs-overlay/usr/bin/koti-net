@@ -789,8 +789,26 @@ cmd_get() {
 	# makes the failure legible: if connect raises, the print never runs, the
 	# marker never appears, and we stop here with the traceback still in the
 	# capture instead of marching on into a wedge.
-	send "c1=\"s.connect(socket.getaddrinfo(a,80)[0][-1])
-print('zz','KOTI'+'-CN')\""
+	# 🪤🪤 ONE PHYSICAL LINE, with a LITERAL `\n` — see the idiom note at the
+	# top of this file and the working `c=` below. Written across two source
+	# lines instead, as this was until 2026-08-13, the shell hands `send` an
+	# argument containing a REAL 0x0A; `printf '%s\r\n'` writes it out as-is,
+	# and the far end reads TWO repl lines:
+	#
+	#     >>> c1="s.connect(socket.getaddrinfo(a,80)[0][-1])
+	#     SyntaxError: unterminated string literal
+	#     >>> print('zz','KOTI'+'-CN')"
+	#     SyntaxError: unterminated string literal
+	#
+	# ⛔ AND IT FAILS SILENTLY HERE: `send` only waits for output plus a
+	# prompt, and a traceback is both. So it returns 0, `exec(c1)` then raises
+	# NameError, `KOTI-CN` never appears, and `get` reports **"could not
+	# connect"** — blaming the network for a quoting bug, on every fetch, by
+	# name or by address alike.
+	# ⚠️ `sh -n` PASSES IT (the newline is inside a quoted string, so the shell
+	# is valid) and all 98 unit tests passed, because nothing off-hardware
+	# executes the Python this line builds. Caught by reading the bytes.
+	send "c1=\"s.connect(socket.getaddrinfo(a,80)[0][-1])\nprint('zz','KOTI'+'-CN')\""
 	send 'exec(c1)'
 	if ! expect 'KOTI-CN' 30; then
 		echo "koti-net: could not connect to $_addr. The far end said:" >&2

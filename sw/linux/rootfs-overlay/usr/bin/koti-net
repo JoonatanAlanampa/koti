@@ -548,14 +548,70 @@ cmd_join() {
 	# the friendly REPL's auto-indent above. 60 half-seconds: a cold DHCP
 	# on a busy 2.4 GHz band is routinely over ten.
 	send 'exec("for _ in range(60):\n if w.isconnected(): break\n time.sleep(0.5)")'
+	# ---------------------------------------------------------------------
+	# ⛔⛔ THE NAME SERVER DHCP HANDS OVER IS NOT USABLE ON THIS HOTSPOT, AND
+	# THAT — NOT koti, NOT the link — IS WHAT `OSError: -202` HAS BEEN.
+	#
+	# Measured on hardware 2026-08-13, associated and healthy:
+	#
+	#     w.ifconfig() -> ('172.20.10.2','255.255.255.240','172.20.10.1',
+	#                      '254.128.0.0')
+	#                                     ^^^^^^^^^^^^^^^ the resolver
+	#
+	# 254.128.0.0 is 0xFE 0x80 0x00 0x00 — the first four bytes of **fe80::**,
+	# the IPv6 link-local prefix. The iPhone advertises an IPv6 name server;
+	# this ESP32's lwIP is IPv4-only and stores the leading four bytes of that
+	# v6 address in its v4 resolver slot. Every lookup is then sent to a
+	# reserved Class-E address that cannot answer, and `-202` (host not found)
+	# is the honest reply.
+	#
+	# ⭐ NOTHING ELSE WAS WRONG. IPv4 routing was fine the whole time, which is
+	# exactly why dialling info.cern.ch BY ADDRESS worked on 2026-08-12 while
+	# every by-name fetch failed. Item 19 was recorded first as a DNS bug and
+	# then as "not on a network"; neither reading ever looked at whether a
+	# name server had been configured at all.
+	#
+	# The gateway is the phone, and the phone proxies DNS, so pointing the
+	# resolver at it fixes this without assuming anything about the upstream.
+	# Confirmed on hardware the same evening: after this,
+	# `getaddrinfo("example.com",80)` returned 172.66.147.243 first try.
+	#
+	# ⚠️ ONLY WHEN IT IS ACTUALLY BROKEN. First octet 0 (unset) or >= 224
+	# (multicast and reserved, which is where the fe80 truncation lands) —
+	# an ordinary resolver like 192.168.1.1 is left exactly as DHCP set it.
+	# A static ifconfig REPLACES the DHCP lease, so it is not something to do
+	# speculatively.
+	#
+	# 🪤 Short, and sent as ONE exec. The same repair typed out with four
+	# literal dotted quads was long enough that the link lost a character and
+	# the REPL sat in continuation mode until `send` timed out — reading the
+	# values back on the far end is both shorter and immune to that.
+	send "exec(\"try:\n c=w.ifconfig()\n d=int(c[3].split('.')[0])\n if d==0 or d>=224: w.ifconfig((c[0],c[1],c[2],c[2]))\nexcept: pass\")"
+	send "print('zz','KOTI'+'-DNS', w.ifconfig()[3])"
+	# ---------------------------------------------------------------------
 	# The marker is CONCATENATED so that the echo of this very line does not
 	# contain it. The friendly REPL echoes everything typed; a marker typed
 	# literally matches its own echo and every wait succeeds instantly.
-	send "print('KOTI'+'-IP', w.ifconfig()[0] if w.isconnected() else 'FAILED')"
+	#
+	# ⛔ AND IT IS PADDED WITH `zz`, like every other marker in this file.
+	# Measured on hardware 2026-08-13: unpadded, `print('KOTI'+'-UP', ...)`
+	# reached the capture as **`OTI-UP True 1010`** — the reply was perfect,
+	# the connection was up, and `link_up` reported "the ESP32 is not
+	# answering" because the grep could not match a marker missing its first
+	# character. `KOTI-IP` here had simply been lucky.
+	send "print('zz','KOTI'+'-IP', w.ifconfig()[0] if w.isconnected() else 'FAILED')"
 
 	if expect 'KOTI-IP' 45; then
+		# ⛔ `.*KOTI-IP `, NOT `^KOTI-IP `. The marker is padded now, so the
+		# line begins with the junk that absorbs the lost first character and
+		# an anchored match silently stops rewriting it — printing the raw
+		# marker line instead of `address …`.
 		capture | grep -a 'KOTI-IP' | tail -n 1 \
-			| sed 's/^KOTI-IP /koti-net: address /'
+			| sed 's/.*KOTI-IP /koti-net: address /'
+		# Say which resolver is in use, because it is the field that decides
+		# whether names work and it is the one nobody had ever printed.
+		capture | grep -a 'KOTI-DNS' | tail -n 1 \
+			| sed 's/.*KOTI-DNS /koti-net: resolver /'
 		_failed=1
 		capture | grep -qa 'KOTI-IP FAILED' || _failed=0
 		# Same lesson as the timeout path: `address FAILED` is not a cosmetic
@@ -651,7 +707,7 @@ link_up() {
 	# `w` only exists if a join has run in THIS repl session; a bare
 	# NameError is the honest answer to "have you joined?", so it is
 	# caught here rather than being allowed to look like a network fault.
-	send "print('KOTI'+'-UP', w.isconnected(), w.status())" 2>/dev/null
+	send "print('zz','KOTI'+'-UP', w.isconnected(), w.status())" 2>/dev/null
 	if ! expect 'KOTI-UP' 8; then
 		echo "koti-net: the ESP32 is not answering, or no 'koti-net join'" >&2
 		echo "koti-net: has run since it was woken." >&2
@@ -750,7 +806,7 @@ cmd_get() {
 		send "a='$_addr'"
 		send "h='$_host'"
 		capture_reset
-		send "print('KOTI'+'-VA', len(a), len(h))"
+		send "print('zz','KOTI'+'-VA', len(a), len(h))"
 		_got=""
 		expect 'KOTI-VA' 8 && _got=$(capture | grep -a 'KOTI-VA' | tail -n 1)
 		case "$_got" in

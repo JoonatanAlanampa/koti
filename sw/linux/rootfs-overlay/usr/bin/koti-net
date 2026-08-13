@@ -600,6 +600,17 @@ cmd_join() {
 	# A static ifconfig REPLACES the DHCP lease, so it is not something to do
 	# speculatively.
 	#
+	# ⛔⛔ THIS REPAIR DOES NOT STICK, AND THAT IS EXPECTED. The DHCP client
+	# finishes its lease after `join` returns and puts the broken resolver
+	# back — measured 2026-08-13: this printed `resolver 172.20.10.1` and
+	# moments later `w.ifconfig()[3]` read `254.128.0.0` again, with address,
+	# netmask and gateway all intact. Only the DNS field is restored.
+	# ⇒ **The repair that fetches actually depend on is in `cmd_get`**, inside
+	# the same exec as the connect, because one command earlier is already too
+	# late. This one stays because it costs nothing, it is right on any
+	# network that does not re-apply the lease, and the line it prints below
+	# is the only place a human ever sees which resolver was handed out.
+	#
 	# 🪤 Short, and sent as ONE exec. The same repair typed out with four
 	# literal dotted quads was long enough that the link lost a character and
 	# the REPL sat in continuation mode until `send` timed out — reading the
@@ -904,7 +915,34 @@ cmd_get() {
 	# ⚠️ `sh -n` PASSES IT (the newline is inside a quoted string, so the shell
 	# is valid) and all 98 unit tests passed, because nothing off-hardware
 	# executes the Python this line builds. Caught by reading the bytes.
-	send "c1=\"s.connect(socket.getaddrinfo(a,80)[0][-1])\nprint('zz','KOTI'+'-CN')\""
+	# ⛔⛔ THE DNS REPAIR LIVES **HERE**, IN THE SAME exec AS THE CONNECT, AND
+	# THAT PLACEMENT IS THE WHOLE FIX. Doing it at join time does not survive.
+	#
+	# Measured on hardware 2026-08-13, driving the board over COM3:
+	#
+	#   join printed   address 172.20.10.2 / resolver 172.20.10.1   (repaired)
+	#   moments later  ('172.20.10.2','255.255.255.240','172.20.10.1',
+	#                   '254.128.0.0')                              (reverted)
+	#
+	# The ESP32's DHCP client finishes its lease after `join` returns and puts
+	# the phone's IPv6-derived resolver back. Address, netmask and gateway all
+	# survive — only the DNS field is restored, which is why this looked like
+	# an intermittent DNS fault rather than a lease being reapplied.
+	#
+	# ⛔ AND ONE COMMAND EARLIER IS NOT SOON ENOUGH. Repairing in a separate
+	# `koti-net py` and then running `get` still failed with -202: the revert
+	# happens within the seconds `get` spends on link_up and its setup sends.
+	# The repair and the lookup have to be in the same REPL line, with nothing
+	# between them that the DHCP client can run inside.
+	#
+	# ⭐ PROVEN END TO END on the same evening, one line, no file patched:
+	#
+	#   b'HTTP/1.1 200 OK\r\nDate: Thu, 13 Aug 2026 19:45:59 GMT\r\n
+	#     Content-Type: text/html\r\nConnection: close\r\nServer: cloudflare'
+	#
+	# `g`, not `c`: `c` is the read-loop program a few lines below, and reusing
+	# the name here would be legal and confusing.
+	send "c1=\"g=w.ifconfig()\nd=int(g[3].split('.')[0])\nif d==0 or d>=224: w.ifconfig((g[0],g[1],g[2],g[2]))\ns.connect(socket.getaddrinfo(a,80)[0][-1])\nprint('zz','KOTI'+'-CN')\""
 	send 'exec(c1)'
 	if ! expect 'KOTI-CN' 30; then
 		echo "koti-net: could not connect to $_addr. The far end said:" >&2

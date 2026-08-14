@@ -347,7 +347,22 @@ cmd_play() {
 	command -v devmem > /dev/null 2>&1 || die "no devmem in this rootfs"
 	[ -w /dev/mem ] || die "/dev/mem is not writable - are you root?"
 
-	_vol=8
+	# ⛔ THE DEFAULT IS 6 OF 15, NOT 15, AND IT IS NOT TIMIDITY. The ladder
+	# swings toward 3.3 V logic levels into a jack that a powered speaker
+	# expects LINE LEVEL from, and the speakers on this bench have no volume
+	# control at all — so nothing downstream can undo a default that is too
+	# loud, and the failure mode is a startled user and possibly a clipped
+	# input stage. Quiet is recoverable; loud is not.
+	#
+	# It reads from the CARD so it can be changed without a rebuild: the
+	# rootfs is an initramfs in RAM, so a number edited in this file costs
+	# ~30 minutes of CI and a card write, while /mnt/koti-volume costs an
+	# `echo` and survives a power cycle. Same file the bell reads at boot.
+	_vol=$(cat /mnt/koti-volume 2>/dev/null)
+	case "$_vol" in
+		''|*[!0-9]*) _vol=6 ;;
+	esac
+	[ "$_vol" -gt 15 ] && _vol=15
 	_wave=0
 	_ms=300
 	while [ $# -gt 0 ]; do
@@ -369,6 +384,24 @@ cmd_play() {
 	done
 
 	[ $# -ge 1 ] || die "usage: koti play [--vol 0-15] [--wave W] [--ms N] NOTE... | TUNE | HZ"
+
+	# ⭐ THE CALIBRATION, and it exists because the speakers on this bench
+	# have no volume knob. Loudness has to be decided by EAR, once, and then
+	# written down — so this plays one note up the whole range and names each
+	# level as it goes. Whichever number sounds right is the one to put in
+	# /mnt/koti-volume, and both the bell and `play` will use it from then on.
+	if [ "$1" = "ramp" ]; then
+		for _v in 1 2 4 6 8 11 15; do
+			echo "  volume $_v/15"
+			audio_write 44000 "$_v" 0
+			usleep 700000
+			audio_write 0 0 0
+			usleep 200000
+		done
+		echo "put the one that sounded right in /mnt/koti-volume:"
+		echo "    echo 6 > /mnt/koti-volume"
+		return 0
+	fi
 
 	case "$1" in
 		scale) set -- c4 d4 e4 f4 g4 a4 b4 c5 ;;

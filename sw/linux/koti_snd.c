@@ -48,9 +48,21 @@
 #define KOTI_SND_SAMPLE_DIV	512u
 #define KOTI_SND_PHASE_BITS	16
 
-static unsigned int volume = 8;
+/*
+ * ⛔ 6 OF 15, NOT 15, AND NOT 8 EITHER. The ladder swings toward 3.3 V logic
+ * levels into a jack a powered speaker expects LINE LEVEL from, and the
+ * speakers this was built for have no volume control — so nothing downstream
+ * can undo a default that is too loud. 0644 so it is adjustable while the
+ * machine runs, without a rebuild:
+ *
+ *     echo 4 > /sys/module/koti_snd/parameters/volume
+ *
+ * S99koti sets it from /mnt/koti-volume at boot, so the choice survives a
+ * power cycle in the one place on this machine that does — the card.
+ */
+static unsigned int volume = 6;
 module_param(volume, uint, 0644);
-MODULE_PARM_DESC(volume, "bell volume, 0-15 (default 8)");
+MODULE_PARM_DESC(volume, "bell volume, 0-15 (default 6)");
 
 struct koti_snd {
 	void __iomem	*base;

@@ -54,6 +54,28 @@ case "$1" in
 				echo "koti: fi keymap FAILED"
 			fi
 		fi
+
+		# ⛔ THE SPEAKERS ON THIS BENCH HAVE NO VOLUME CONTROL, so the
+		# only place loudness can be set is here and in `koti play`.
+		# The R2R ladder swings toward 3.3 V logic levels into a jack
+		# that a powered speaker expects line level from, so full scale
+		# is not a neutral default — it is the loud end of a range with
+		# nothing downstream to trim it.
+		#
+		# The value lives on the CARD, not in this file: the rootfs is
+		# an initramfs in RAM, so a number edited here would be lost at
+		# the next boot AND would need a 30-minute rebuild plus a card
+		# write to change. /mnt/koti-volume is one `echo` away and
+		# survives a power cycle, which is what a setting should be.
+		if [ -w /sys/module/koti_snd/parameters/volume ]; then
+			_kv=$(cat /mnt/koti-volume 2>/dev/null)
+			case "$_kv" in
+				''|*[!0-9]*) _kv=6 ;;
+			esac
+			[ "$_kv" -gt 15 ] && _kv=15
+			echo "$_kv" > /sys/module/koti_snd/parameters/volume
+			echo "koti: bell volume $_kv/15 (echo N > /mnt/koti-volume)"
+		fi
 		;;
 	stop)
 		;;

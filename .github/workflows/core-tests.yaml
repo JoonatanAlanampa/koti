@@ -70,6 +70,19 @@ jobs:
       - name: rootfs shell unit tests (clock parser, mount rules)
         run: busybox sh sw/linux/test_rootfs_shell.sh
 
+      # The suite above tests only pure functions and says so. This one runs
+      # `koti-net get` for real against a stand-in ESP32 — the transport, the
+      # hostname check, link_up, the markers and the page extraction, none of
+      # which had a gate. Its first run found the END marker's padding being
+      # printed as part of every page.
+      #
+      # ⚠️ busybox again, and here it matters twice over: the extraction is a
+      # chain of `sed` and the fix for that defect leans on command
+      # substitution trimming trailing newlines. Both are being checked under
+      # the sed and the shell koti actually ships, not the developer's.
+      - name: koti-net get, end to end against a fake ESP32
+        run: busybox sh sw/linux/test_net_get.sh
+
       - name: muldiv unit tests
         run: python run_core.py
         working-directory: test

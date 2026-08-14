@@ -1076,12 +1076,39 @@ cmd_get() {
 		# range looking for an end marker that is on the same line it
 		# already started on, so it runs to the end of the capture and
 		# emits the REPL's own trailing output as if it were the page.
-		capture | tr -d '\r' \
+		# ⛔ THE END MARKER'S OWN PADDING IS PART OF THE MARKER, AND IT
+		# LEAKED INTO EVERY PAGE. Measured off hardware 2026-08-14 by
+		# running this command against a stand-in far end:
+		#
+		#     </html>|
+		#     |
+		#     zz |          <- the sacrificial bytes, printed as content
+		#     |
+		#
+		# `zz ` opens the marker's line, so cutting at `KOTI-END` leaves
+		# it behind on the line before. It arrived with the padding
+		# (25dfa7e) and no fetch had run since, so nothing had seen it.
+		# The BEGIN marker never had this problem: `1s/.*KOTI-BEGIN//`
+		# is greedy and takes its padding with it.
+		#
+		# 🪤 AND THE BLANK LINES ARE NOT COSMETIC EITHER: the deliberate
+		# `print()` before the marker (see above) always leaves one, and
+		# splitting the marker onto its own line makes a second. Command
+		# substitution strips every trailing newline and `printf` puts
+		# exactly one back, which is the busybox-safe way to say "trim
+		# the end" — the sed idiom for it needs labels and the hold
+		# space, and nothing here could test that against busybox's sed.
+		#
+		# ⚠️ It also means a page is held in a shell variable, so this
+		# path is for text. The `tr -d '\r'` above already ruled out
+		# fetching binaries; this does not narrow it further.
+		_page=$(capture | tr -d '\r' \
 			| sed -e 's/KOTI-BEGIN/KOTI-BEGIN\n/' \
-			      -e 's/KOTI-END/\nKOTI-END/' \
+			      -e 's/[z ]*KOTI-END/\nKOTI-END/' \
 			| sed -n '/KOTI-BEGIN/,/KOTI-END/p' \
 			| sed -e '1s/.*KOTI-BEGIN//' -e '$s/KOTI-END.*//' \
-			| sed -e '/./,$!d'
+			| sed -e '/./,$!d')
+		printf '%s\n' "$_page"
 		# The reply is STILL in the capture, and it has the server's clock
 		# in it. Only when this machine's own clock has never been set —
 		# see clock_unset — so ordinary browsing cannot move a correct

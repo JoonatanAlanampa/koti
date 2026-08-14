@@ -70,7 +70,7 @@ case "$1" in
 		if [ -w /sys/module/koti_snd/parameters/volume ]; then
 			_kv=$(cat /mnt/koti-volume 2>/dev/null)
 			case "$_kv" in
-				''|*[!0-9]*) _kv=6 ;;
+				''|*[!0-9]*) _kv=1 ;;
 			esac
 			[ "$_kv" -gt 15 ] && _kv=15
 			echo "$_kv" > /sys/module/koti_snd/parameters/volume

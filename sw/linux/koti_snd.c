@@ -49,7 +49,18 @@
 #define KOTI_SND_PHASE_BITS	16
 
 /*
- * ⛔ 6 OF 15, NOT 15, AND NOT 8 EITHER. The ladder swings toward 3.3 V logic
+ * ⛔ 1 OF 15, AND THAT IS A MEASUREMENT, NOT CAUTION. Calibrated by ear on the
+ * bench 2026-08-14 against the speakers this machine actually has: volume 4
+ * was already too loud, and 1 was chosen out of 1/2/3. The ladder swings
+ * toward 3.3 V logic levels into a jack a powered speaker expects LINE LEVEL
+ * from, and those speakers have no volume control, so nothing downstream can
+ * undo a default that is too loud.
+ *
+ * ⚠️ THERE IS NOTHING BELOW 1 BUT SILENCE, and the steps are 1x, 2x, 3x of
+ * amplitude — i.e. +6 dB from 1 to 2. The quiet end of this scale is coarse,
+ * which is worth knowing before anyone "just turns it down a bit".
+ *
+ * (was 6, from before anything had been heard) The ladder swings toward 3.3 V logic
  * levels into a jack a powered speaker expects LINE LEVEL from, and the
  * speakers this was built for have no volume control — so nothing downstream
  * can undo a default that is too loud. 0644 so it is adjustable while the
@@ -60,9 +71,9 @@
  * S99koti sets it from /mnt/koti-volume at boot, so the choice survives a
  * power cycle in the one place on this machine that does — the card.
  */
-static unsigned int volume = 6;
+static unsigned int volume = 1;
 module_param(volume, uint, 0644);
-MODULE_PARM_DESC(volume, "bell volume, 0-15 (default 6)");
+MODULE_PARM_DESC(volume, "bell volume, 0-15 (default 1, measured)");
 
 struct koti_snd {
 	void __iomem	*base;

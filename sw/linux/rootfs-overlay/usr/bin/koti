@@ -66,6 +66,8 @@ plic_pending|0x00C01000|y|PLIC pending bits, read-only
 plic_enable|0x00C02000|y|PLIC enable bits for the context
 plic_threshold|0x00E00000|y|PLIC priority threshold
 plic_claim|0x00E00004|n|PLIC claim/complete - READING IT CLAIMS AN INTERRUPT
+audio0|0x00080000|y|sound voice 0 - the kernel's bell
+audio1|0x00080004|y|sound voice 1 - what koti play uses
 ram|0x01000000|y|start of the 32 MB SDRAM
 EOF
 }
@@ -347,7 +349,9 @@ cmd_play() {
 	command -v devmem > /dev/null 2>&1 || die "no devmem in this rootfs"
 	[ -w /dev/mem ] || die "/dev/mem is not writable - are you root?"
 
-	# ⛔ THE DEFAULT IS 6 OF 15, NOT 15, AND IT IS NOT TIMIDITY. The ladder
+	# ⛔ THE DEFAULT IS 1 OF 15, AND IT IS A MEASUREMENT. Calibrated by ear
+	# on the bench 2026-08-14: volume 4 was already too loud through the
+	# speakers this machine has, and 1 was chosen out of 1/2/3. The ladder
 	# swings toward 3.3 V logic levels into a jack that a powered speaker
 	# expects LINE LEVEL from, and the speakers on this bench have no volume
 	# control at all — so nothing downstream can undo a default that is too
@@ -360,7 +364,7 @@ cmd_play() {
 	# `echo` and survives a power cycle. Same file the bell reads at boot.
 	_vol=$(cat /mnt/koti-volume 2>/dev/null)
 	case "$_vol" in
-		''|*[!0-9]*) _vol=6 ;;
+		''|*[!0-9]*) _vol=1 ;;
 	esac
 	[ "$_vol" -gt 15 ] && _vol=15
 	_wave=0
@@ -399,7 +403,7 @@ cmd_play() {
 			usleep 200000
 		done
 		echo "put the one that sounded right in /mnt/koti-volume:"
-		echo "    echo 6 > /mnt/koti-volume"
+		echo "    echo 1 > /mnt/koti-volume"
 		return 0
 	fi
 

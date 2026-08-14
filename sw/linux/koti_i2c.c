@@ -32,13 +32,21 @@
  *
  * Copyright (c) 2026 Joonatan Alanampa
  */
-#include <linux/delay.h>
+/* Spelled out rather than leaned on: BIT(), IS_ERR() and strscpy() all arrive
+ * transitively through i2c.h today, and a driver that compiles only because of
+ * somebody else's include is one header cleanup away from not compiling. This
+ * one cannot be built on this machine at all — the host toolchain is bare-metal
+ * newlib — so its first compile is a ten-minute CI round trip.
+ */
+#include <linux/bits.h>
+#include <linux/err.h>
 #include <linux/i2c.h>
 #include <linux/i2c-algo-bit.h>
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/string.h>
 
 /* The one register. See src/i2c_bit.sv. */
 #define KOTI_I2C_LINES		0x00

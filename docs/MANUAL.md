@@ -314,15 +314,27 @@ for a subset of it.
 - **No `man`.** There are no manual pages in the rootfs — that is what this
   file and `koti-help` are for. `busybox <applet> --help` works for most
   applets and is the fastest reference on the machine.
-- **The clock has no battery, and the fix is approximate.** There is no RTC
-  chip and no NTP. `koti-net time` sets the clock from the `Date:` header any
-  HTTP reply already carries — accurate to a second or two, which is right for
-  file timestamps and wrong for anything else. It then writes the time to the
-  card, and `S45kotisd` restores it at the next boot, so the machine starts
-  from **when it was last running** rather than from 1970. That is monotonic,
-  not correct: after a week unplugged it believes it is still last Tuesday
-  until you run `koti-net time` again. A `date` that says 1970 means the card
-  is not mounted or has never held a saved time.
+- **The clock depends on whether the RTC module is fitted.**
+
+  *With the DS3231 plugged into J1* (PLAN item 28 — the gateware, the driver
+  and the devicetree node are all in place, but as of 2026-08-14 the part had
+  not arrived, so nothing here has been seen working on hardware): the kernel
+  reads it before userspace starts and `date` is right at the login prompt.
+  `hwclock -w` writes the system time into the chip, `hwclock -r` reads it
+  back, `i2cdetect -y 0` shows it at 0x68, and
+  `/sys/class/hwmon/hwmon0/temp1_input` is its own die temperature in
+  millidegrees — that measurement is how it stays accurate to a couple of
+  seconds a month.
+
+  *Without it*, there is no battery and the fix is approximate. `koti-net
+  time` sets the clock from the `Date:` header any HTTP reply already carries
+  — accurate to a second or two, which is right for file timestamps and wrong
+  for anything else. It then writes the time to the card, and `S45kotisd`
+  restores it at the next boot **if it is later than what the clock already
+  says**, so the machine starts from *when it was last running* rather than
+  from 1970. That is monotonic, not correct: after a week unplugged it
+  believes it is still last Tuesday. A `date` that says 1970 means the card is
+  not mounted, or has never held a saved time, and no RTC answered either.
 
 ## If something goes wrong
 

@@ -32,6 +32,7 @@ Every line below has been seen on the bench, not only in simulation.
 | **Keyboard** | USB HID on US2, Finnish layout, a real input device |
 | **Internet** | **fetches a web page by name** — DNS, TCP and HTTP, through the onboard ESP32 as a modem |
 | **Sound** | 4 voices onto the board's own 3.5 mm jack; terminal bell plus `koti play` |
+| **Clock** | ⏳ a DS3231 on J1 over koti's own I2C bus — gateware, driver and devicetree are in; **the part had not arrived on 2026-08-14, so this row is the only one not yet true of the machine** |
 | **OS** | mainline **Linux 6.12** riscv32, busybox userspace, ~280 applets |
 | **Boot** | own M-mode SBI firmware loads the kernel off the card into RAM, ~49 s to a login prompt |
 | **Standalone** | its own bitstream in the board's flash: **phone charger, no PC** |

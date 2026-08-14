@@ -866,7 +866,60 @@ on the ladder; the first two are small and change how the machine feels.
     exceeding hvc0's 2 s poll ceiling.
     ⇒ Check which bitstream is in the flash BEFORE debugging either driver.
 
-19. [~] 🌐 **DIAGNOSED 2026-08-12: IT IS NOT A DNS BUG. `-202` MEANS "NOT ON A
+19. [x] 🌐✅ **CLOSED ON HARDWARE 2026-08-14 — koti FETCHES A PAGE BY NAME.**
+    `koti-net get http://example.com/` returns a complete page from Cloudflare,
+    confirmed by the user at koti's own keyboard on the standalone machine:
+    ```
+    HTTP/1.1 200 OK          <- first byte intact, and nothing after </html>
+    ```
+    ⛔ **THE ROOT CAUSE WAS NEVER DNS AND NEVER koti.** The iPhone advertises an
+    **IPv6** name server; the ESP32's IPv4-only lwIP keeps the first four bytes
+    of `fe80::` in its v4 resolver slot ⇒ `254.128.0.0` ⇒ every lookup dies,
+    while IPv4 routing works perfectly — which is exactly why dialling
+    info.cern.ch **by address** worked on 08-12 while every by-name fetch
+    failed. The repair (gateway into the DNS slot) must live **inside the same
+    `exec` as the whole transaction**: DHCP re-applies the lease in the gaps
+    between commands, restoring **only** the DNS field, and reconfiguring the
+    interface resets an already-open connection (that was the ECONNRESET).
+    ⭐ **THREE MORE DEFECTS DIED ON 2026-08-14, and each was invisible to a
+    green build**:
+    - the END marker's `zz` padding was printed **as part of every page** —
+      found off hardware by the new gate, before the card trip that would
+      otherwise have wasted it;
+    - **the page's own first byte was destroyed on every fetch** — the padding
+      protected the marker exactly as designed, but `s.recv()` then BLOCKS on
+      the network, and whatever is sent after that pause opens a NEW burst
+      whose first character dies. Proven by an A/B on hardware, same command,
+      the only difference a `time.sleep(1)`:
+      ```
+      pause    nz MARKA … AELLO-A     <- H destroyed
+      no pause tz MARKB … HELLO-B     <- intact
+      ```
+      ⇒ the body is now **buffered on the ESP32 and written in one burst**, so
+      the marker's sacrificial bytes are in front of the whole page. This also
+      fixes the mid-page loss every extra TCP segment would have caused —
+      invisible in a 1.2 KB test page, certain in a real one;
+    - `link_up` refused a **provably up** link one attempt in three (a dropped
+      character makes the far end raise instead of print). It retries three
+      times now and dumps the capture on the way out.
+    ⚠️ **OPERATIONAL, LEARNED THE HARD WAY THE SAME DAY**: dialling while the
+    hotspot is OFF wedges the ESP32's STA machine at status **1001 forever**,
+    and `w.disconnect()` + `w.active(False)`/`(True)` from the REPL **did not
+    clear it** — four joins failed after the phone was switched back on. What
+    cleared it was a **BTN0 reset of koti**, which re-asserts the ESP32's reset
+    line. ⇒ **turn the hotspot on BEFORE the first join**, and if a join has
+    already failed, reset rather than retry. (Two variables moved at that
+    point — the reset and the Personal Hotspot screen being open — so the reset
+    is the one to rely on, being the half we control.)
+    ⭐ **AND THE REAL DELIVERABLE IS A GATE**: `sw/linux/test_net_get.sh` +
+    `sw/linux/fake_esp.py` run `get` end to end against a far end that echoes,
+    destroys the first byte of every burst, loses what is written while it is
+    executing, lets DHCP undo the repair at every command boundary and resets
+    open connections. Eleven scenarios, 35 checks, in `core-tests` under
+    **busybox**. Nothing in this repo had executed a line of `get` before it.
+
+    (2026-08-12 diagnosis, superseded above but kept because both wrong
+    theories are worth not re-running) 🌐 **`-202` MEANS "NOT ON A
     NETWORK", AND THIS ITEM'S PREMISE WAS WRONG.**
     Measured on hardware, both directions of the experiment:
     ```
@@ -906,8 +959,11 @@ on the ladder; the first two are small and change how the machine feels.
     The ESP32 then swallowed every later command — including ones typed at
     koti's own keyboard — and only an `off`/`wake` recovered it. It wedged
     twice in one hour before being spotted.
-    ⏳ **Still to prove on hardware**: that the new messages appear and that a
-    by-name fetch works once the hotspot is awake.
+    ⏳ ~~**Still to prove on hardware**: that the new messages appear and that a
+    by-name fetch works once the hotspot is awake.~~ ✅ **BOTH PROVEN
+    2026-08-14** — the messages did their job all day (the `1001` decode is
+    what identified the wedge above), and the by-name fetch is the closure at
+    the top of this item.
 
     (original entry) 🌐 **DNS: `getaddrinfo(name, 80)` → `OSError: -202`**, so only literal
     addresses can be dialled. Item 11 routes around it with `get URL [HOST]`.

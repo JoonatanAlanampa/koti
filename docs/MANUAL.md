@@ -11,8 +11,9 @@ keyboard, the SBI firmware — was written for this project.
 A short version of this document lives on the machine itself: type **`koti-help`**.
 For the machine's current state — RAM, uptime, which root it booted, the card,
 interrupts, and the memories Linux cannot see — type **`koti-status`**.
-That matters because koti has no networking, so a manual you can only read on
-another computer is a manual you cannot read while using it.
+That matters because koti reaches the web through a modem it drives by remote
+control rather than through a browser — so a manual you can only read on
+another computer is a manual you cannot read while using this one.
 
 ---
 
@@ -175,6 +176,59 @@ output and the USB keyboard share nothing with the ESP32.
 
 ⚠️ **http only.** The fetch is plain HTTP; there is no TLS, so `https://` URLs
 will not work.
+
+⛔ **Do not run `koti-net off` between fetches.** It detaches the phone's only
+client, iOS drops Personal Hotspot when nothing is attached, and the next
+`join` then fails with `address FAILED` about a network that was working a
+minute ago. Two debugging sessions were lost to this before it was understood.
+
+⚠️ **Turn the hotspot on BEFORE the first join.** Dialling a network that is
+not there wedges the ESP32's WiFi state machine at status `1001` (CONNECTING)
+permanently — and `w.disconnect()` plus an `active(False)`/`active(True)` cycle
+does **not** clear it. What clears it is a **BTN0 reset of koti**, which
+re-asserts the ESP32's reset line. Measured 2026-08-14: four joins in a row
+failed that way while `koti-net scan` listed the network the whole time.
+
+---
+
+## Sound
+
+koti drives the ULX3S's **onboard 3.5 mm jack** — no Pmod, no header. Plug
+powered speakers or headphones into the board itself.
+
+```
+koti play a4                       # one note
+koti play ode                      # a melody
+koti play scale
+koti play --wave triangle --ms 150 c4 e4 g4 c5
+koti play 1000                     # a raw frequency in Hz
+koti play --list                   # the notes and tunes it knows
+```
+
+The **terminal bell** needs no command: anything that writes `\a` — a failed
+tab-completion, `printf '\a'`, a program complaining — makes a sound, because
+the kernel rings it through a driver of koti's own.
+
+### Volume, and why it is not obvious
+
+⚠️ **The jack is close to line level and there is no volume control in the
+hardware.** The output is a 4-bit resistor ladder driven from 3.3 V logic, so
+if your speakers have no knob, the only place loudness can be set is here.
+
+The setting lives on the card so it survives a power cycle:
+
+```
+echo 1 > /mnt/koti-volume ; sync    # 0-15; 1 is right for line-level speakers
+koti play ramp                      # play one note up the whole range
+```
+
+`ramp` is how the number gets chosen: it plays 1, 2, 4, 6, 8, 11, 15 in turn
+and names each. Both `koti play` and the bell read that file — the bell at
+boot, into `/sys/module/koti_snd/parameters/volume`, which can also be written
+directly while the machine runs.
+
+⚠️ **There is nothing below 1 but silence**, and the steps are 1x, 2x, 3x of
+amplitude — +6 dB from 1 to 2. The quiet end of the scale is coarse.
 
 **No compiler, no package manager, no floating point.** koti has no FPU, and
 userspace is built soft-float and statically linked against musl. There is no

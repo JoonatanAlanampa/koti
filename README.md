@@ -1,18 +1,22 @@
-# Koti-1 — a home computer, built from the CPU up
+# Koti — a home computer, built from the CPU up
 
 *Koti* (Finnish: "home", from *kotitietokone* — home computer.)
 
 A computer you can sit down at: an RV32IMA CPU with an sv32 MMU, 32 MB of
-SDRAM, a microSD filesystem, an HDMI screen and a USB keyboard, running
-mainline Linux 6.12 — on a ULX3S 85F FPGA board.
+SDRAM, a microSD filesystem, an HDMI screen, a USB keyboard, a way onto the
+internet and a voice — running mainline Linux 6.12 on a ULX3S 85F FPGA board.
 
-Not a demo that boots once for a photograph. You log in and use it.
+Every instruction it executes runs on a CPU in this repository. Not a demo that
+boots once for a photograph: you power it from a phone charger, log in, fetch a
+web page and write a file that is still there tomorrow.
 
-![koti's screen, at a shell](docs/img/koti-shell.png)
+![koti's screen at a shell](docs/img/koti-shell.png)
 
-> koti's 40x30 text console. Rendered from a real session using the hardware's
-> own font ROM rather than photographed — which is also why it is all uppercase:
-> the ROM holds `0x20..0x5F`, so the display has no lowercase glyphs.
+> koti's 80x60 text console. **Rendered, not photographed** — `tools/screenshot.py`
+> lays out a real UART capture using the hardware's own font ROM
+> (`src/font_rom.svh`), the cell geometry from `src/vga_text.sv` and the wrap
+> and scroll rules from `sw/console.c`. Every pixel is decided by something in
+> this repository.
 
 ## What works, on real hardware
 
@@ -21,17 +25,27 @@ Every line below has been seen on the bench, not only in simulation.
 | | |
 | --- | --- |
 | **CPU** | RV32IMA + Zicsr, M/S/U privilege, **sv32 MMU**, CLINT, PLIC, precise traps |
-| **Memory** | 32 MB onboard SDRAM, all of it addressable since 2026-08-08; full window walked with an address-derived pattern, 0 errors |
-| **Storage** | microSD, **read and write**, ext2 — files survive a reboot |
-| **Screen** | HDMI (GPDI), 640x480, **80x60** text console |
-| **Keyboard** | USB HID on US2, Finnish layout |
+| **Caches** | I-cache and D-cache; the D-cache is **4.5% faster measured on the board**, two runs per arm |
+| **Memory** | 32 MB onboard SDRAM, all of it addressable; the full window walked with an address-derived pattern, 0 errors |
+| **Storage** | microSD, **read and write**, ext2 — files survive a power cycle |
+| **Screen** | HDMI (GPDI), 640x480, **80x60** text console driven by koti's own `struct consw` |
+| **Keyboard** | USB HID on US2, Finnish layout, a real input device |
+| **Internet** | **fetches a web page by name** — DNS, TCP and HTTP, through the onboard ESP32 as a modem |
+| **Sound** | 4 voices onto the board's own 3.5 mm jack; terminal bell plus `koti play` |
 | **OS** | mainline **Linux 6.12** riscv32, busybox userspace, ~280 applets |
-| **Boot** | own M-mode SBI firmware loads the kernel off the card into RAM |
+| **Boot** | own M-mode SBI firmware loads the kernel off the card into RAM, ~49 s to a login prompt |
+| **Standalone** | its own bitstream in the board's flash: **phone charger, no PC** |
 
 ```
 buildroot login: root
 # uname -a
 Linux buildroot 6.12.0 #1 riscv32 GNU/Linux
+# koti-net get http://example.com/
+HTTP/1.1 200 OK
+Content-Type: text/html
+...
+<h1>Example Domain</h1>
+# koti play ode
 # mount -o rw /dev/kotisd2 /mnt
 # echo koti wrote this > /mnt/hello.txt
 # sync ; umount /mnt ; mount /dev/kotisd2 /mnt
@@ -42,6 +56,84 @@ koti wrote this
 The unmount in there is the point: it drops the page cache, so the last `cat`
 genuinely read those bytes back off the card.
 
+## What it costs on the FPGA
+
+From `nextpnr.log` of the shipped build (`a65390a`, ECP5 **LFE5U-85F**) — the
+whole computer, CPU through video, storage, USB, modem and sound:
+
+| resource | used | of | |
+| --- | --- | --- | --- |
+| LUT4 | 16712 | 83640 | **19%** (14804 as logic) |
+| flip-flops | 6282 | 83640 | **7%** |
+| block RAM | 23 | 208 | **11%** — 414 kbit, mostly caches and the firmware |
+| DSP (MULT18X18D) | 4 | 156 | 2% — the multiplier |
+| I/O | 101 | 365 | 27% |
+| PLL | 3 | 4 | 75% |
+
+**Fmax 28.44 MHz** against a 25 MHz system clock, so about 14% of margin.
+The HDMI serialiser runs in its own 125 MHz domain and the USB host in a 12 MHz
+one; only `clk_25mhz` is koti's speed.
+
+⚠️ Read that number out of the run's `nextpnr.log`, taking the **last**
+occurrence per clock — nextpnr prints each Fmax twice and the first is a
+post-placement estimate that routinely reports a failure the routed design
+passes. Every number here moves whenever `src/` does.
+
+## The internet, honestly described
+
+koti has **no IP address**. It has no MAC and no PHY, so `ip`, `ping` and
+`wget` exist as busybox applets and all still fail — that is expected, not a
+fault.
+
+What it has instead is a **modem**. The ULX3S carries an ESP32 beside the FPGA;
+koti reaches it over a serial link of its own (`src/esp_uart.sv` →
+`/dev/ttyKOTI0`), and `koti-net` drives its MicroPython WiFi stack by remote
+control:
+
+```
+koti-net wake                     # release the ESP32 from reset
+koti-net join <ssid> <password>   # prints the address it was given
+koti-net get http://example.com/  # the page, on standard output
+koti-net time                     # set the clock from a server's Date header
+```
+
+Getting a page back **by name** took longer than getting one by address, and
+the reason is worth recording: the phone hotspot advertises an **IPv6** name
+server, and the ESP32's IPv4-only lwIP keeps the first four bytes of `fe80::`
+as its v4 resolver — `254.128.0.0`. Every lookup died while IPv4 routing worked
+perfectly, which is exactly why dialling an address had always worked. The
+repair has to live *inside the same REPL statement as the whole transaction*,
+because the DHCP client re-applies the lease in the gaps between commands and
+reconfiguring the interface resets an open connection.
+
+## Sound
+
+Four voices — square, triangle, noise, with volume — mixed to eight bits and
+put onto the ULX3S's **onboard 3.5 mm jack**, which is a 4-bit R2R ladder
+driven straight from FPGA pins. No Pmod, no header: the socket is the DAC.
+
+```
+koti play a4                      # a note
+koti play ode                     # a melody
+koti play --wave triangle c4 e4 g4 c5
+printf '\a'                       # the terminal bell, through the kernel
+```
+
+The synth is vendored verbatim from a sibling project; the part written for
+koti is `src/audio_r2r.sv`, and it exists because **four bits is not enough to
+truncate to**. Dropping the low four bits makes the error a function of the
+signal — distortion that tracks the waveform, worst on quiet sustained notes.
+Instead the eight-bit sample is sigma-delta modulated to four bits at the full
+25 MHz clock: 512 decisions per audio sample, the discarded bits carried into
+the next one. Measured in `test/tb_audio.v`, the output average tracks the
+input exactly at every level tested — including three sixteenths of a step,
+which truncation cannot express.
+
+The bell is an **input driver** (`sw/linux/koti_snd.c`), not a sound driver,
+because Linux rings the bell through `kd_mksound()` and the input layer — the
+same path the PC speaker uses. The kernel owns voice 0 and `koti play` owns
+voice 1, so a bell arriving mid-tune cuts nothing off.
+
 ## Using it
 
 **[docs/MANUAL.md](docs/MANUAL.md)** is the user manual: how to log in, what the
@@ -49,29 +141,24 @@ two consoles are and why output sometimes doubles, how storage works and how to
 avoid losing a file to a journal-less ext2, the full command list, and the
 things that are present but cannot work.
 
-A short version lives **on the machine** — type `koti-help`. That is not
-redundancy: koti has no networking, so a manual you can only read on another
-computer is one you cannot read while using it.
+A short version lives **on the machine** — type `koti-help`, or ask
+`koti help how do I save a file`. That is not redundancy: it is the manual you
+can read while using the machine rather than beside it.
 
 ## What does not work yet
 
-- **No networking.** The kernel is built without `CONFIG_NET`, so `ip`, `ping`
-  and `wget` exist as busybox applets and cannot work.
-- **`root=` is still the initramfs**, deliberately. The block driver is new;
-  pointing root at it before it had been used in anger would turn a driver bug
-  into a machine that will not boot. Moving it is a config change, not work.
+- **No TLS**, so `koti-net get` is http-only. The ESP32 has `ussl` and 4 MB of
+  free heap, so this is a job rather than a wall.
+- **`root=` is still the initramfs**, deliberately. Moving it is a config
+  change, not work — but the block driver should be used in anger first.
 - **ext2 has no journal.** `sync` before pulling the power.
-- **No PS/2 keyboard.** Superseded by USB, and as of 2026-08-08 the RTL,
-  firmware, pins and tests are gone too — the condition for removing it was
-  that USB had typed on real hardware, and it had.
-- **This is an FPGA project, and since 2026-08-08 it is ONLY an FPGA
-  project.** Koti-1 is not going to a shuttle, and the ASIC apparatus has been
-  removed rather than parked: the TinyTapeout flow files (`info.yaml`,
-  `src/config.json`, `docs/info.md`), the `gds`/`docs`/`fpga` workflows, and the
-  second RTL configuration behind `KOTI_FPGA` are all gone. There is one build
-  now, and it is the board.
-  ⚠️ Two guards from the retired ASIC test suite were re-expressed rather than
-  dropped — see `test/tb_vga_grant.v`. One was not; `PLAN.md` says which.
+- **Sound is tier 1**: notes and a bell. Sampled audio needs a fabric FIFO
+  (koti has no DMA, and 8 kHz leaves ~3600 clocks per sample); an ALSA device
+  is bigger than the RTL under it.
+- **This is an FPGA project, and only an FPGA project.** Koti is not going to a
+  shuttle, and the ASIC apparatus was removed rather than parked — the
+  TinyTapeout flow files, the `gds`/`docs` workflows and the second RTL
+  configuration are all gone. There is one build now, and it is the board.
 
 ## Boot, end to end
 
@@ -80,8 +167,8 @@ computer is one you cannot read while using it.
 > The tail of a real boot, rendered the same way.
 
 The SBI firmware lives in 32 KB of block RAM inside the FPGA and the kernel is
-3.95 MB, so the kernel had nowhere to live — that gap was the last thing between
-a machine that booted in simulation and one that booted on the bench:
+about 6 MB, so the kernel had nowhere to live — that gap was the last thing
+between a machine that booted in simulation and one that booted on the bench:
 
 | route | per attempt |
 | --- | --- |
@@ -92,43 +179,50 @@ a machine that booted in simulation and one that booted on the bench:
 `sw/sbi/sdboot.c` reads a header at LBA 2048, loads the image straight into
 SDRAM at `0x0140_0000` and checksums it; the firmware then finds the RISC-V
 Image magic it was already looking for and enters it. `tools/sdkernel.py` writes
-that layout to a card. About 49 seconds from reset to a login prompt.
+that layout to a card.
 
-⭐ The boot log appears on the monitor **with no framebuffer driver and no
-Linux video support at all**: SBI `console_putchar` writes the UART *and* the
-40x30 text buffer, and Linux's console is `hvc0` over SBI. Nothing in the kernel
-knows the video hardware exists.
+⭐ The boot log appears on the monitor **before Linux has a console driver at
+all**: SBI `console_putchar` writes the UART *and* the text buffer. Linux takes
+the screen over later, and it does so without a handover — `VGA_BASE` is a
+register, so `koticon` allocates its own page and repoints the raster.
 
-## Getting it running
+## How it is tested
 
-`fpga/ulx3s/README.md` is the bring-up procedure, in order, with the traps that
-cost real time written next to the step that hits them. In short:
+The gates in `.github/workflows/` are part of the design, because this project
+keeps finding that a green badge can mean less than it looks:
 
-```
-gh workflow run fpga-ulx3s.yaml -f image=sbi     # build a bitstream
-fujprog koti-bram.bit                            # NOT openFPGALoader
-python tools/sdkernel.py write Image --disk N --yes   # needs admin
-```
+- **the CPU** — 1252 muldiv vectors, directed pipeline tests, and the whole
+  official `rv32ui`/`um`/`ua` suite
+- **the boot** — Linux is booted to userspace in simulation on every push, in
+  Verilator (~60x faster than iverilog, which is why it is affordable)
+- **the peripherals** — per-block benches for the PLIC, the SD stack, the USB
+  keyboard, the ESP32 link, the D-cache, the SDRAM and the audio DAC
+- **the shell** — koti's own scripts run under **busybox**, the shell it ships
+  with, including `koti-net get` end to end against a fake ESP32 that reproduces
+  the link's measured faults: it echoes, destroys the first byte of every burst,
+  loses what is written while it is executing, and lets DHCP undo a repair
+- **the lists** — `test/check_sources.py` and `test/check_mmio.py` compare the
+  files that must agree with each other. Adding a peripheral takes two edits in
+  two files, and the three times only one was made, the machine looked like it
+  was resetting
 
-Two that will otherwise waste an evening:
-
-- **DIP switch 3 must be ON** for the `sbi` image. That firmware enables video,
-  which gives `uo[0]` to the raster and mirrors the UART on `uo[6]`; SW3 is what
-  points the FTDI at `uo[6]`. With it off the console is mojibake.
-- **Flash, then open the serial port, then press BTN0.** The early boot is
-  otherwise already gone by the time anything is listening.
+Each gate is checked in both directions: it must fail on the defect it was
+written for, or it is decoration.
 
 ## Layout
 
 - [PLAN.md](PLAN.md) — the ladder, the architecture decisions and why each was
   taken, the risks
-- `src/` — the SoC: core, MMU/TLB, SDRAM, I-cache, arbiter, video, microSD, USB
-- `sw/` — bare-metal images, the SBI firmware (`sw/sbi/`), Linux (`sw/linux/`)
+- `src/` — the SoC: core, MMU/TLB, SDRAM, caches, arbiter, video, microSD, USB,
+  ESP32 link, audio
+- `sw/` — bare-metal images, the SBI firmware (`sw/sbi/`), Linux and its drivers
+  (`sw/linux/`)
 - `fpga/ulx3s/` — the board harness, pin plan and bring-up procedure
 - `vendor/` — verbatim copies from elsewhere, with provenance and why each is
   vendored rather than written
-- `tools/` — card writer, screen renderer, ROM generators
+- `tools/` — card writer, screen renderer, console driver, ROM generators
 - `test/` — the benches; `.github/workflows/` runs them all on every push
+- `docs/` — the manual, images, and finished work orders kept as stop signs
 
 ## Licence
 

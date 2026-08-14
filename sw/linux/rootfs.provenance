@@ -1,6 +1,6 @@
 {
-  "cpio_bytes": 2479616,
-  "cpio_sha256": "6c57ae4242aa2458f59e01e171e24379506c4c9349c6047a1854cc7af095bc81",
+  "cpio_bytes": 2480640,
+  "cpio_sha256": "85ee2ef1cf0091b97434f34328c8e888df2598b87d62454cccd011b6d157f8d9",
   "fragment_sha256": "dde69810e6dc6ef9330b68b09ddb763e9a437240761d9e56129efcf677557cfd",
   "overlay_sha256": {
     "etc/init.d/S45kotisd": "ed3586a1174bd5aef837b2936cc53d95b0ec77136a154a94c452d77b18200dd6",
@@ -9,8 +9,8 @@
     "etc/koti-fi.bmap": "99ca38c2a4ffb8ab26caed81de32565479d87511b739bca76c1d6b3d7b46ea38",
     "etc/profile.d/10-koti.sh": "42dfdebfd5b9eff80c4d709eee5d1747840bc4618027a2634070626819883299",
     "init": "7d49f487ff94967ad07f6efa3f0773dd4adb5b021b50d851d4fc9de661b6cbd6",
-    "usr/bin/koti": "988a67e37850253f339cd20b0a57fabfe7d25ac59bee530032bcbf5eb37bd0ed",
-    "usr/bin/koti-help": "0d1c218cc48410b0c63018fafa358bbeec531fa2edd60d6982fb7f23a2e517ba",
+    "usr/bin/koti": "00264951fe666a0e02a2964b7a9bb49d689d08a9bbf327cdace32aca04485016",
+    "usr/bin/koti-help": "65a3ad5a39353b79f58a4942afa6649ca5d4120aaaf548f18556fdbbd9ff68aa",
     "usr/bin/koti-net": "017f2a12ce1e70d2a42f8e80118d96e348b6277b83aa5de3496055875d2f7a31",
     "usr/bin/koti-status": "f58dc0e784e05c76a4496167b857c3222062dba7042a611797ecdc58df9dba61"
   }

@@ -564,8 +564,15 @@ module koti_core #(
     // jumps to 0x00000000 and restarts the program, which is the "prints its
     // banner over and over" symptom this block's comment already warns about.
     wire pa_lowmap   = (d_pa[25:24] == 2'b00);
+    // ⚠️ THE UPPER BOUND IS HALF OF A TWO-FILE EDIT. project.sv decodes the
+    // MMIO windows; this decides whether a WRITE to one is legal. A window
+    // added there and not here reads fine and takes a store fault on its first
+    // write — which, with mtvec still 0, restarts the program and reads as a
+    // reset bug. It has caught the PLIC, the microSD and the ESP32 link.
+    // test/check_mmio.py now compares the two files so the fourth time (08,
+    // sound) is the last time it can happen silently.
     wire pa_dev      = pa_lowmap && ((d_pa[23:16] >= 8'h01
-                                   && d_pa[23:16] <= 8'h07)   // 05 SD, 06 USB, 07 ESP32
+                                   && d_pa[23:16] <= 8'h08)   // 05 SD, 06 USB, 07 ESP32, 08 audio
                                   || d_pa[23:22] == 2'b11);
     wire pa_flash_ro = pa_lowmap && !pa_dev;
 

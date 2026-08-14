@@ -50,6 +50,17 @@ jobs:
       - name: The source lists agree with src/
         run: python3 test/check_sources.py
 
+      # The other two-file edit, and the one that has actually shipped broken
+      # three times: a peripheral decoded in project.sv whose window koti_core's
+      # pa_dev does not allow WRITES to. Reads work, the first store takes an
+      # access fault, and with mtvec still zero the machine appears to reset —
+      # so the symptom points at power, clocks, anything but a missing compare
+      # in another file. The PLIC, the microSD and the ESP32 link each found it
+      # on hardware. The comment warning about it was already there for the
+      # third one.
+      - name: Every decoded MMIO window is one software can write
+        run: python3 test/check_mmio.py
+
       # sdram_ctrl against a strict behavioural part. Standalone because the
       # controller is verified before it goes anywhere near the SoC — a memory
       # controller that is wrong in a corner is far cheaper to find here than
@@ -119,6 +130,16 @@ jobs:
           iverilog -g2012 -o tb_usb_kbd.vvp ../src/usb_kbd.sv tb_usb_kbd.v
           vvp tb_usb_kbd.vvp | tee usb_kbd.log
           grep -q "tb_usb_kbd: PASS" usb_kbd.log
+
+          # Sound (PLAN item 21). The synth is console's, proven there and
+          # copied unchanged, so what this measures is koti's own DAC: that the
+          # MEAN of a 4-bit output tracks an 8-bit input to better than a
+          # quarter of a step. Truncation — the obvious implementation — is
+          # wrong by up to a whole step and always in the same direction, so
+          # this bench is the difference between the two.
+          iverilog -g2012 -o tb_audio.vvp ../src/audio_r2r.sv ../vendor/audio.sv tb_audio.v
+          vvp tb_audio.vvp | tee audio.log
+          grep -q "tb_audio: PASS" audio.log
 
           # The ESP32 link (PLAN item 11). Its first test is the one that
           # matters most: esp_en must be LOW out of reset, because the ESP32's

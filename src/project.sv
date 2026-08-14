@@ -124,6 +124,12 @@ module tt_um_koti (
     //               — it is "the CPU is executing", not "the CPU is missing".
     //               Frozen with dbg_halted low = looping in something that does
     //               not fetch, or stalled on memory.
+    // ---- sound: the ULX3S's onboard 3.5 mm jack, 4-bit R2R ladder per
+    // channel, driven straight from FPGA pins. This is the ONE audio path that
+    // needs no Pmod and no header — the same one console's tune_top.sv played
+    // music through on this board on 2026-08-04. koti drives it mono.
+    output wire [3:0]  audio_l,
+    output wire [3:0]  audio_r,
     output wire        dbg_halted,
     output wire        dbg_fetch,
     output wire [4:0]  dbg_irq,        // see the assign for the bit meanings
@@ -231,6 +237,13 @@ module tt_um_koti (
   // which with mtvec still 0 restarts the program and reads as a reset bug.
   // The PLIC hit that first, then the microSD; this is the third.
   wire esp_range   = d_addr[23:14] == 10'h007;
+  // Sound at 0x0008_0000, the next window after the ESP32 link. Same full
+  // compare, same reason, and the SAME two-edit rule as the note above: the
+  // matching bound in koti_core.sv's `pa_dev` is what makes WRITES legal. This
+  // is the FOURTH window to be added and the trap has caught the previous
+  // three, so test/check_mmio.py now proves the two agree rather than trusting
+  // this comment to be read.
+  wire aud_range   = d_addr[23:14] == 10'h008;
   // PLIC: the TOP 4 MB of flash address space, 0x00C0_0000..0x00FF_FFFF.
   //
   // It cannot live in a 64 KB carve-out beside the CLINT: the SiFive layout
@@ -244,16 +257,86 @@ module tt_um_koti (
   wire sd_sel_i    = d_req && sd_range;
   wire usb_sel_i   = d_req && usb_range;
   wire esp_sel_i   = d_req && esp_range;
+  wire aud_sel     = d_req && aud_range;
   wire plic_sel    = d_req && plic_range;
-  reg  clint_ack, vga_ack, plic_ack, sd_ack, usb_ack, esp_ack;
+  reg  clint_ack, vga_ack, plic_ack, sd_ack, usb_ack, esp_ack, aud_ack;
   always @(posedge clk) begin
       clint_ack <= rst ? 1'b0 : (clint_sel && !clint_ack);
       vga_ack   <= rst ? 1'b0 : (vga_sel && !vga_ack);
       sd_ack    <= rst ? 1'b0 : (sd_sel_i && !sd_ack);
       usb_ack   <= rst ? 1'b0 : (usb_sel_i && !usb_ack);
       esp_ack   <= rst ? 1'b0 : (esp_sel_i && !esp_ack);
+      aud_ack   <= rst ? 1'b0 : (aud_sel && !aud_ack);
       plic_ack  <= rst ? 1'b0 : (plic_sel && !plic_ack);
   end
+
+  // ---- sound: four voices, one 32-bit register each ----
+  //
+  //   +0 voice0   +4 voice1   +8 voice2   +C voice3
+  //     [15:0]  freq   phase increment per 48.8 kHz tick
+  //                    ⇒ Hz = freq * 25e6 / 512 / 65536 = freq * 0.745058
+  //                      so the STEP is 0.745 Hz and A4 lands between two of
+  //                      them: 590 -> 439.58, 591 -> 440.33. Neither is 440,
+  //                      and at 25 MHz with a 16-bit accumulator neither can
+  //                      be — the tuning error is a property of the divider,
+  //                      not of the number you write.
+  //     [19:16] vol    0..15, 0 = silent
+  //     [21:20] wave   0 square, 1 triangle, 2 noise, 3 off
+  //
+  // ⭐ ALL-ZERO IS SILENCE, DELIBERATELY. vol=0 makes vendor/audio.sv emit 128
+  // for that voice whatever the wave bits say, so a machine that has never
+  // written these registers — every boot before software knows they exist —
+  // holds the jack at mid-scale rather than screaming at reset. A design where
+  // the quiet state needs an explicit write is one bad boot away from being a
+  // very loud machine at 3 a.m.
+  reg [15:0] v_freq [0:3];
+  reg [3:0]  v_vol  [0:3];
+  reg [1:0]  v_wave [0:3];
+
+  wire aud_wr = aud_sel && !aud_ack && d_we;
+  integer vi;
+  always @(posedge clk)
+      if (rst) begin
+          for (vi = 0; vi < 4; vi = vi + 1) begin
+              v_freq[vi] <= 16'd0;
+              v_vol[vi]  <= 4'd0;
+              v_wave[vi] <= 2'd0;
+          end
+      end else if (aud_wr) begin
+          v_freq[d_addr[1:0]] <= d_wdata[15:0];
+          v_vol[d_addr[1:0]]  <= d_wdata[19:16];
+          v_wave[d_addr[1:0]] <= d_wdata[21:20];
+      end
+
+  // Captured on the select cycle and served on the ack cycle, the same shape
+  // as the VGA block: by the ack cycle d_addr may already have moved on, and a
+  // read that muxes on it then returns another register's contents.
+  wire [31:0] aud_rmux = {10'd0, v_wave[d_addr[1:0]], v_vol[d_addr[1:0]],
+                          v_freq[d_addr[1:0]]};
+  reg [31:0] aud_rdata_q;
+  always @(posedge clk)
+      if (aud_sel && !aud_ack && !d_we) aud_rdata_q <= aud_rmux;
+
+  wire [7:0] aud_sample;
+  audio audio0 (
+      .clk(clk), .rst(rst),
+      .v_freq({v_freq[3], v_freq[2], v_freq[1], v_freq[0]}),
+      .v_wave({v_wave[3], v_wave[2], v_wave[1], v_wave[0]}),
+      .v_vol ({v_vol[3],  v_vol[2],  v_vol[1],  v_vol[0]}),
+      .sample(aud_sample),
+      .audio_out()                 // the 1-bit Pmod output koti does not use
+  );
+
+  // Mono, both channels the same signal — exactly what console's tune_top.sv
+  // drove when this jack played music on this board on 2026-08-04. The synth
+  // has one mixed output, so a stereo split here would be two copies wearing
+  // different names.
+  wire [3:0] aud_dac;
+  audio_r2r audio_dac0 (
+      .clk(clk), .rst(rst), .sample(aud_sample), .dac(aud_dac)
+  );
+  assign audio_l = aud_dac;
+  assign audio_r = aud_dac;
 
   wire [31:0] clint_rdata;
   clint clint0 (
@@ -394,13 +477,14 @@ module tt_um_koti (
 
   wire ad_ack;
   assign d_ack   = clint_ack || vga_ack || plic_ack || sd_ack || usb_ack
-                   || esp_ack || ad_ack;
+                   || esp_ack || aud_ack || ad_ack;
   assign d_rdata = clint_ack ? clint_rdata
                  : vga_ack   ? vga_rdata_q
                  : plic_ack  ? plic_rdata_q
                  : sd_ack    ? sd_rdata
                  : usb_ack   ? usb_rdata
-                 : esp_ack   ? esp_rdata    : ad_rdata;
+                 : esp_ack   ? esp_rdata
+                 : aud_ack   ? aud_rdata_q  : ad_rdata;
 
   // ---- video DMA + text pipeline ----
   wire        v_req, v_ack, vt_hs, vt_vs, vt_act, vt_pix;

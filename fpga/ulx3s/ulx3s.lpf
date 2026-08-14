@@ -313,3 +313,33 @@ IOBUF PORT "sdram_d[14]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
 IOBUF PORT "sdram_d[15]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
 IOBUF PORT "sdram_dqm[0]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
 IOBUF PORT "sdram_dqm[1]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+
+# ---- onboard 3.5 mm audio jack (4-bit R2R ladder per channel) ----
+# ⭐ THE ONLY AUDIO PATH THAT NEEDS NO PMOD. These eight pins ARE the DAC: each
+# channel is a resistor ladder driven straight from the FPGA, so the socket on
+# the board is the output and nothing else has to be plugged in.
+#
+# Every site is copied VERBATIM from console/fpga/ulx3s.lpf, which was diffed
+# against upstream ulx3s_v20.lpf and then PROVEN on this exact board — console's
+# tune_top.sv played Ode to Joy out of this jack on 2026-08-04. None of these is
+# in the set that moved on PCB v3.1.x (only five wifi_* pins did).
+#
+# ⚠️ DRIVE=4 deliberately, matching console. The ladder is a resistive load
+# straight off the pin; a stronger drive buys nothing an audio DAC wants and
+# couples more switching noise into the board's analog corner.
+LOCATE COMP "audio_l[3]" SITE "B3";     # JACK TIP (left)
+LOCATE COMP "audio_l[2]" SITE "C3";
+LOCATE COMP "audio_l[1]" SITE "D3";
+LOCATE COMP "audio_l[0]" SITE "E4";
+LOCATE COMP "audio_r[3]" SITE "C5";     # JACK RING1 (right)
+LOCATE COMP "audio_r[2]" SITE "D5";
+LOCATE COMP "audio_r[1]" SITE "B5";
+LOCATE COMP "audio_r[0]" SITE "A3";
+IOBUF PORT "audio_l[3]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "audio_l[2]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "audio_l[1]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "audio_l[0]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "audio_r[3]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "audio_r[2]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "audio_r[1]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "audio_r[0]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=4;

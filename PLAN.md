@@ -35,9 +35,16 @@ would touch the harness, the LPF and every bench at once.
 
 ## TODO — the ladder to a usable machine
 
+🅿️ **SUSPENDED 2026-08-14 BY USER DIRECTIVE: items 16, 20, 22, 23, 25 and the
+Tiny VGA Pmod font check in item 1.** Suspended ≠ deleted — the entries stay
+exactly as written so an unpark needs no re-derivation — but **no session may
+work them or propose them as the next thing.** The live item is **21, sound.**
+
 Hardware bring-up — ✅ **THE BOARD ARRIVED 2026-08-06. This is now doable
 work, not a wait:**
-1. [ ] **ULX3S first power-up** — `fpga/ulx3s/README.md`, steps 1-7. Bitstream
+1. [🅿️] 🅿️ **SUSPENDED 2026-08-14 (user directive) — do not work this, do not propose it.**
+    **ULX3S first power-up** — only the FONT GLYPH VISUAL CHECK
+       remains of this rung and it gates nothing (HDMI works). — `fpga/ulx3s/README.md`, steps 1-7. Bitstream
        and harness are done and green (**31.04 MHz** post-route, PASS at
        25 MHz; 4/4 harness tests). Needs: ~~the board~~ ✅ **in hand
        2026-08-06**, a **Tiny VGA Pmod** (bought 2026-08-02, **arrival still
@@ -687,7 +694,8 @@ on the ladder; the first two are small and change how the machine feels.
     them to say `use koti-net`. (Genuinely fixed only by item 11's IP-address
     caveat, which is a much bigger job.)
 
-16. [~] 🔎 **MEASURED 2026-08-12: THE KEYBOARD IS INNOCENT. It is contention
+16. [🅿️] 🅿️ **SUSPENDED 2026-08-14 (user directive) — do not work this, do not propose it.**
+    🔎 **MEASURED 2026-08-12: THE KEYBOARD IS INNOCENT. It is contention
     between two INPUT SOURCES, not a broken input device.**
     Controlled test on hardware, using the gateware's own counters (which
     nobody had ever read) via `devmem` — no code change, no rebuild:
@@ -971,7 +979,8 @@ on the ladder; the first two are small and change how the machine feels.
     association (a static ifconfig replaces the DHCP lease — re-`join` after).
     First thing to check is whether DHCP handed the ESP32 a usable resolver.
 
-20. [ ] 📄 **A reader for what `get` returns.** `koti-net get` prints raw HTML;
+20. [🅿️] 🅿️ **SUSPENDED 2026-08-14 (user directive) — do not work this, do not propose it.**
+    📄 **A reader for what `get` returns.** `koti-net get` prints raw HTML;
     something that strips tags, wraps to 80 columns and follows a link by
     number is what makes koti a machine you read the web *on*. Self-contained,
     no hardware, and the first job that uses koti's own screen for something a
@@ -984,7 +993,35 @@ on the ladder; the first two are small and change how the machine feels.
 
 ## Items added 2026-08-12 from the user's four questions
 
-21. [ ] 🔊 **Sound. A PORT, not an invention — the jack is proven on this board.**
+21. [~] 🔊 **SOUND — BUILT 2026-08-14, NOT YET HEARD.** The gateware is done and
+    simulated; nothing has come out of the jack yet, and until it does this
+    stays open. What exists:
+    - `vendor/audio.sv` — console's 4-voice synth (square / triangle / noise +
+      volume), copied VERBATIM at `0e9ef0d`. Not rewritten, for the reason
+      `vendor/README.md` gives about every other file in there.
+    - `src/audio_r2r.sv` — **koti's own, and the only invention here.** The
+      ladder is FOUR BITS; the synth makes eight. Truncating throws away the
+      quiet half of the music, because the error then tracks the waveform and
+      is distortion rather than noise. So: first-order sigma-delta at the FULL
+      25 MHz clock, 512 decisions per 48.8 kHz audio sample, error carried
+      forward. Measured in `test/tb_audio.v`: the output mean tracks the input
+      **exactly** at every level tested, including 131 → 8.188, which is three
+      sixteenths of a step and unreachable by truncation.
+    - MMIO at **0x0008_0000**, one 32-bit register per voice:
+      `[15:0]` freq (Hz = freq × 0.745058 — the step is 0.745 Hz, so A4 lands
+      *between* 590 = 439.58 and 591 = 440.33 and neither is 440), `[19:16]` vol
+      0-15, `[21:20]` wave. **All-zero is silence**, so every boot before
+      software knows the block exists is quiet rather than screaming.
+    - 8 pins in `fpga/ulx3s/ulx3s.lpf`, sites copied verbatim from console's.
+    - `test/check_mmio.py` — a new gate for the two-file trap this window is
+      the fourth instance of (project.sv decodes it, koti_core's `pa_dev` must
+      allow writes to it). Proven in both directions.
+    ▶️ **What is left is one bitstream and one listen**: `image: sbi` build,
+    `fujprog` to SRAM, then `devmem 0x80000 32 0x000F024F` should be an A4.
+    ⚠️ **Tier 1 only.** Sampled audio and an ALSA device are the tiers below,
+    unchanged and unstarted.
+
+    (original entry) 🔊 **Sound. A PORT, not an invention — the jack is proven on this board.**
     `console/fpga/ulx3s.lpf:107` wires the **onboard 3.5 mm jack as a 4-bit R2R
     ladder per channel** (`audio_l[3]`→B3, `audio_l[2]`→C3, …) and the user
     heard music out of it on 2026-08-04. ⚠️ **koti's own LPF has NO audio pins**
@@ -998,7 +1035,8 @@ on the ladder; the first two are small and change how the machine feels.
     - **an ALSA device** — much bigger than the RTL that feeds it. A raw
       `/dev/audio`-style write is the cheap 80%.
 
-22. [ ] 🤖 **`koti ask` — koti as a client of a frontier model. THE TLS QUESTION
+22. [🅿️] 🅿️ **SUSPENDED 2026-08-14 (user directive) — do not work this, do not propose it.**
+    🤖 **`koti ask` — koti as a client of a frontier model. THE TLS QUESTION
     IS SETTLED: the ESP32 can do it.** Measured on hardware 2026-08-12:
     ```
     zz ['ussl', 'ssl', 'ubinascii', 'ujson']            <- all import
@@ -1017,7 +1055,8 @@ on the ladder; the first two are small and change how the machine feels.
     ⚠️ An API key would sit in clear text in the initramfs or on the card, and
     every call costs real money. Decide both before building it.
 
-23. [ ] 🌡️ **Weather station — the separate ESP32 + DHT22, and it needs NO new
+23. [🅿️] 🅿️ **SUSPENDED 2026-08-14 (user directive) — do not work this, do not propose it.**
+    🌡️ **Weather station — the separate ESP32 + DHT22, and it needs NO new
     plumbing.** Have that ESP32 serve a tiny HTTP endpoint on the hotspot and
     let koti fetch `http://<its-ip>/`: a **local IP means no DNS** (item 19)
     and **plain HTTP means no TLS** (item 22). It works with `koti-net` as it
@@ -1069,7 +1108,8 @@ on the ladder; the first two are small and change how the machine feels.
     ⇒ Build this first whatever else happens: it makes koti self-documenting,
     and it is the fallback item 25 degrades *to* rather than fails into.
 
-25. [~] 🧠🔬 **BUILT AND MEASURED 2026-08-12 — AND IT LOSES TO THE GREP IT WAS
+25. [🅿️] 🅿️ **SUSPENDED 2026-08-14 (user directive) — do not work this, do not propose it.**
+    🧠🔬 **BUILT AND MEASURED 2026-08-12 — AND IT LOSES TO THE GREP IT WAS
     MEANT TO REPLACE. NOT SHIPPED.**
     `sw/koti-intent/` holds the trainer (pure Python, no numpy — the input is
     sparse, so it trains in 1.5 s and runs anywhere) and 110 hand-written

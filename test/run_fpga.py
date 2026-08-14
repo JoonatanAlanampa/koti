@@ -65,6 +65,12 @@ SOURCES = [
     SRC_DIR / "usb_hid_host_rom.v",
     VENDOR_DIR / "usb_hid_host.v",
     VENDOR_DIR / "usb_clock.v",
+    # Sound. project.sv instantiates both unconditionally, so omitting them is
+    # an elaboration error for the whole suite rather than "not testing audio"
+    # — the same trap the SD stack above records, and check_sources.py caught
+    # this one before CI did.
+    VENDOR_DIR / "audio.sv",
+    SRC_DIR / "audio_r2r.sv",
     FPGA_DIR / "ulx3s_top.sv",
     TEST_DIR / "sdram_model.sv",
     TEST_DIR / "tb_fpga.v",

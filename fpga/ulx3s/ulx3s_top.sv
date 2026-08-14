@@ -103,6 +103,16 @@ module ulx3s_top (
     output logic [3:0] vga_gp,
     output logic [3:0] vga_gn,
 
+    // ---- onboard 3.5 mm audio jack, 4-bit R2R ladder per channel ----
+    // ⭐ THE ONE AUDIO PATH THAT NEEDS NO PMOD AND NO HEADER: these eight pins
+    // ARE the DAC, and the socket is on the board. Every site is copied from
+    // console/fpga/ulx3s.lpf, which played Beethoven out of this jack on this
+    // board on 2026-08-04 — none of them is in the set that moved on PCB
+    // v3.1.x (only five wifi_* pins did).
+    // ⚠️ It is NOT the HDMI: koti's GPDI carries DVI, which has no audio.
+    output wire  [3:0] audio_l,
+    output wire  [3:0] audio_r,
+
     // Onboard 32 MB SDRAM. This is the half of the memory map that used to be
     // the QSPI Pmod's PSRAM: same addresses, roughly ten times the speed and
     // four times the size. It exists here and not on the chip because it needs
@@ -232,6 +242,8 @@ module ulx3s_top (
       .esp_txd    (wifi_txd),
       .esp_en     (wifi_en),
       .esp_gpio0  (wifi_gpio0),
+      .audio_l    (audio_l),
+      .audio_r    (audio_r),
       .dbg_halted (cpu_halted),
       .dbg_fetch  (cpu_fetch),
       .dbg_irq    (irq_state),

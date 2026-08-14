@@ -79,5 +79,11 @@ src/usb_hid_host_rom.v
 vendor/usb_hid_host.v
 src/usb_kbd.sv
 
+# Sound: the onboard 3.5 mm jack's 4-bit R2R ladder. vendor/audio.sv is
+# console's chiptune synth, copied verbatim; src/audio_r2r.sv is koti's own,
+# and is the part that spends four bits well instead of throwing four away.
+vendor/audio.sv
+src/audio_r2r.sv
+
 # ---- harness only: no silicon pin exists for any of this ----
 fpga/ulx3s/ulx3s_top.sv

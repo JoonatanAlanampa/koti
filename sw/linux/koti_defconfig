@@ -169,6 +169,12 @@ CONFIG_INPUT=y
 CONFIG_INPUT_EVDEV=y
 CONFIG_INPUT_KEYBOARD=y
 CONFIG_KEYBOARD_KOTI=y
+# The bell (PLAN item 21). INPUT_MISC is the gate the Kconfig entry selects,
+# and it is spelled out here because a `select` that fires from a driver whose
+# own symbol is not set leaves the driver out of the build with no error — the
+# quiet way to ship a kernel that has no bell and no complaint about it.
+CONFIG_INPUT_MISC=y
+CONFIG_INPUT_KOTI_SND=y
 # The partition scanner. The card carries an MBR: one partition for the raw
 # kernel image the firmware loads at LBA 2048, one for the filesystem.
 CONFIG_PARTITION_ADVANCED=y

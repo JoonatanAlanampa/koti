@@ -297,6 +297,21 @@ jobs:
           tail -10 drivers/input/keyboard/Kconfig
           grep -n koti drivers/input/keyboard/Makefile
 
+      # The bell (PLAN item 21). It goes in drivers/input/misc/ beside pcspkr
+      # and for the same reason: Linux does not ring the bell through ALSA, it
+      # sends EV_SND/SND_TONE through the input layer from kd_mksound(). So the
+      # driver that makes `printf '\a'` audible is an INPUT driver, and putting
+      # it anywhere else would mean writing a userspace daemon to do what the
+      # VT layer already does.
+      - name: Add koti's bell driver
+        working-directory: linux-${{ env.KVER }}
+        run: |
+          cp ../sw/linux/koti_snd.c drivers/input/misc/
+          printf '\nconfig INPUT_KOTI_SND\n\ttristate "Koti-1 sound block (terminal bell)"\n\tdepends on INPUT\n\tselect INPUT_MISC\n\thelp\n\t  Rings the terminal bell on koti'"'"'s sound block (src/audio_r2r.sv),\n\t  which drives the ULX3S board'"'"'s onboard 3.5 mm jack. Owns voice 0;\n\t  voices 1-3 are left for userspace.\n' >> drivers/input/misc/Kconfig
+          printf 'obj-$(CONFIG_INPUT_KOTI_SND)\t+= koti_snd.o\n' >> drivers/input/misc/Makefile
+          tail -10 drivers/input/misc/Kconfig
+          grep -n koti drivers/input/misc/Makefile
+
       # The ESP32 link (PLAN item 11). A serial-core driver, so the port is a
       # real tty: that is what lets a LINE DISCIPLINE attach to it, which is
       # the only way SLIP or PPP can ever run, and what lets a userspace
@@ -494,7 +509,7 @@ jobs:
           # rung landed and killed this bench — and therefore the standing
           # userspace gate — from 05430e7 until it was noticed.
           iverilog -g2012 -I src -DKOTI_SIMMEM \
-            -o tb_boot.vvp src/*.sv vendor/sd_spi.sv vendor/spi_master.sv \
+            -o tb_boot.vvp src/*.sv vendor/sd_spi.sv vendor/spi_master.sv vendor/audio.sv \
             test/sim_mem.sv test/tb_boot.v \
             2>&1 | grep -v "sorry:" || true
           test -f tb_boot.vvp
@@ -769,7 +784,7 @@ jobs:
             --timescale 1ns/1ps \
             -Isrc -DKOTI_SIMMEM \
             --top-module tb_boot -o tb_boot_vl \
-            src/*.sv vendor/sd_spi.sv vendor/spi_master.sv \
+            src/*.sv vendor/sd_spi.sv vendor/spi_master.sv vendor/audio.sv \
             test/sim_mem.sv test/tb_boot.v
           ls -l obj_dir/tb_boot_vl
 

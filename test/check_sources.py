@@ -200,6 +200,53 @@ def main():
                   f"does not instantiate it")
             bad.append(f"{name} names {f}, which {kind} does not need")
 
+    # ------------------------------------------------------------------
+    # The lists this file did not know about until 2026-08-14.
+    #
+    # ⛔ A GLOB IS NOT A LIST, AND THAT IS THE BLIND SPOT. The two boot benches
+    # in .github/workflows/linux.yaml compile `src/*.sv` — so a new file in
+    # src/ is picked up for free, and everything above passes — but they name
+    # their vendored dependencies ONE BY ONE:
+    #
+    #     iverilog ... src/*.sv vendor/sd_spi.sv vendor/spi_master.sv ...
+    #
+    # So adding a src/ module that instantiates a NEW vendor/ module breaks
+    # both boot jobs with "Unknown module type", while every check here says
+    # the lists agree. Measured: that is exactly what `audio` did, and the
+    # glob is why this file's own machinery never saw it.
+    # ------------------------------------------------------------------
+    vendor_dir = ROOT / "vendor"
+    vendor_mod = {}
+    for f in sorted(p.name for p in vendor_dir.glob("*.sv")):
+        for mod in names_in(vendor_dir / f, r"^\s*module\s+(\w+)"):
+            vendor_mod[mod] = f
+
+    # Which vendor modules does src/ actually instantiate?
+    needed = set()
+    for f in sorted(on_disk):
+        text = (SRC / f).read_text(encoding="utf-8", errors="replace")
+        needed |= instantiated_in(text, set(vendor_mod))
+    needed_files = {vendor_mod[m] for m in needed}
+
+    workflow = ROOT / ".github" / "workflows" / "linux.yaml"
+    wf = workflow.read_text(encoding="utf-8", errors="replace")
+    for line_no, line in enumerate(wf.splitlines(), 1):
+        # ⚠️ A COMMENT THAT MENTIONS THE GLOB IS NOT A COMPILE LINE. This file
+        # explains itself at length, and one of those explanations quotes
+        # `src/*.sv` — matched verbatim, it produced a confident failure about
+        # a line that compiles nothing.
+        if "src/*.sv" not in line or line.lstrip().startswith("#"):
+            continue
+        named = set(re.findall(r"vendor/(\S+?\.sv)", line))
+        gap = needed_files - named
+        flag = "FAIL" if gap else "ok  "
+        print(f"  {flag} linux.yaml:{line_no} (src/*.sv glob): "
+              f"{len(named)} vendor file(s) named")
+        for f in sorted(gap):
+            print(f"         MISSING vendor/{f} — src/ instantiates it and "
+                  f"the glob cannot supply it")
+            bad.append(f"linux.yaml:{line_no} does not name vendor/{f}")
+
     if bad:
         print(f"\ncheck_sources: FAIL ({len(bad)})")
         for b in bad:

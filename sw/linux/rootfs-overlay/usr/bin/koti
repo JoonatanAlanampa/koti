@@ -266,8 +266,140 @@ cmd_help() {
 	koti-help "$_best"
 }
 
+# ---------------------------------------------------------------------------
+# play — notes out of the board's own 3.5 mm jack.
+#
+# ⛔ IT USES VOICE 1, NOT VOICE 0, AND THAT IS THE WHOLE ARRANGEMENT. The kernel
+# owns voice 0 for the terminal bell (sw/linux/koti_snd.c). If this used the
+# same voice, a `\a` arriving mid-tune would cut the tune off, and the tune's
+# own silence at the end would kill a bell that was still ringing. Two owners,
+# two voices, and neither has to know about the other.
+#
+# ⚠️ THE FREQUENCY GRID IS COARSE AND SAYS SO. The phase accumulator is 16 bits
+# advanced at 48828.125 Hz, so the step is 0.745 Hz — A4 lands between 590
+# (439.58 Hz) and 591 (440.33 Hz) and NEITHER is 440. That is the divider, not
+# the arithmetic here, and it is why this prints the frequency it actually
+# played rather than the one you asked for.
+#
+# 🪤 `devmem` and not a driver, deliberately. A tune is a sequence of register
+# writes with sleeps between them — there is nothing for a kernel driver to do
+# that a shell cannot, and the one thing a driver IS needed for (the bell, which
+# has to be reachable from kd_mksound inside the kernel) already exists.
+# ---------------------------------------------------------------------------
+AUDIO_BASE=0x00080000
+AUDIO_VOICE1=0x00080004
+
+note_hz() {
+	# note_hz NAME -> Hz*100, or empty. Equal temperament, A4 = 440.
+	# Integers only: this shell has no floating point, and a table is
+	# exact where a repeated multiply-by-1.0595 would drift by the octave.
+	case "$1" in
+		c4)  echo 26163 ;; c#4|db4) echo 27718 ;; d4)  echo 29366 ;;
+		d#4|eb4) echo 31113 ;; e4)  echo 32963 ;; f4)  echo 34923 ;;
+		f#4|gb4) echo 36999 ;; g4)  echo 39200 ;; g#4|ab4) echo 41530 ;;
+		a4)  echo 44000 ;; a#4|bb4) echo 46616 ;; b4)  echo 49388 ;;
+		c5)  echo 52325 ;; c#5|db5) echo 55437 ;; d5)  echo 58733 ;;
+		d#5|eb5) echo 62225 ;; e5)  echo 65926 ;; f5)  echo 69846 ;;
+		f#5|gb5) echo 73999 ;; g5)  echo 78399 ;; g#5|ab5) echo 83061 ;;
+		a5)  echo 88000 ;; a#5|bb5) echo 93233 ;; b5)  echo 98777 ;;
+		c6)  echo 104650 ;;
+		r|rest|-) echo 0 ;;
+		*)   echo "" ;;
+	esac
+}
+
+audio_write() {
+	# audio_write HZx100 VOL WAVE — one voice register, or silence at 0 Hz.
+	if [ "$1" -le 0 ] || [ "$2" -le 0 ]; then
+		devmem "$AUDIO_VOICE1" 32 0 2>/dev/null
+		return
+	fi
+	# ⛔ THE ARITHMETIC, AND IT HAS TO BE DONE IN THIS SHAPE. Exactly,
+	#
+	#     inc = hz * 2^16 * 512 / 25e6 = hz * 1.34217728
+	#
+	# and this shell has no floating point and 32-bit signed integers. The
+	# obvious `hzx100 * 65536 * 512 / 2500000000` overflows on the first
+	# multiply — 44000 * 65536 is already 2.9e9 — and any form that divides
+	# FIRST rounds the note away. So: fold the whole constant into one
+	# ratio, 1/74.50581 scaled by a thousand, which puts the largest
+	# intermediate at hzx100 * 1000 = 1.05e8 for the top note here.
+	#
+	# +37253 is half the divisor: it rounds instead of truncating, which is
+	# worth a line because it is the difference between A4 at 439.58 Hz and
+	# at 440.33 Hz — truncation always lands flat, and always on the same
+	# side, which is what makes a scale sound sour rather than merely
+	# imprecise.
+	#
+	# ⚠️ 20 kHz is the ceiling this can express (hzx100 * 1000 = 2.0e9,
+	# against a 2.147e9 limit). Above the audible band, so the clamp costs
+	# nothing real, but without it the arithmetic silently goes negative.
+	_h=$1
+	[ "$_h" -gt 2000000 ] && _h=2000000
+	_inc=$(( (_h * 1000 + 37253) / 74506 ))
+	[ "$_inc" -gt 65535 ] && _inc=65535
+	[ "$_inc" -lt 1 ] && _inc=1
+	_reg=$(( _inc + $2 * 65536 + $3 * 1048576 ))
+	devmem "$AUDIO_VOICE1" 32 "$_reg" 2>/dev/null
+}
+
+cmd_play() {
+	command -v devmem > /dev/null 2>&1 || die "no devmem in this rootfs"
+	[ -w /dev/mem ] || die "/dev/mem is not writable - are you root?"
+
+	_vol=8
+	_wave=0
+	_ms=300
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--vol)   _vol=$2; shift 2 ;;
+			--wave)  case "$2" in
+					square)   _wave=0 ;;
+					triangle) _wave=1 ;;
+					noise)    _wave=2 ;;
+					*) die "wave: square, triangle or noise" ;;
+				 esac; shift 2 ;;
+			--ms)    _ms=$2; shift 2 ;;
+			--list)
+				echo "notes:  c4 c#4 d4 ... c6, and r for a rest"
+				echo "tunes:  scale, ode, alarm"
+				return 0 ;;
+			*) break ;;
+		esac
+	done
+
+	[ $# -ge 1 ] || die "usage: koti play [--vol 0-15] [--wave W] [--ms N] NOTE... | TUNE | HZ"
+
+	case "$1" in
+		scale) set -- c4 d4 e4 f4 g4 a4 b4 c5 ;;
+		ode)   set -- e4 e4 f4 g4 g4 f4 e4 d4 c4 c4 d4 e4 e4 d4 d4 ;;
+		alarm) set -- a5 r a5 r a5 r ;;
+	esac
+
+	# ⛔ SILENCE ON THE WAY OUT, ON EVERY PATH. A voice sounds until it is
+	# told not to, so a Ctrl-C in the middle of a tune would otherwise leave
+	# the machine humming a note with nothing running that knows why — and
+	# the only way to stop it would be to know this register exists.
+	trap 'devmem "$AUDIO_VOICE1" 32 0 2>/dev/null; exit 130' INT TERM
+
+	for _n in "$@"; do
+		case "$_n" in
+			[0-9]*) _hz=$(( _n * 100 )) ;;
+			*)      _hz=$(note_hz "$(echo "$_n" | tr 'A-Z' 'a-z')")
+				[ -n "$_hz" ] || { devmem "$AUDIO_VOICE1" 32 0; die "no note called '$_n' (koti play --list)"; } ;;
+		esac
+		audio_write "$_hz" "$_vol" "$_wave"
+		# usleep takes microseconds and busybox has it; sleep with a
+		# fraction is not portable across busybox builds.
+		usleep $(( _ms * 1000 ))
+	done
+	devmem "$AUDIO_VOICE1" 32 0 2>/dev/null
+	trap - INT TERM
+}
+
 case "${1:-}" in
 	peek)	shift; cmd_peek "$@" ;;
+	play)	shift; cmd_play "$@" ;;
 	help)	shift; cmd_help "$@" ;;
 	*)
 		cat <<'EOF'
@@ -276,7 +408,15 @@ koti — the housekeeper.
   koti peek --list        the hardware worth looking at, by name
   koti peek NAME [COUNT]  read it (koti peek mtime)
   koti peek 0xADDR [N]    read any physical address
+  koti play NOTE...       sound, out of the board's own 3.5 mm jack
+  koti play --list        the notes and the tunes it knows
   koti help QUESTION      find the section of the manual that answers it
+
+`play` takes note names (a4, c#5, r for a rest), a tune (scale, ode, alarm) or
+a plain number in Hz, with --vol 0-15, --wave square|triangle|noise and --ms.
+The terminal bell is separate and needs no command: anything that writes \a —
+a failed tab-completion, `printf '\a'` — rings it through the kernel driver,
+which owns voice 0 while this owns voice 1 so the two never cut each other off.
 
 Neither command uses a model. `peek` is a table and a read, so it is exact;
 `help` is a keyword table over koti-help, so the worst it can do is show you

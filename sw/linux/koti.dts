@@ -339,6 +339,34 @@
 		};
 
 		/*
+		 * Sound — src/audio_r2r.sv + vendor/audio.sv, PLAN item 21.
+		 * Four voices, one 32-bit register each, straight onto the
+		 * board's 3.5 mm jack through its 4-bit R2R ladder.
+		 *
+		 *   +0..+C  voice 0..3
+		 *   [15:0]  freq, phase increment; Hz = freq * 0.745058
+		 *   [19:16] volume 0-15, 0 = silent
+		 *   [21:20] wave: 0 square, 1 triangle, 2 noise, 3 off
+		 *
+		 * ⛔ NO INTERRUPT, and that is not an omission. The synth runs
+		 * free in fabric once written: a voice sounds until software
+		 * silences it, so there is no event for the CPU to be told
+		 * about. A driver here starts and stops notes; it never
+		 * services them.
+		 *
+		 * 🪤 THIS NODE COST A REFLASH TO ADD, and would have cost a
+		 * SECOND one if it had been left for later — the DTB lives
+		 * inside the SBI firmware, which is baked into the bitstream.
+		 * It rides along with the bitstream that first carried the
+		 * audio pins for exactly that reason.
+		 */
+		snd0: audio@80000 {
+			compatible = "koti,audio-1.0";
+			reg = <0x00080000 0x00010000>;
+			clock-frequency = <25000000>;
+		};
+
+		/*
 		 * The 40x30 text console — PLAN.md item 9b, driver
 		 * sw/linux/koticon.c. `reg` is the VGA register block, NOT the
 		 * character buffer: the buffer is ordinary RAM that the driver

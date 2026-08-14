@@ -89,6 +89,36 @@ REQUIRED = [
     ("CONFIG_BLK_DEV_INITRD", "y"),
     ("CONFIG_BINFMT_ELF", "y"),
 
+    # ---- the clock (PLAN item 28) ------------------------------------------
+    # Every one of these is a symbol whose absence is SILENT rather than an
+    # error, which is the criterion for being in this list at all:
+    #
+    #   I2C_ALGOBIT off  -> koti_i2c.c fails to link, but only if I2C_KOTI is
+    #                       also on; with both dropped the kernel builds fine
+    #                       and simply has no bus.
+    #   I2C_KOTI off     -> the bus never appears, so the rtc@68 node in the
+    #                       devicetree is never instantiated. No error: an I2C
+    #                       slave with no adapter is not a failure, it is
+    #                       nothing.
+    #   RTC_DRV_DS1307   -> /dev/rtc0 does not exist and hwclock says "no such
+    #                       device", which reads as a wiring fault.
+    #   RTC_HCTOSYS off  -> the RTC works perfectly and NOTHING READS IT. The
+    #                       machine still boots at the epoch. This is the one
+    #                       that would waste a bench session, because every
+    #                       manual check (i2cget, hwclock -r) would pass.
+    ("CONFIG_I2C", "y"),
+    ("CONFIG_I2C_ALGOBIT", "y"),
+    ("CONFIG_I2C_KOTI", "y"),
+    ("CONFIG_I2C_CHARDEV", "y"),
+    ("CONFIG_RTC_CLASS", "y"),
+    ("CONFIG_RTC_DRV_DS1307", "y"),
+    ("CONFIG_RTC_HCTOSYS", "y"),
+    ("CONFIG_RTC_HCTOSYS_DEVICE", '"rtc0"'),
+    # rtc-ds1307 selects this for itself; asserting it is how a rename
+    # upstream becomes a failed build rather than a driver that quietly is not
+    # there.
+    ("CONFIG_REGMAP_I2C", "y"),
+
     # being able to see what happened
     ("CONFIG_PRINTK", "y"),
     ("CONFIG_PRINTK_TIME", "y"),

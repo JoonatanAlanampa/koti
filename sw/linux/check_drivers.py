@@ -81,9 +81,53 @@ def check_port_type(src, bad):
               f"never PORT_UNKNOWN")
 
 
+def check_i2c_shadow(src, bad):
+    """koti_i2c.c must never decide what to DRIVE by reading the PINS.
+
+    src/i2c_bit.sv returns the pad levels in bits [1:0] and the drive state in
+    bits [3:2], so the register does not read back what was written — which is
+    the defining property of a wired-AND bus and the reason it exists. A
+    read-modify-write in the write path therefore latches the far end's
+    pull-down into koti's own drive register, and koti never lets go.
+
+    It would fail at the ninth clock of the very first byte, i.e. the first
+    acknowledge the DS3231 ever sends: the driver would read SDA low (correctly
+    — the slave is pulling it), write that back as its own drive, and hold the
+    bus down for ever. Every later transfer times out, and the symptom is "the
+    RTC answered once and then the bus died".
+
+    The shadow copy in `struct koti_i2c` is what prevents it, and this asserts
+    that the function which writes the register does not read it.
+    """
+    text = (HERE / src).read_text(encoding="utf-8", errors="replace")
+
+    # The write path: koti_i2c_apply() plus the two setters that call it.
+    for fn in ("koti_i2c_apply", "koti_i2c_setscl", "koti_i2c_setsda"):
+        m = re.search(rf"^static\s+\w[\w\s*]*\b{fn}\s*\([^)]*\)\s*\{{(.*?)^}}",
+                      text, re.MULTILINE | re.DOTALL)
+        if not m:
+            print(f"  FAIL {src}: no function {fn}()")
+            bad.append(f"sw/linux/{src} has no {fn}(), so this check is blind. "
+                       f"If the write path was renamed, rename it here too.")
+            continue
+        if "readl" in m.group(1):
+            line = text[:m.start()].count("\n") + 1
+            print(f"  FAIL {src}:{line} {fn}() reads the register")
+            bad.append(
+                f"sw/linux/{src}:{line} {fn}() calls readl(). Bits [1:0] of "
+                f"that register are the PIN levels, not a read-back of the "
+                f"drive bits, so a read-modify-write latches the slave's "
+                f"acknowledge into koti's own drive register and holds the bus "
+                f"down for ever. Write the shadow copy (ki->scl_hi/sda_hi) "
+                f"instead.")
+        else:
+            print(f"  ok   {src}: {fn}() writes the shadow, never a read-back")
+
+
 def main():
     bad = []
     check_port_type("koti_esp.c", bad)
+    check_i2c_shadow("koti_i2c.c", bad)
 
     if bad:
         print(f"\nFAIL: {len(bad)} driver problem(s)\n")

@@ -367,6 +367,62 @@
 		};
 
 		/*
+		 * The I2C bus, and the DS3231 real-time clock on it — PLAN.md
+		 * item 28, hardware src/i2c_bit.sv, driver sw/linux/koti_i2c.c.
+		 *
+		 * ⭐ THIS IS THE FIRST NODE ON koti WHOSE *CHILD* IS DRIVEN BY
+		 * MAINLINE. koti's own blocks all needed drivers of koti's own,
+		 * because a soft USB host is not an EHCI, its SD engine is not an
+		 * SDHCI and its UART is not a 16550. The RTC is different: it is
+		 * a real Maxim part on a real I2C bus, so once the bus exists,
+		 * drivers/rtc/rtc-ds1307.c binds to it unmodified and koti gets
+		 * /dev/rtc0, hwclock, and the kernel setting its own clock at
+		 * boot — none of which is code anybody here has to maintain.
+		 * Everything koti had to write is the two-bit bus underneath.
+		 *
+		 * NO INTERRUPT PROPERTY. The DS3231's INT/SQW output is wired to
+		 * a pin (gn[8], A5) and is readable as bit 4 of the block's
+		 * register, but it is NOT routed to the PLIC — so alarms cannot
+		 * wake anything and this node must not claim they can. rtc-ds1307
+		 * checks for an IRQ and simply leaves alarm support off without
+		 * one, which is the honest configuration. Wiring it up later is a
+		 * PLIC source and a reflash, and the pin is already there for it.
+		 *
+		 * 🪤 LIKE THE SOUND NODE, THIS COSTS A REFLASH TO ADD. The DTB
+		 * lives inside the M-mode firmware, which is baked into the
+		 * bitstream — so it rides along with the bitstream that first
+		 * carries the I2C pins, and adding it later would cost a second
+		 * `fujprog -j flash` for nothing.
+		 */
+		i2c0: i2c@90000 {
+			compatible = "koti,i2c-bit-1.0";
+			reg = <0x00090000 0x00010000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			/*
+			 * "maxim,ds3231" is rtc-ds1307.c's own compatible
+			 * string in 6.12 (read out of the driver's
+			 * of_device_id table, not remembered). 0x68 is the
+			 * DS3231's fixed 7-bit address — the part has no
+			 * address pins, so there is nothing to configure and
+			 * nothing to get wrong.
+			 *
+			 * ⚠️ The common ZS-042 module also carries an AT24C32
+			 * EEPROM at 0x57. It is deliberately NOT described
+			 * here: koti has no use for 4 KB of EEPROM, and a node
+			 * for a chip that a different module may not have
+			 * would produce a probe failure in the boot log on
+			 * every machine that has the other kind. `i2cdetect -y
+			 * 0` finds it either way.
+			 */
+			rtc0: rtc@68 {
+				compatible = "maxim,ds3231";
+				reg = <0x68>;
+			};
+		};
+
+		/*
 		 * The 40x30 text console — PLAN.md item 9b, driver
 		 * sw/linux/koticon.c. `reg` is the VGA register block, NOT the
 		 * character buffer: the buffer is ordinary RAM that the driver

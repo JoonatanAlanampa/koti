@@ -312,6 +312,27 @@ jobs:
           tail -10 drivers/input/misc/Kconfig
           grep -n koti drivers/input/misc/Makefile
 
+      # The I2C bus for the DS3231 RTC (PLAN item 28). It goes in
+      # drivers/i2c/busses/ beside i2c-gpio, which is the driver it is most
+      # like: a bit-banged adapter whose whole job is to hand four line
+      # callbacks to i2c-algo-bit. koti's differ from i2c-gpio's only in that
+      # they are one MMIO register rather than two GPIO descriptors.
+      #
+      # ⭐ AND IT IS THE LAST koti-SPECIFIC LINK IN THE CHAIN. Above this
+      # driver, everything is mainline and unmodified: i2c-algo-bit does the
+      # protocol, rtc-ds1307 drives the part, the RTC class creates /dev/rtc0,
+      # and RTC_HCTOSYS sets the system clock at boot. No other koti
+      # peripheral has that property — the keyboard, the card, the screen and
+      # the link each needed a driver of their own all the way up.
+      - name: Add koti's I2C bus driver
+        working-directory: linux-${{ env.KVER }}
+        run: |
+          cp ../sw/linux/koti_i2c.c drivers/i2c/busses/
+          printf '\nconfig I2C_KOTI\n\ttristate "Koti-1 bit-banged I2C"\n\tselect I2C_ALGOBIT\n\thelp\n\t  I2C bus master for koti'"'"'s two open-drain pins (src/i2c_bit.sv),\n\t  on the ULX3S J1 header. Carries the DS3231 RTC at 0x68.\n' >> drivers/i2c/busses/Kconfig
+          printf 'obj-$(CONFIG_I2C_KOTI)\t+= koti_i2c.o\n' >> drivers/i2c/busses/Makefile
+          tail -8 drivers/i2c/busses/Kconfig
+          grep -n koti drivers/i2c/busses/Makefile
+
       # The ESP32 link (PLAN item 11). A serial-core driver, so the port is a
       # real tty: that is what lets a LINE DISCIPLINE attach to it, which is
       # the only way SLIP or PPP can ever run, and what lets a userspace

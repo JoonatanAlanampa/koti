@@ -180,6 +180,49 @@ CONFIG_INPUT_KOTI_SND=y
 CONFIG_PARTITION_ADVANCED=y
 CONFIG_MSDOS_PARTITION=y
 
+# ---- the clock, PLAN item 28 ------------------------------------------------
+# koti had no timekeeping hardware at all until the DS3231 module: the kernel
+# started at the epoch every boot, and /etc/init.d/S45kotisd restored a time
+# saved to the card at the last clean shutdown — monotonic, never correct.
+# This is the real thing, on a coin cell.
+#
+# ⭐ FOUR SYMBOLS, THREE OF THEM MAINLINE'S OWN, AND THAT IS THE WHOLE POINT.
+# koti's contribution is I2C_KOTI (sw/linux/koti_i2c.c, ~90 lines over the
+# two-bit register src/i2c_bit.sv exposes). Everything above it — the bus
+# algorithm, the RTC driver, the class device, setting the system clock at
+# boot — is code that already existed and that nobody here has to own. That is
+# the opposite of every other koti driver, each of which had to be written
+# because the hardware underneath was not a standard part.
+CONFIG_I2C=y
+CONFIG_I2C_ALGOBIT=y
+CONFIG_I2C_KOTI=y
+# ⭐ /dev/i2c-0, and it needs NO userspace change: the rootfs already ships
+# busybox's i2cdetect, i2cget, i2cset, i2cdump and i2ctransfer (verified in the
+# committed rootfs.cpio, not assumed). So the first bring-up question when the
+# module arrives — "is anything answering at 0x68" — is one command away
+# instead of being a program somebody has to write first.
+CONFIG_I2C_CHARDEV=y
+# The RTC class, and mainline's driver for the part itself. RTC_DRV_DS1307
+# covers the DS3231; its of_device_id table names "maxim,ds3231", which is what
+# sw/linux/koti.dts uses. It selects REGMAP_I2C for itself.
+CONFIG_RTC_CLASS=y
+CONFIG_RTC_DRV_DS1307=y
+# ⚠️ THIS is what makes the machine come up knowing the date, and it is a
+# default that would be easy to lose silently. RTC_HCTOSYS reads rtc0 during
+# boot and sets the system clock from it, before userspace exists — so `date`
+# is right at the login prompt with nothing run and nothing configured. Without
+# it koti would have an RTC that nothing consults, which is indistinguishable
+# from not having one until somebody runs hwclock by hand.
+CONFIG_RTC_HCTOSYS=y
+CONFIG_RTC_HCTOSYS_DEVICE="rtc0"
+# The DS3231 is a TCXO: it measures its own die temperature and re-trims the
+# oscillator's load capacitance from it, which is where its +-2 ppm comes from.
+# rtc-ds1307 exposes that reading through hwmon when hwmon is reachable, and
+# it is worth the ~15 KB — it is the one number that says the part is doing the
+# thing it costs more than a plain RTC to do, and it doubles as a room
+# thermometer for a machine that otherwise cannot measure anything physical.
+CONFIG_HWMON=y
+
 # ---- what init needs --------------------------------------------------------
 # The rootfs is STILL a built-in initramfs, on purpose. The microSD block
 # driver above is new and unproven on hardware, and switching `root=` to it

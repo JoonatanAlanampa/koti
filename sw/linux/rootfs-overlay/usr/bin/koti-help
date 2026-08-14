@@ -61,18 +61,41 @@ STORAGE
   every boot, which repairs the ordinary damage and tells you about the rest.
 
 CLOCK
-  koti has no battery and no clock chip, so the kernel starts at the epoch.
-  Two things fix that, and neither is NTP:
+  koti keeps time on a DS3231 module plugged into the J1 header, on its own
+  coin cell. The kernel reads it before userspace starts, so `date` is right
+  at the login prompt with nothing run and nothing configured.
+
+    hwclock -r        what the chip says
+    hwclock -w        copy the system time INTO the chip (do this once, after
+                      setting the date, and it survives being unplugged)
+    hwclock -s        copy the chip's time into the system clock
+    i2cdetect -y 0    the bus. 0x68 is the clock; 0x57, if present, is an
+                      EEPROM on the same little board that nothing uses.
+
+  If `date` is wrong, set it and write it down:
+
+    date -s "2026-08-14 21:30:00" && hwclock -w
+
+  Two older mechanisms are still here and still work, and they are what runs
+  if the module is unplugged:
 
     koti-net time     asks a web server what time it is, from the Date header
                       every HTTP reply already carries. Accurate to a second
                       or two, and it saves the answer to the card.
 
-  At the next boot that saved time is restored, so the machine starts from
-  when it was LAST RUNNING rather than from 1970. That is monotonic, not
-  correct: after a week unplugged it believes it is still last Tuesday, and
-  file timestamps stay in the order the files were written. If `date` says
-  1970, either the card is not mounted or it has never been told the time.
+  At the next boot that saved time is restored only if it is LATER than what
+  the clock already says — so with the RTC fitted it never fires, and without
+  it the machine starts from when it was LAST RUNNING rather than from 1970.
+  That fallback is monotonic, not correct: after a week unplugged it believes
+  it is still last Tuesday.
+
+  If `date` says 1970 with the module fitted, the chip is not being seen:
+  check `i2cdetect -y 0` for 0x68, then `dmesg | grep -i rtc`.
+
+  The DS3231 also measures its own temperature — that is how it stays accurate
+  to a couple of seconds a month — and koti reads it out:
+
+    cat /sys/class/hwmon/hwmon0/temp1_input     millidegrees C
 
 THE TWO CONSOLES
   The monitor (tty1) is the one you type at. The serial line (hvc0) is a

@@ -68,6 +68,7 @@ plic_threshold|0x00E00000|y|PLIC priority threshold
 plic_claim|0x00E00004|n|PLIC claim/complete - READING IT CLAIMS AN INTERRUPT
 audio0|0x00080000|y|sound voice 0 - the kernel's bell
 audio1|0x00080004|y|sound voice 1 - what koti play uses
+rtc|0x00090000|y|I2C lines to the DS3231. Idle reads 0x6932631F
 ram|0x01000000|y|start of the 32 MB SDRAM
 EOF
 }
@@ -207,7 +208,7 @@ cmd_peek() {
 topics() {
 cat <<'EOF'
 STORAGE|save write file files persist store disk card sd microsd mount unmount lost survive ext2 sync fsck
-CLOCK|time clock date day today year when timestamp epoch 1970 ntp rtc
+CLOCK|time clock date day today year when timestamp epoch 1970 ntp rtc ds3231 hwclock battery i2c i2cdetect temperature
 INTERNET|net internet web wifi online download fetch page url http browse ping wget address ip esp32 modem dns
 KEYBOARD|key keyboard layout type typing character letter altgr keymap finnish
 THE TWO CONSOLES|console screen monitor serial terminal double twice echo doubled tty hvc0 tty1 display

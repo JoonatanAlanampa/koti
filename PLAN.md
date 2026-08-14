@@ -38,7 +38,10 @@ would touch the harness, the LPF and every bench at once.
 🅿️ **SUSPENDED 2026-08-14 BY USER DIRECTIVE: items 16, 20, 22, 23, 25 and the
 Tiny VGA Pmod font check in item 1.** Suspended ≠ deleted — the entries stay
 exactly as written so an unpark needs no re-derivation — but **no session may
-work them or propose them as the next thing.** The live item is **21, sound.**
+work them or propose them as the next thing.** ~~The live item is **21,
+sound**.~~ ⇒ **21 landed the same day; the live item is now 28, the DS3231
+RTC**, added by user directive on the evening of 2026-08-14. It is code-complete
+and waiting on the part to arrive — see its entry at the end of the list.
 
 Hardware bring-up — ✅ **THE BOARD ARRIVED 2026-08-06. This is now doable
 work, not a wait:**
@@ -1177,6 +1180,54 @@ on the ladder; the first two are small and change how the machine feels.
 ⛔ **26 was removed from the roadmap 2026-08-12 by user directive.** The number
 is retired with it; **there is no item 26**, and the housekeeper is two tiers —
 24 and 25.
+
+28. [~] 🕰️ **A REAL CLOCK — THE DS3231 RTC MODULE. BUILT 2026-08-14, NOT YET
+    ON HARDWARE: the part had not arrived.** User directive the same day: *"I
+    bought the RTC DS3231 I2C module… once it arrives I want to just plug it
+    into ULX3S and then koti should have RTC."*
+    **It is numbered 28 and not 26 because 26 is a retired number** (see the
+    paragraph above); 27 is taken by the flash write-protect fix.
+    ⭐ **THIS IS THE FIRST koti PERIPHERAL WHOSE DRIVER IS MAINLINE'S.** Every
+    other one needed a driver of koti's own, because a soft USB host is not an
+    EHCI, the SD engine is not an SDHCI, the ESP32 link is not a 16550 and the
+    text console is not fbcon. The DS3231 is a real Maxim part on a real I2C
+    bus, so `drivers/rtc/rtc-ds1307.c` binds unmodified and brings `/dev/rtc0`,
+    `hwclock`, and `RTC_HCTOSYS` setting the system clock before userspace
+    exists. koti's contribution stops at the bus.
+    **What was built:**
+    - `src/i2c_bit.sv` — ONE register: two open-drain drive bits out, two pin
+      levels back, plus a spare INT/SQW input and an ASCII `"i2c"` signature so
+      `koti peek rtc` can prove the block is in the bitstream (idle = `0x6932631F`).
+    - `sw/linux/koti_i2c.c` — four callbacks handed to mainline's
+      `i2c-algo-bit`, plus `i2c_generic_scl_recovery`, which is literally the
+      recovery procedure the DS3231 datasheet prescribes.
+    - `test/tb_i2c.v` + `test/ds3231_model.sv` — a real transaction over the
+      real register: START, address, ACK, repeated START, a seven-byte read of
+      the timekeeping registers in BCD, a NACK at the wrong address, a write
+      and read-back, and the pointer wrapping 0x12 → 0x00.
+    ⛔ **NO I2C STATE MACHINE IN FABRIC, AND THAT IS THE WHOLE DESIGN
+    DECISION.** Gateware ships inside the bitstream, which costs a
+    `fujprog -j flash` and the user's presence to change; a driver ships on the
+    card, which is a file copy. Putting the protocol in software puts every
+    corner case — repeated START, clock stretching, arbitration, recovery — on
+    the cheap side of that line, and uses code that has been right since 1995.
+    The bus runs at tens of kHz instead of 400 kHz as a result, which costs
+    milliseconds once per boot on a device that has no throughput to lose.
+    **Pins** (J1, rows 8 and 9 — the same three that carried PS/2 until
+    2026-08-08): `gp[8]`/A4 = SCL, `gp[9]`/A2 = SDA, `gn[8]`/A5 = INT/SQW,
+    input only and not routed to the PLIC, so alarms are not supported and the
+    devicetree does not claim they are. Power from J1's own 3.3 V and GND pins,
+    two rows below row 7 and inside the same 2x10 block.
+    ⚠️ **IT RIDES ONE REFLASH.** The DTB lives in the M-mode firmware, which is
+    baked into the bitstream — so the node and the pins must land together, the
+    way the sound node did, or it costs a second `fujprog` for nothing.
+    📌 **When the module arrives**, in order: solder the header, plug it in,
+    reflash, write the card, then `i2cdetect -y 0` (busybox already ships it —
+    no userspace change was needed) and `hwclock -w` once to set it. After
+    that, `date` is right at the login prompt with nothing run.
+    ⏳ **Unproven until then**: that the real part answers, that the module's
+    pull-ups are enough at this length of wire, and that `hwclock` and
+    HCTOSYS behave. Everything up to the pin is tested.
 
 ⛔ **NON-GOAL, so nobody re-proposes it: a FRONTIER-CLASS LLM running ON koti.**
 ⚠️ **Read the scope of this before quoting it: it rules out a ~0.5B model doing

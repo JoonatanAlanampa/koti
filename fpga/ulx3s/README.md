@@ -907,7 +907,9 @@ those pins today connects it to nothing.
 
 ⚠️ `0x0004000C` still decodes and reads **zero**, deliberately: to a surviving
 PS/2 driver that means "no key waiting", so it idles rather than misbehaves.
-`gp[8]`/`gp[9]` (A4/A2) are free.
+~~`gp[8]`/`gp[9]` (A4/A2) are free.~~ ⇒ **they are the I2C bus now** — section 8
+below, PLAN item 28. The three pins PS/2 gave back are exactly the three the
+RTC took.
 
 The wiring notes below are kept because the **3.3 V hazard is real and general**
 — it applies to anything you hang off `gp` pins, not just a keyboard — and
@@ -945,6 +947,90 @@ the LVCMOS33 input threshold. That combination looks reasonable and does not
 work.
 
 </details>
+
+## 🕰️ 8. The DS3231 RTC on J1 — **BUILT 2026-08-14, NOT YET ON HARDWARE**
+
+PLAN item 28. The part had not arrived when this was written; everything up to
+the pin is tested and nothing past it is.
+
+### What to solder
+
+![where the 2x10 socket goes, top side](../../docs/img/ds3231-top.jpg)
+![the same holes from the solder side](../../docs/img/ds3231-bottom.jpg)
+
+⭐ Those two pictures are **this board**, and the rings are not drawn by eye:
+every position comes from the ULX3S KiCad PCB (`emard/ulx3s`,
+`ulx3s.kicad_pcb`) mapped onto the photograph by a homography fitted to the
+board's own header holes — 74/80 of them on the top view, 77/80 on the bottom,
+mean residual under 0.13 mm. `tools/board_overlay.py` regenerates them.
+
+The ULX3S ships with J1 and J2 unpopulated — 2×20 rows of bare plated holes
+along each long edge. koti needs four of them, and they all fall inside **one
+2×10 block of J1**, so a single 2×10 female header covers the lot.
+
+Position that block against the **silkscreen numbers on the J1 edge** (the edge
+that carries 0…13). Counting from the end nearest the numbers 13:
+
+```
+   row       what it is          used for
+   GND       ground              (the pair just below the top 3.3V pair)
+   13 12 11 10 9   free
+    9        gp[9]  ball A2      SDA          <-- the module's SDA
+    8        gp[8]  ball A4      SCL          <-- the module's SCL
+             gn[8]  ball A5      INT/SQW      <-- optional, "-" hole of row 8
+    7        used by the VGA personality — leave it alone
+   GND       ground              <-- the module's GND
+   3.3V      2V5_3V3             <-- the module's VCC
+```
+
+Four wires: **VCC → the 3.3 V row, GND → the GND row, SDA → row 9 "+", SCL →
+row 8 "+"**. The `+` hole of a numbered row is the one nearer the board edge
+(it is `gp[n]`); the `-` hole is the inner one (`gn[n]`).
+
+Every one of the four is inside the 2×10 span, which is why that particular
+block is the one to fit. Geometry taken from the ULX3S KiCad PCB
+(`emard/ulx3s`, `ulx3s.kicad_pcb`), not from a photograph: J1 is a
+`Socket_Strip_Angled_2x20` whose pads carry the net names directly.
+
+### Electrical notes
+
+- **3.3 V, not 5 V.** The DS3231 runs from 2.3–5.5 V, and the ECP5 is **not
+  5 V tolerant**. Taking VCC from J1's own supply pin puts the module's
+  pull-ups on the same rail as the FPGA's IO and every level in spec.
+- ⚠️ J1's supply is the net `2V5_3V3` — bank 0's VCCIO, set by the RV2/RV3
+  0 Ω jumpers beside the "3.3V / 2.5V" silk. Boards ship at 3.3 V. **Either
+  value works here**: 2.5 V is inside the DS3231's range, and the master can
+  only ever pull DOWN, so there is no path that drives current into the part.
+- ⭐ **The notorious ZS-042 charging circuit is harmless at 3.3 V.** That
+  module charges its cell through a diode and a resistor from VCC, which is a
+  genuine hazard with a non-rechargeable CR2032 **at 5 V** (5 − 0.7 ≈ 4.3 V
+  into a 3 V cell). At 3.3 V the cell sees ~2.6 V, below its own terminal
+  voltage, so nothing flows into it. Powering it from 3.3 V is the fix, and it
+  is the wiring above anyway.
+- The module carries its own ~4.7 kΩ pull-ups. The LPF's `PULLMODE=UP` is a
+  fallback for when nothing is plugged in, not a substitute — an FPGA pull-up
+  is 10–50 kΩ and does not terminate a bus.
+
+### Bring-up, in order
+
+The RTL and the devicetree node ride **one reflash** — the DTB lives inside the
+M-mode firmware, which is baked into the bitstream — and the kernel driver
+rides one card write. Do both before plugging anything in, then:
+
+```sh
+i2cdetect -y 0        # 0x68 is the clock. 0x57, if it appears, is the
+                      # module's EEPROM; nothing uses it.
+hwclock -r            # what the chip says
+date -s "2026-08-14 21:30:00" && hwclock -w    # set it, once
+dmesg | grep -i rtc   # "rtc-ds1307 0-0068: registered as rtc0"
+```
+
+After that the kernel reads it at every boot before userspace starts, so `date`
+is right at the login prompt with nothing run.
+
+`koti peek rtc` reads the block's own register: **`0x6932631F`** is an idle bus
+(ASCII `"i2c"`, both lines released and high). A value with bit 0 or bit 1 low
+while nothing is transferring means something is holding the bus down.
 
 ## Things that will look like bugs and are not
 

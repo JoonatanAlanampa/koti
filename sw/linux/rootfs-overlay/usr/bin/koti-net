@@ -732,16 +732,41 @@ cmd_scan() {
 # ⇒ Fail EARLY and say the true thing. A fetch that cannot work should not
 # reach the far end at all.
 link_up() {
-	capture_reset
-	# `w` only exists if a join has run in THIS repl session; a bare
-	# NameError is the honest answer to "have you joined?", so it is
-	# caught here rather than being allowed to look like a network fault.
-	send "print('zz','KOTI'+'-UP', w.isconnected(), w.status())" 2>/dev/null
-	if ! expect 'KOTI-UP' 8; then
-		echo "koti-net: the ESP32 is not answering, or no 'koti-net join'" >&2
-		echo "koti-net: has run since it was woken." >&2
-		return 1
-	fi
+	# ⛔⛔ ASK MORE THAN ONCE, BECAUSE ONE SILENT ANSWER IS NOT AN ANSWER.
+	# Measured on hardware 2026-08-14: one fetch in three refused with "the
+	# ESP32 is not answering" while the link was provably up — the very next
+	# command returned `True 1010 ('172.20.10.2', ..., '254.128.0.0')` from the
+	# same REPL, in the same session, seconds later.
+	#
+	# The cause is the fault this file already documents in both directions: a
+	# character dropped from the line on its way TO the far end turns
+	# `isconnected` into something that raises, and a raise prints no marker.
+	# `cmd_get` already retries the hostname for exactly this reason and says
+	# so out loud; this check had no such retry, so a single dropped byte
+	# turned a working network into a refusal — and refusing a fetch that would
+	# have worked is a worse failure than the one this function exists to
+	# prevent.
+	#
+	# ⚠️ THE CAPTURE IS DUMPED ON THE WAY OUT. Without it the traceback that
+	# explains the silence is thrown away by the next capture_reset, which is
+	# how the 2026-08-12 wedge stayed mysterious for an evening.
+	_lu=1
+	while : ; do
+		capture_reset
+		# `w` only exists if a join has run in THIS repl session; a bare
+		# NameError is the honest answer to "have you joined?", so it is
+		# caught here rather than being allowed to look like a network fault.
+		send "print('zz','KOTI'+'-UP', w.isconnected(), w.status())" 2>/dev/null
+		expect 'KOTI-UP' 8 && break
+		if [ "$_lu" -ge 3 ]; then
+			echo "koti-net: the ESP32 is not answering, or no 'koti-net join'" >&2
+			echo "koti-net: has run since it was woken. It said:" >&2
+			capture >&2
+			return 1
+		fi
+		echo "koti-net: no answer from the link, retrying ($_lu)" >&2
+		_lu=$((_lu + 1))
+	done
 	_st=$(capture | grep -a 'KOTI-UP' | tail -n 1)
 	case "$_st" in
 		*True*) return 0 ;;
@@ -1028,7 +1053,34 @@ cmd_get() {
 	# the grep below never matches, and `get` reports "no complete reply in
 	# 60 s" while /tmp/koti-net.cap holds the entire page. Printing two junk
 	# characters in front of the marker donates them to the collision instead.
-	send "c1+=\"\nprint('zz','KOTI'+'-BEGIN')\nwhile 1:\n d=s.recv(256)\n if not d:break\n sys.stdout.write(d)\""
+	# ⛔⛔ READ THE WHOLE BODY BEFORE PRINTING ANY OF IT, AND THIS IS THE `zz`
+	# LESSON ONE LAYER DOWN. Measured on hardware 2026-08-14, three fetches out
+	# of three, on the build that had just fixed everything else:
+	#
+	#     'TTP/1.1 200 OK        <- the page's own first byte, destroyed
+	#
+	# The padding protects the MARKER, and it did: `KOTI-BEGIN` arrived intact
+	# every time. But `print('zz','KOTI-BEGIN')` finishes transmitting, and then
+	# `s.recv(256)` BLOCKS on the network — a pause of hundreds of milliseconds
+	# with the far end silent. Whatever it sends next opens a NEW burst, and the
+	# first character of every burst is destroyed. So the sacrificial bytes were
+	# spent on the marker and the page paid for the next collision itself.
+	#
+	# ⚠️ AND IT IS NOT ONLY THE FIRST BYTE. Every recv that has to wait for
+	# another TCP segment is another boundary, so a page larger than one segment
+	# loses a character in the MIDDLE too — invisible in a 1.2 KB test page and
+	# certain in a real one.
+	#
+	# Buffering on the ESP32 and writing once means the marker and the entire
+	# body are one uninterrupted transmission: the padding absorbs the only
+	# collision there is, and every byte of the page is downstream of it.
+	#
+	# ⚠️ THE CAP IS NOT SILENT. 200 KB is ESP32 RAM being spent on a page, and a
+	# truncated page that looks complete is worse than a refusal, so the cut
+	# announces itself with its own marker and `get` says so on stderr.
+	send "c1+=\"\nb=b''\nwhile len(b)<200000:\n d=s.recv(256)\n if not d:break\n b+=d\""
+	send "c1+=\"\nif len(b)>=200000: print('zz','KOTI'+'-CUT')\""
+	send "c1+=\"\nprint('zz','KOTI'+'-BEGIN')\nsys.stdout.write(b)\""
 	# The trailing print() matters: a body that does not end in a newline
 	# would otherwise leave the end marker glued to the last line of the page,
 	# where the anchored match below never sees it and the fetch times out
@@ -1051,6 +1103,13 @@ cmd_get() {
 		echo "koti-net: could not connect to $_addr. The far end said:" >&2
 		capture >&2
 		return 1
+	fi
+
+	# Said out loud rather than left for the reader to notice: a page that stops
+	# in the middle of a tag is the kind of thing that gets blamed on the link.
+	if grep -qa 'KOTI-CUT' "$CAP" 2>/dev/null; then
+		echo "koti-net: ⚠ this page is longer than 200 KB and was CUT there." >&2
+		echo "koti-net: what follows is the beginning of it, not all of it." >&2
 	fi
 
 	if expect 'KOTI-END' 60; then

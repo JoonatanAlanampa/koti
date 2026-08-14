@@ -191,6 +191,14 @@ eq "the page, exactly" "$PAGE" "$(cat "$TMP/outA")"
 r=$($PY -c "import json,sys;d=json.load(open(sys.argv[1]));print(d['repairs'],d['cfg'][3])" "$TMP/report.json")
 eq "left a working resolver alone" "0 172.20.10.1" "$r"
 
+echo "== 11. one silent answer from the link is not an answer =="
+start_mock flakylink
+cmd_get http://example.com/ > "$TMP/outB" 2> "$TMP/errB"; rc=$?
+stop_mock
+eq "exit status" 0 "$rc"
+eq "the page, exactly" "$PAGE" "$(cat "$TMP/outB")"
+if grep -q 'retrying' "$TMP/errB"; then ok; else bad "did not say it retried: $(cat "$TMP/errB")"; fi
+
 echo
 echo "$checks checks, $fails failures"
 [ "$fails" -eq 0 ] || exit 1

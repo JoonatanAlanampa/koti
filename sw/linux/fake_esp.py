@@ -65,6 +65,10 @@ RESPONSE = (
 
 KNOWN = {"example.com": "93.184.216.34", "188.184.67.127": "188.184.67.127"}
 
+# A pause in the far end's transmission. Everything written after one of these
+# is a fresh burst, and koti destroys the opening character of every burst.
+BOUNDARY = object()
+
 # The resolver the iPhone hands over: the first four bytes of an fe80:: address
 # dropped into a v4 slot. 254 >= 224, so koti-net's repair fires on it.
 BROKEN_DNS = "254.128.0.0"
@@ -102,6 +106,10 @@ class Mock:
     def write_raw(self, d):
         # MicroPython's sys.stdout.write takes the bytes through untouched.
         self.out.append(d.decode("latin1") if isinstance(d, bytes) else str(d))
+
+    def boundary(self):
+        """Stop transmitting. Whatever is written next opens a new burst."""
+        self.out.append(BOUNDARY)
 
     # --- the interface --------------------------------------------------
     def ifconfig(self, t=None):
@@ -175,6 +183,12 @@ class Sock:
     def recv(self, n):
         if self.dead:
             raise OSError(104, "ECONNRESET")
+        # ⛔ A recv IS A BURST BOUNDARY, and this is the whole reason the fetched
+        # page used to lose its first character. Waiting for the network stops
+        # the far end transmitting; whatever is written next opens a new burst
+        # and koti destroys its opening byte. Measured on hardware 2026-08-14:
+        # three fetches, three `'TTP/1.1 200 OK`.
+        self.m.boundary()
         if not self.connected:
             # The measured wedge: recv on an unconnected socket BLOCKS, and
             # the socket timeout is the only thing that ends it.
@@ -276,6 +290,12 @@ def main():
         if args.scenario == "garble" and mock.garbles < 2 and line[:2] in ("a=", "h="):
             mock.garbles += 1
             line = line[:5] + line[6:]
+        # `flakylink`: the same fault, on the line link_up sends. A dropped
+        # character there raises instead of printing the marker, and a check
+        # that asks once then gives up turns a working network into a refusal.
+        if args.scenario == "flakylink" and "KOTI'+'-UP" in line and not mock.garbles:
+            mock.garbles += 1
+            line = line.replace("isconnected", "isconnectd", 1)
         mock.lines.append(line)
         burst(line + "\r\n")             # the echo is its own burst
         mock.out = []
@@ -296,7 +316,17 @@ def main():
                 mock.emit("Traceback (most recent call last):")
                 mock.emit('  File "<stdin>", line 1, in <module>')
                 mock.emit("%s: %s" % (type(e).__name__, e))
-        burst("".join(mock.out))
+        # One burst per uninterrupted run of output. A boundary in the middle
+        # of a command's output is not a pause in the SHELL — it is the far end
+        # blocking on the network, and the byte after it is the one that dies.
+        seg = []
+        for piece in mock.out:
+            if piece is BOUNDARY:
+                burst("".join(seg))
+                seg = []
+            else:
+                seg.append(piece)
+        burst("".join(seg))
         burst(">>> ")
 
     cap.close()

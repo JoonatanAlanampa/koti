@@ -987,6 +987,21 @@ Four wires: **VCC → the 3.3 V row, GND → the GND row, SDA → row 9 "+", SCL
 row 8 "+"**. The `+` hole of a numbered row is the one nearer the board edge
 (it is `gp[n]`); the `-` hole is the inner one (`gn[n]`).
 
+⛔ **THE RTC MODULE IS NOT A PMOD AND DOES NOT SEAT IN THIS SOCKET.** It carries
+its own single row of pins in its own order — the common ZS-042 is 32K, SQW,
+SCL, SDA, VCC, GND — and no arrangement of that row lands VCC and GND on the
+board's two power rows while SDA and SCL land on rows 9 and 8. The socket
+exists so the holes are reachable and re-usable, not so the module plugs into
+it. Four jumper wires do the connecting.
+
+⚠️ **AND THE WIRE ENDS FOLLOW FROM WHAT IS SOLDERED HERE.** A *female* socket
+on the board accepts *male* pins, so **the end of each jumper that enters this
+socket must be MALE**; the other end mates with whatever the module presents
+(male pins on most DS3231 boards ⇒ female-to-male wires). Soldering a male pin
+header here instead would invert that. This is the one detail that decides
+which bag of jumper wires is the right one, and it is worth checking before the
+iron is hot.
+
 Every one of the four is inside the 2×10 span, which is why that particular
 block is the one to fit. Geometry taken from the ULX3S KiCad PCB
 (`emard/ulx3s`, `ulx3s.kicad_pcb`), not from a photograph: J1 is a

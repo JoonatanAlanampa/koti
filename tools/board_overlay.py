@@ -87,7 +87,7 @@ TITLE = {
              'It starts at the 3.3 V row just below the row marked 7, and ends at the GND row below the top 3.3 V pair.',
              'All four wires land in the OUTER column — the one nearest the board edge, marked + on the silkscreen (that column is gp[n]).',
              'Rows 10-13 stay free. Row 7 is inside the header but is used by koti’s video — do not wire to it.',
-             'The module does NOT plug straight in: its pin order is its own. Four female-female jumper wires, module → these holes.']),
+             'The module does NOT plug in here — its pin order is its own. Four jumper wires: whatever end mates with the module, the end that enters THIS SOCKET must be MALE.']),
     'bottom': ('ULX3S — BOTTOM SIDE: the same 20 holes, seen from the side you solder',
                ['Mirror image of the top view: the header goes in from the top and is soldered here.',
                 'The silkscreen row numbers are printed on this side too — check them before you heat anything.',

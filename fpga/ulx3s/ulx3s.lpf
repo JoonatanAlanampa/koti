@@ -265,6 +265,32 @@ IOBUF PORT "rtc_scl" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
 IOBUF PORT "rtc_sda" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
 IOBUF PORT "rtc_sqw" PULLMODE=UP IO_TYPE=LVCMOS33;
 
+# ---- E12 / B19: the onboard MCP7940N RTC (added 2026-08-14) ----
+#
+# ⭐ THE ULX3S HAS HAD A BATTERY-BACKED RTC ALL ALONG and this project had not
+# noticed. U7 is a populated MCP7940N with its own 32.768 kHz crystal (Y2) and
+# a CR1225 holder (BAT1, empty); its I2C bus goes STRAIGHT TO THE FPGA on these
+# two balls, with 3.3k pull-ups (R22/R23) already fitted. Read out of the ULX3S
+# KiCad PCB, then confirmed against upstream's own constraint file, which names
+# them and says so:
+#     LOCATE COMP "gpdi_sda" SITE "B19"; # I2C shared with RTC
+#     LOCATE COMP "gpdi_scl" SITE "E12"; # I2C shared with RTC C12->E12
+#
+# ⚠️ SHARED WITH THE HDMI CONNECTOR'S DDC PINS through U11, a PCA9306 level
+# translator — that is how a board reads a monitor's EDID. Two consequences:
+# a monitor's EDID EEPROM (0x50) may answer on this bus alongside the RTC
+# (0x6F), which is harmless because the addresses differ; and the pull-ups go
+# to +2V5, not 3.3 V. An LVCMOS33 input reads 2.5 V as a valid high (VIH 2.0 V)
+# and this master only ever pulls DOWN, so nothing here drives current into
+# anything — the same argument as J1's 2V5_3V3 rail above.
+#
+# IO_TYPE and PULLMODE copied from upstream rather than chosen: those two lines
+# are the vendor's own settings for these balls.
+LOCATE COMP "rtc2_scl" SITE "E12";
+LOCATE COMP "rtc2_sda" SITE "B19";
+IOBUF PORT "rtc2_scl" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "rtc2_sda" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+
 # gn[9] (B1) and gp/gn[10..13] are still FREE, and so is the whole of J2.
 
 # ---- onboard 32 MB SDRAM (16-bit) ----

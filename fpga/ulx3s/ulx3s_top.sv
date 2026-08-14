@@ -115,6 +115,16 @@ module ulx3s_top (
     inout  wire        rtc_sda,
     input  wire        rtc_sqw,
 
+    // ---- E12 / B19: the RTC THE BOARD ALREADY HAD ----
+    // U7 is a populated MCP7940N with its own 32.768 kHz crystal and a CR1225
+    // holder, and these two balls are its I2C bus, with 3.3k pull-ups fitted on
+    // the board. Upstream's ulx3s_v20.lpf calls them `gpdi_scl`/`gpdi_sda` and
+    // comments "I2C shared with RTC" — the same pair also reaches the HDMI
+    // connector's DDC pins through a PCA9306 translator, which is how a board
+    // reads a monitor's EDID. koti drives them open-drain, exactly like J1's.
+    inout  wire        rtc2_scl,
+    inout  wire        rtc2_sda,
+
     // ---- onboard 3.5 mm audio jack, 4-bit R2R ladder per channel ----
     // ⭐ THE ONE AUDIO PATH THAT NEEDS NO PMOD AND NO HEADER: these eight pins
     // ARE the DAC, and the socket is on the board. Every site is copied from
@@ -256,11 +266,15 @@ module ulx3s_top (
       .esp_gpio0  (wifi_gpio0),
       .audio_l    (audio_l),
       .audio_r    (audio_r),
-      .i2c_scl_oe (soc_i2c_scl_oe),
-      .i2c_sda_oe (soc_i2c_sda_oe),
-      .i2c_scl_in (rtc_scl),
-      .i2c_sda_in (rtc_sda),
-      .i2c_sqw_in (rtc_sqw),
+      .i2c0_scl_oe (soc_i2c0_scl_oe),
+      .i2c0_sda_oe (soc_i2c0_sda_oe),
+      .i2c0_scl_in (rtc_scl),
+      .i2c0_sda_in (rtc_sda),
+      .i2c0_sqw_in (rtc_sqw),
+      .i2c1_scl_oe (soc_i2c1_scl_oe),
+      .i2c1_sda_oe (soc_i2c1_sda_oe),
+      .i2c1_scl_in (rtc2_scl),
+      .i2c1_sda_in (rtc2_sda),
       .dbg_halted (cpu_halted),
       .dbg_fetch  (cpu_fetch),
       .dbg_irq    (irq_state),
@@ -326,9 +340,17 @@ module ulx3s_top (
   // bare `1'bz` leaves the port bit as the literal 'z' with no driver at all.
   // fpga/ulx3s/check_tristate.py now asserts that on the REAL netlist, in CI,
   // which is the gate sd_d[0]'s comment says does not exist.
-  wire soc_i2c_scl_oe, soc_i2c_sda_oe;
-  assign rtc_scl = soc_i2c_scl_oe ? 1'b0 : 1'bz;
-  assign rtc_sda = soc_i2c_sda_oe ? 1'b0 : 1'bz;
+  wire soc_i2c0_scl_oe, soc_i2c0_sda_oe;
+  assign rtc_scl = soc_i2c0_scl_oe ? 1'b0 : 1'bz;
+  assign rtc_sda = soc_i2c0_sda_oe ? 1'b0 : 1'bz;
+
+  // The onboard RTC's bus, same open-drain shape. ⛔ The `1'b0` is as
+  // load-bearing here as above, and one degree more so: this bus is shared
+  // with the HDMI connector's DDC lines, so a master that drove high would be
+  // fighting a monitor's pull-ups as well as the RTC's.
+  wire soc_i2c1_scl_oe, soc_i2c1_sda_oe;
+  assign rtc2_scl = soc_i2c1_scl_oe ? 1'b0 : 1'bz;
+  assign rtc2_sda = soc_i2c1_sda_oe ? 1'b0 : 1'bz;
 
   // ------------------------------------------------------- J1: QSPI Pmod
   // uio numbering (TT QSPI Pmod standard):

@@ -86,6 +86,9 @@ EXPECTED = {
     # 2026-08-14 rather than carried over from the PS/2 assignment these
     # replace. gn[9]=B1 stays free.
     "rtc_scl": "A4", "rtc_sda": "A2", "rtc_sqw": "A5",
+    # The onboard MCP7940N's bus. Upstream calls these gpdi_scl/gpdi_sda
+    # ("I2C shared with RTC"); koti uses them for the RTC half.
+    "rtc2_scl": "E12", "rtc2_sda": "B19",
     # the onboard 3.5 mm jack's R2R ladder (PLAN item 21, added 2026-08-14).
     # Sites from console/fpga/ulx3s.lpf, which played music through this jack
     # on this board; they were absent from this table, so check 3 could only

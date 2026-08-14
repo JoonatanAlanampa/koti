@@ -53,10 +53,17 @@ CLOCKFILE=$MP/.koti-clock
 # ---------------------------------------------------------------------------
 # The fake hardware clock — second half of PLAN item 13.
 #
-# koti has no RTC and no battery, so the kernel starts at the epoch and `date`
-# answers 1970 on every boot. koti-net can fetch the real time out of any HTTP
-# reply's Date header, but that needs the network up and the ESP32 awake, and
-# the ESP32 shares the microSD bus — not something to do at every boot.
+# ⚠️ THIS IS THE FALLBACK NOW, not the mechanism. Since PLAN item 28 koti has
+# real clocks — the board's own MCP7940N (rtc0, always present, needs a CR1225
+# in BAT1) and the DS3231 on J1 (rtc1, when it is plugged in) — and the kernel
+# reads rtc0 before userspace starts. What is below runs when neither has ever
+# been set, or when no cell is fitted, and is what koti did for its whole life
+# before that.
+#
+# Without an RTC the kernel starts at the epoch and `date` answers 1970 on
+# every boot. koti-net can fetch the real time out of any HTTP reply's Date
+# header, but that needs the network up and the ESP32 awake, and the ESP32
+# shares the microSD bus — not something to do at every boot.
 #
 # So: the last known time is written to the card, and restored here if it is
 # LATER than what the kernel started with.
@@ -66,9 +73,35 @@ CLOCKFILE=$MP/.koti-clock
 # passed. After a week unplugged the machine believes it is the moment it was
 # switched off — wrong, but wrong in the one direction that keeps file
 # timestamps in the order the files were written. `koti-net time` corrects it
-# in one command. A DS3231 on the spare gp/gn pins corrects it permanently and
-# is a separate job (a DT node plus a driver).
+# in one command, and either RTC corrects it permanently.
 # ---------------------------------------------------------------------------
+
+# ⭐ PREFER THE ACCURATE CLOCK, WHEN IT IS THERE. The kernel has already set
+# the system time from rtc0 — the soldered-on MCP7940N — because that is the
+# one that cannot be absent. rtc1 is the DS3231 on J1: a TCXO, about ±5 s a
+# month against rtc0's ±1 minute. If it is present and holding a plausible
+# time, take it, and write it back to rtc0 so the two agree and the NEXT boot
+# starts from the better number even if the module has been unplugged by then.
+#
+# ⛔ THE PLAUSIBILITY TEST IS NOT DECORATION. An RTC that has never been set
+# reads as 1970 (or 2000 for the MCP7940N), and adopting that would move the
+# clock BACKWARDS by decades — breaking exactly the ordering property the fake
+# clock below exists to protect. So: only adopt a year >= 2020.
+adopt_better_rtc() {
+	[ -e /dev/rtc1 ] || return 0
+	command -v hwclock > /dev/null 2>&1 || return 0
+	hwclock -f /dev/rtc1 -s > /dev/null 2>&1 || return 0
+	yr=$(date -u +%Y 2>/dev/null)
+	case "$yr" in ''|*[!0-9]*) return 0 ;; esac
+	if [ "$yr" -lt 2020 ]; then
+		echo "koti: /dev/rtc1 reads $yr — ignoring it, it has never been set"
+		return 0
+	fi
+	echo "koti: clock from the DS3231 (rtc1): $(date -u)"
+	# Keep the onboard one in step. It is the one that survives the module
+	# being unplugged, so it is the one worth being right.
+	hwclock -f /dev/rtc0 -w > /dev/null 2>&1
+}
 restore_clock() {
 	[ -r "$CLOCKFILE" ] || return 0
 	saved=$(cat "$CLOCKFILE" 2>/dev/null)
@@ -152,6 +185,7 @@ case "$1" in
 		if grep -q "^$DEV / " /proc/mounts 2>/dev/null; then
 			echo "koti: the microSD IS / — nothing to mount"
 			CLOCKFILE=/.koti-clock
+			adopt_better_rtc
 			restore_clock
 			exit 0
 		fi
@@ -172,6 +206,7 @@ case "$1" in
 		if mount -t ext2 -o rw "$DEV" "$MP" 2>/dev/null; then
 			echo "koti: microSD mounted at $MP"
 			CLOCKFILE=$MP/.koti-clock
+			adopt_better_rtc
 			restore_clock
 		else
 			echo "koti: $DEV would not mount at $MP — carrying on without it"

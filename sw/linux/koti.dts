@@ -37,6 +37,33 @@
 	compatible = "joonatanalanampa,koti1";
 	model = "Koti-1 (ULX3S 85F)";
 
+	/*
+	 * ⛔ WHICH CLOCK THE KERNEL TRUSTS AT BOOT, AND IT IS NOT THE ACCURATE
+	 * ONE. CONFIG_RTC_HCTOSYS_DEVICE is the string "rtc0", and rtc0 is
+	 * whichever RTC registers first unless an alias pins it — drivers/rtc/
+	 * class.c calls of_alias_get_id(node, "rtc") and uses that as the
+	 * device id.
+	 *
+	 * koti has two, and they differ in a way that decides this:
+	 *   the MCP7940N is SOLDERED TO THE BOARD and is always there;
+	 *   the DS3231 hangs off J1 on four wires and may not be plugged in.
+	 *
+	 * If the DS3231 were rtc0, then on a machine with nothing plugged into
+	 * J1 there would BE no rtc0 — hctosys would log "unable to open rtc
+	 * device (rtc0)" and the machine would boot at the epoch while a
+	 * perfectly good clock sat on the board unread. So rtc0 is the one that
+	 * cannot be absent, and the better clock is rtc1.
+	 *
+	 * ⚠️ That means the boot-time clock is the ~1 min/month one. Userspace
+	 * takes the DS3231's reading when it is present — see the rtc1 handling
+	 * in rootfs-overlay/etc/init.d/S45kotisd — which is the right place for
+	 * a policy that depends on what is plugged in.
+	 */
+	aliases {
+		rtc0 = &mcprtc;
+		rtc1 = &ds3231;
+	};
+
 	chosen {
 		/*
 		 * hvc0 is the SBI console: koti has no device Linux would bind a
@@ -416,9 +443,50 @@
 			 * every machine that has the other kind. `i2cdetect -y
 			 * 0` finds it either way.
 			 */
-			rtc0: rtc@68 {
+			ds3231: rtc@68 {
 				compatible = "maxim,ds3231";
 				reg = <0x68>;
+			};
+		};
+
+		/*
+		 * The SECOND I2C bus — and the RTC THE BOARD ALREADY HAD.
+		 *
+		 * ⭐ The ULX3S carries a populated MCP7940N (U7) with its own
+		 * 32.768 kHz crystal (Y2) and a CR1225 holder (BAT1), wired
+		 * straight to the FPGA on balls E12/B19 with 3.3k pull-ups
+		 * fitted. Nothing in this project had noticed until the user
+		 * asked what the coin cell on the back was for. It needs no
+		 * soldering and no header — only the cell.
+		 *
+		 * Same block as bus 0, second instance (src/i2c_bit.sv), and
+		 * the SAME driver again: rtc-ds1307.c matches
+		 * "microchip,mcp7940x" as well as "maxim,ds3231". Two RTCs,
+		 * two busses, one driver file, none of it koti's.
+		 *
+		 * ⚠️ THIS BUS IS SHARED WITH THE HDMI CONNECTOR'S DDC PINS
+		 * through a PCA9306 translator — that is how a board reads a
+		 * monitor's EDID. A monitor may therefore answer at 0x50 on
+		 * this bus. Harmless (different address), and worth knowing
+		 * before someone reads an unexpected device as a fault.
+		 */
+		i2c1: i2c@a0000 {
+			compatible = "koti,i2c-bit-1.0";
+			reg = <0x000a0000 0x00010000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			/*
+			 * 0x6F is fixed in the MCP794xx family — the part has
+			 * no address pins. Its alarm output is NOT wired to
+			 * the FPGA at all: it goes through two diodes into the
+			 * board's power path, so it can switch the BOARD on
+			 * rather than interrupt the CPU. No `interrupts`
+			 * property, for the same reason as the DS3231 above.
+			 */
+			mcprtc: rtc@6f {
+				compatible = "microchip,mcp7940x";
+				reg = <0x6f>;
 			};
 		};
 

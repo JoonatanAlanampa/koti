@@ -1229,6 +1229,41 @@ is retired with it; **there is no item 26**, and the housekeeper is two tiers �
     pull-ups are enough at this length of wire, and that `hwclock` and
     HCTOSYS behave. Everything up to the pin is tested.
 
+    ### ⭐⭐ AND THE BOARD ALREADY HAD ONE. Found 2026-08-14, by a user question.
+    The user asked what the coin-cell slot on the back of the ULX3S is for.
+    Reading the PCB rather than guessing: **U7 is a populated MCP7940N** — an
+    I²C real-time clock — with its own **32.768 kHz crystal (Y2)** and a
+    **CR1225 holder (BAT1)**, and its bus goes **straight to the FPGA** on
+    balls **E12 (SCL) / B19 (SDA)** with 3.3k pull-ups already fitted.
+    Upstream's own constraint file names them `gpdi_scl`/`gpdi_sda` and
+    comments *"I2C shared with RTC"*. **Everything is soldered on except the
+    cell.**
+    ⇒ **koti could have had a battery-backed clock for €3 and zero bench
+    work**, and nobody in this project had noticed in the eight days the board
+    has been on the bench. 📌 The lesson is not about clocks: *the board's own
+    design files answer questions about the board, and they are one download
+    away.* This was found by parsing `ulx3s.kicad_pcb`, not by looking.
+    ✅ **USER DECISION 2026-08-14: BUILD BOTH**, because they share one
+    reflash. Second `i2c_bit` instance at **0x000A_0000**, two LPF lines, one
+    devicetree node, and **the same mainline driver again** — `rtc-ds1307.c`
+    matches `microchip,mcp7940x` as well as `maxim,ds3231`.
+    ⛔ **rtc0 IS THE ONBOARD ONE, AND THAT IS DELIBERATE.**
+    `CONFIG_RTC_HCTOSYS_DEVICE` is the literal string `"rtc0"`, so rtc0 has to
+    be the clock that **cannot be absent** — otherwise a machine with nothing
+    plugged into J1 boots at the epoch while a working clock sits unread on
+    the board. The DS3231 is rtc1, and `S45kotisd` adopts its reading when it
+    is present and writes it back into rtc0 so the two agree. Pinned with a DT
+    `aliases` node, which `drivers/rtc/class.c` honours via
+    `of_alias_get_id(node, "rtc")`.
+    ⚠️ **That bus is shared with the HDMI connector's DDC lines** through a
+    PCA9306, so a monitor may answer at 0x50 on `i2cdetect -y 1`. Harmless —
+    the RTC is at 0x6F — but it will look like a stray device to anyone who
+    does not know.
+    ⛔ **BUY A CR1225, NOT AN LIR1225.** Verified in the netlist: `VBAT`
+    reaches exactly the holder, the RTC's battery pin and one capacitor, so
+    **nothing on the board can charge anything**. A rechargeable cell there
+    would discharge once and stay flat. SHOPPING.md has the entry.
+
 ⛔ **NON-GOAL, so nobody re-proposes it: a FRONTIER-CLASS LLM running ON koti.**
 ⚠️ **Read the scope of this before quoting it: it rules out a ~0.5B model doing
 multiplies. It does NOT rule out item 25**, whose own arithmetic is in its

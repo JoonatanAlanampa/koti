@@ -572,7 +572,7 @@ module koti_core #(
     // test/check_mmio.py now compares the two files so the fourth time (08,
     // sound) is the last time it can happen silently.
     wire pa_dev      = pa_lowmap && ((d_pa[23:16] >= 8'h01
-                                   && d_pa[23:16] <= 8'h09)   // 05 SD, 06 USB, 07 ESP32, 08 audio, 09 I2C/RTC
+                                   && d_pa[23:16] <= 8'h0A)   // 05 SD, 06 USB, 07 ESP32, 08 audio, 09 I2C/J1, 0A I2C/onboard RTC
                                   || d_pa[23:22] == 2'b11);
     wire pa_flash_ro = pa_lowmap && !pa_dev;
 

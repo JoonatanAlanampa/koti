@@ -1026,6 +1026,42 @@ block is the one to fit. Geometry taken from the ULX3S KiCad PCB
   fallback for when nothing is plugged in, not a substitute — an FPGA pull-up
   is 10–50 kΩ and does not terminate a bus.
 
+### ⭐ 8b. The RTC the board already had — no soldering at all
+
+Found on 2026-08-14, when the user asked what the coin-cell holder on the back
+was for. **U7 is a populated MCP7940N**: an I²C real-time clock with its own
+32.768 kHz crystal (Y2) and a CR1225 holder (BAT1), and its bus goes **straight
+to the FPGA** on balls **E12 (SCL) and B19 (SDA)**, with 3.3k pull-ups (R22,
+R23) already fitted. Upstream's own constraint file names them and says so:
+
+```
+LOCATE COMP "gpdi_sda" SITE "B19"; # I2C shared with RTC
+LOCATE COMP "gpdi_scl" SITE "E12"; # I2C shared with RTC C12->E12
+```
+
+⇒ **koti gets a battery-backed clock for the price of a CR1225 and no bench
+work at all.** It is a second `i2c_bit` instance (window `0x000A_0000`), a
+second devicetree node, and the SAME mainline driver — `rtc-ds1307.c` matches
+`microchip,mcp7940x` as well as `maxim,ds3231`.
+
+- **Buy: a CR1225.** 3 V lithium PRIMARY cell, 12.5 × 2.5 mm, ~€3. ⛔ **Not
+  LIR1225** (the rechargeable one) — the `VBAT` net reaches only the holder,
+  the RTC's battery pin and one capacitor, so **nothing on this board can
+  charge anything**. ⛔ Not CR2032 (too big), not CR1220 (2.0 mm, too thin).
+- ⚠️ **This bus is shared with the HDMI connector's DDC pins** through U11, a
+  PCA9306 translator — that is how a board reads a monitor's EDID. A monitor
+  may therefore answer at 0x50 on `i2cdetect -y 1`. Harmless: the RTC is at
+  0x6F.
+- ⚠️ Its pull-ups go to **+2V5**, not 3.3 V. An LVCMOS33 input reads 2.5 V as a
+  valid high (VIH 2.0 V) and koti only ever pulls DOWN, so nothing drives
+  current anywhere — the same argument as J1's `2V5_3V3` rail above.
+- **Accuracy:** a plain crystal, so order of ±1 minute a month, against the
+  DS3231's ±2 ppm (±5 s). That is why **rtc0 is this one and rtc1 is the
+  DS3231**, but userspace prefers rtc1 when it is present — see the alias
+  block in `sw/linux/koti.dts` for the full reasoning, which is about ABSENCE,
+  not accuracy: the kernel's `RTC_HCTOSYS_DEVICE` is the literal string
+  "rtc0", so rtc0 has to be the clock that cannot be missing.
+
 ### Bring-up, in order
 
 The RTL and the devicetree node ride **one reflash** — the DTB lives inside the

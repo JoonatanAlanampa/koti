@@ -314,7 +314,18 @@ for a subset of it.
 - **No `man`.** There are no manual pages in the rootfs — that is what this
   file and `koti-help` are for. `busybox <applet> --help` works for most
   applets and is the fastest reference on the machine.
-- **The clock depends on whether the RTC module is fitted.**
+- **The clock: there are two, and the board came with one of them.**
+
+  ⭐ The ULX3S has always carried an **MCP7940N** RTC (U7, next to the coin
+  cell holder on the back) with its own 32.768 kHz crystal, wired straight to
+  the FPGA. It needs nothing but a **CR1225** cell in that holder. koti drives
+  it as `/dev/rtc0`, and because it is soldered on and cannot be absent, it is
+  the one the kernel reads at boot.
+
+  *With the DS3231 also plugged into J1* it appears as `/dev/rtc1` — a
+  temperature-compensated part, about five seconds a month against the
+  onboard one's minute — and `/etc/init.d/S45kotisd` adopts its reading and
+  writes it back into rtc0 so the two agree.
 
   *With the DS3231 plugged into J1* (PLAN item 28 — the gateware, the driver
   and the devicetree node are all in place, but as of 2026-08-14 the part had

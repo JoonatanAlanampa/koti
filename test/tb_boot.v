@@ -73,7 +73,7 @@ module tb_boot ();
       // reads: both lines are pulled up and nothing is holding them down. An
       // open input would be x, and x in i2c_bit's synchronisers propagates
       // into the register a booting kernel reads.
-      .i2c_scl_in(1'b1), .i2c_sda_in(1'b1), .i2c_sqw_in(1'b1),
+      .i2c0_scl_in(1'b1), .i2c0_sda_in(1'b1), .i2c0_sqw_in(1'b1),
       .usb_report_tog(1'b0), .usb_typ(2'd0), .usb_conerr(1'b0),
       .usb_key_modifiers(8'd0),
       .usb_key1(8'd0), .usb_key2(8'd0), .usb_key3(8'd0), .usb_key4(8'd0),

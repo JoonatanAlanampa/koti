@@ -68,7 +68,8 @@ plic_threshold|0x00E00000|y|PLIC priority threshold
 plic_claim|0x00E00004|n|PLIC claim/complete - READING IT CLAIMS AN INTERRUPT
 audio0|0x00080000|y|sound voice 0 - the kernel's bell
 audio1|0x00080004|y|sound voice 1 - what koti play uses
-rtc|0x00090000|y|I2C lines to the DS3231. Idle reads 0x6932631F
+rtc|0x00090000|y|I2C to the DS3231 on J1. Idle reads 0x6932631F
+rtc2|0x000A0000|y|I2C to the board's own MCP7940N. Same idle value
 ram|0x01000000|y|start of the 32 MB SDRAM
 EOF
 }

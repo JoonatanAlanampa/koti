@@ -138,11 +138,26 @@ module tt_um_koti (
     // ⚠️ The harness has to build a REAL tristate out of these — see the
     // sd_d[0] comment in fpga/ulx3s/ulx3s_top.sv, where a pin that lost its
     // tristate silently lost its pull-up with it and cost a day.
-    output wire        i2c_scl_oe,
-    output wire        i2c_sda_oe,
-    input  wire        i2c_scl_in,
-    input  wire        i2c_sda_in,
-    input  wire        i2c_sqw_in,     // DS3231 INT/SQW; read-only, unused today
+    output wire        i2c0_scl_oe,
+    output wire        i2c0_sda_oe,
+    input  wire        i2c0_scl_in,
+    input  wire        i2c0_sda_in,
+    input  wire        i2c0_sqw_in,     // DS3231 INT/SQW; read-only, unused today
+    // ---- I2C bus 1: the RTC THE BOARD ALREADY HAD (added 2026-08-14) ----
+    // ⭐ The ULX3S carries a populated MCP7940N (U7) with its own 32.768 kHz
+    // crystal and a CR1225 holder, wired straight to the FPGA on E12/B19 with
+    // 3.3k pull-ups fitted. Upstream's constraint file calls those two
+    // `gpdi_scl`/`gpdi_sda` and comments "I2C shared with RTC" — the same pair
+    // reaches the HDMI connector's DDC pins through a PCA9306 translator.
+    // Nobody in this project had noticed until the user asked what the coin
+    // cell was for.
+    // ⚠️ NO SQW INPUT. The MCP7940N's multifunction pin is not an FPGA pin at
+    // all: it goes through two diodes into the board's power path, so its
+    // alarm can switch the BOARD on. Nothing for the SoC to read.
+    output wire        i2c1_scl_oe,
+    output wire        i2c1_sda_oe,
+    input  wire        i2c1_scl_in,
+    input  wire        i2c1_sda_in,
     output wire        dbg_halted,
     output wire        dbg_fetch,
     output wire [4:0]  dbg_irq,        // see the assign for the bit meanings
@@ -263,7 +278,15 @@ module tt_um_koti (
   // reach 0x09 or the first write takes a store fault. test/check_mmio.py
   // proves that, and it is why this one did not have to be found on hardware
   // the way the PLIC, the microSD and the ESP32 link each were.
-  wire i2c_range   = d_addr[23:14] == 10'h009;
+  wire i2c0_range   = d_addr[23:14] == 10'h009;
+  // I2C bus 1 at 0x000A_0000 — the onboard MCP7940N. Sixth window, and the
+  // first one that is a SECOND INSTANCE of a block rather than a new block:
+  // src/i2c_bit.sv is two pins and a register, so a second bus costs a window
+  // and about forty LUTs. The two are deliberately separate busses rather than
+  // one bus with two devices, because they are separate WIRES on the board —
+  // J1 goes where a person plugs something in, E12/B19 go to a chip that is
+  // soldered down and shares its pull-ups with the HDMI connector.
+  wire i2c1_range   = d_addr[23:14] == 10'h00A;
   // PLIC: the TOP 4 MB of flash address space, 0x00C0_0000..0x00FF_FFFF.
   //
   // It cannot live in a 64 KB carve-out beside the CLINT: the SiFive layout
@@ -289,7 +312,8 @@ module tt_um_koti (
   // become cacheable by being forgotten in a second place — which is exactly
   // what the comment on `dc_req` already claimed, before this was true.
   wire mmio_range  = clint_range || vga_range || plic_range || sd_range
-                  || usb_range || esp_range || aud_range || i2c_range;
+                  || usb_range || esp_range || aud_range || i2c0_range
+                  || i2c1_range;
 
   wire clint_sel   = d_req && clint_range;
   wire vga_sel     = d_req && vga_range;
@@ -297,9 +321,11 @@ module tt_um_koti (
   wire usb_sel_i   = d_req && usb_range;
   wire esp_sel_i   = d_req && esp_range;
   wire aud_sel     = d_req && aud_range;
-  wire i2c_sel     = d_req && i2c_range;
+  wire i2c0_sel     = d_req && i2c0_range;
+  wire i2c1_sel     = d_req && i2c1_range;
   wire plic_sel    = d_req && plic_range;
-  reg  clint_ack, vga_ack, plic_ack, sd_ack, usb_ack, esp_ack, aud_ack, i2c_ack;
+  reg  clint_ack, vga_ack, plic_ack, sd_ack, usb_ack, esp_ack, aud_ack;
+  reg  i2c0_ack, i2c1_ack;
   always @(posedge clk) begin
       clint_ack <= rst ? 1'b0 : (clint_sel && !clint_ack);
       vga_ack   <= rst ? 1'b0 : (vga_sel && !vga_ack);
@@ -307,7 +333,8 @@ module tt_um_koti (
       usb_ack   <= rst ? 1'b0 : (usb_sel_i && !usb_ack);
       esp_ack   <= rst ? 1'b0 : (esp_sel_i && !esp_ack);
       aud_ack   <= rst ? 1'b0 : (aud_sel && !aud_ack);
-      i2c_ack   <= rst ? 1'b0 : (i2c_sel && !i2c_ack);
+      i2c0_ack   <= rst ? 1'b0 : (i2c0_sel && !i2c0_ack);
+      i2c1_ack   <= rst ? 1'b0 : (i2c1_sel && !i2c1_ack);
       plic_ack  <= rst ? 1'b0 : (plic_sel && !plic_ack);
   end
 
@@ -385,20 +412,38 @@ module tt_um_koti (
   // register read needs — is Linux's i2c-algo-bit in software. See the header
   // of src/i2c_bit.sv for why that is the right side of the flash/card line to
   // put a protocol on.
-  wire [31:0] i2c_rdata;
+  wire [31:0] i2c0_rdata;
   i2c_bit i2c0 (
       .clk(clk), .rst(rst),
-      .sel(i2c_sel && !i2c_ack), .we(d_we), .wdata(d_wdata), .rdata(i2c_rdata),
-      .scl_oe(i2c_scl_oe), .sda_oe(i2c_sda_oe),
-      .scl_in(i2c_scl_in), .sda_in(i2c_sda_in), .sqw_in(i2c_sqw_in)
+      .sel(i2c0_sel && !i2c0_ack), .we(d_we), .wdata(d_wdata), .rdata(i2c0_rdata),
+      .scl_oe(i2c0_scl_oe), .sda_oe(i2c0_sda_oe),
+      .scl_in(i2c0_scl_in), .sda_in(i2c0_sda_in), .sqw_in(i2c0_sqw_in)
   );
 
   // Captured on the select cycle like its neighbours. i2c_bit has a single
   // register and no address to mux on, so nothing here can be served stale —
   // this is uniformity with the blocks around it, not a fix for a hazard.
-  reg [31:0] i2c_rdata_q;
+  reg [31:0] i2c0_rdata_q;
   always @(posedge clk)
-      if (i2c_sel && !i2c_ack && !d_we) i2c_rdata_q <= i2c_rdata;
+      if (i2c0_sel && !i2c0_ack && !d_we) i2c0_rdata_q <= i2c0_rdata;
+
+  // The onboard MCP7940N's bus. Same block, same register layout, same
+  // signature word — so `koti peek rtc2` reads 0x6932631F on an idle bus
+  // exactly as bus 0 does, and the driver binding to it is the same file.
+  // ⚠️ sqw_in is TIED HIGH: this bus has no third pin. Tied rather than left
+  // dangling because an open input is x, and x through the synchroniser would
+  // put x into bit 4 of a register software reads.
+  wire [31:0] i2c1_rdata;
+  i2c_bit i2c1 (
+      .clk(clk), .rst(rst),
+      .sel(i2c1_sel && !i2c1_ack), .we(d_we), .wdata(d_wdata), .rdata(i2c1_rdata),
+      .scl_oe(i2c1_scl_oe), .sda_oe(i2c1_sda_oe),
+      .scl_in(i2c1_scl_in), .sda_in(i2c1_sda_in), .sqw_in(1'b1)
+  );
+
+  reg [31:0] i2c1_rdata_q;
+  always @(posedge clk)
+      if (i2c1_sel && !i2c1_ack && !d_we) i2c1_rdata_q <= i2c1_rdata;
 
   wire [31:0] clint_rdata;
   clint clint0 (
@@ -539,7 +584,7 @@ module tt_um_koti (
 
   wire ad_ack;
   assign d_ack   = clint_ack || vga_ack || plic_ack || sd_ack || usb_ack
-                   || esp_ack || aud_ack || i2c_ack || ad_ack;
+                   || esp_ack || aud_ack || i2c0_ack || i2c1_ack || ad_ack;
   assign d_rdata = clint_ack ? clint_rdata
                  : vga_ack   ? vga_rdata_q
                  : plic_ack  ? plic_rdata_q
@@ -547,7 +592,8 @@ module tt_um_koti (
                  : usb_ack   ? usb_rdata
                  : esp_ack   ? esp_rdata
                  : aud_ack   ? aud_rdata_q
-                 : i2c_ack   ? i2c_rdata_q  : ad_rdata;
+                 : i2c0_ack   ? i2c0_rdata_q
+                 : i2c1_ack   ? i2c1_rdata_q  : ad_rdata;
 
   // ---- video DMA + text pipeline ----
   wire        v_req, v_ack, vt_hs, vt_vs, vt_act, vt_pix;

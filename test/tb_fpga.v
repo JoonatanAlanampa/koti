@@ -66,6 +66,11 @@ module tb_fpga ();
   wire rtc_scl, rtc_sda, rtc_sqw;
   pullup (rtc_scl); pullup (rtc_sda); pullup (rtc_sqw);
 
+  // The onboard MCP7940N's bus (E12/B19). Same again: no model, but the wiring
+  // must be a real open-drain pair that idles HIGH.
+  wire rtc2_scl, rtc2_sda;
+  pullup (rtc2_scl); pullup (rtc2_sda);
+
   // ---- onboard SDRAM ------------------------------------------------------
   // The RAM half of the memory map now lands here rather than on the QSPI
   // Pmod, so the harness needs a part to talk to or nothing that touches a
@@ -104,6 +109,8 @@ module tb_fpga ();
       .rtc_scl    (rtc_scl),
       .rtc_sda    (rtc_sda),
       .rtc_sqw    (rtc_sqw),
+      .rtc2_scl   (rtc2_scl),
+      .rtc2_sda   (rtc2_sda),
       .vga_gp     (vga_gp),
       .vga_gn     (vga_gn),
       .sdram_clk  (sdram_clk),

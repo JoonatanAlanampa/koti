@@ -61,20 +61,34 @@ STORAGE
   every boot, which repairs the ordinary damage and tells you about the rest.
 
 CLOCK
-  koti keeps time on a DS3231 module plugged into the J1 header, on its own
-  coin cell. The kernel reads it before userspace starts, so `date` is right
-  at the login prompt with nothing run and nothing configured.
+  koti has TWO clocks, both battery-backed, and the kernel reads one of them
+  before userspace starts — so `date` is right at the login prompt with
+  nothing run and nothing configured.
 
-    hwclock -r        what the chip says
-    hwclock -w        copy the system time INTO the chip (do this once, after
-                      setting the date, and it survives being unplugged)
-    hwclock -s        copy the chip's time into the system clock
-    i2cdetect -y 0    the bus. 0x68 is the clock; 0x57, if present, is an
-                      EEPROM on the same little board that nothing uses.
+    /dev/rtc0    the MCP7940N SOLDERED TO THE ULX3S, next to the coin cell
+                 holder on the back. Always present; needs a CR1225 in that
+                 holder. About a minute a month.
+    /dev/rtc1    the DS3231 module on the J1 header, when it is plugged in.
+                 A temperature-compensated part: about five SECONDS a month.
+
+  rtc0 is the one the kernel trusts at boot, because it is the one that cannot
+  be missing. If the DS3231 is there, /etc/init.d/S45kotisd takes its reading
+  instead and writes it back into rtc0, so the two agree.
+
+    hwclock -r                 what rtc0 says
+    hwclock -f /dev/rtc1 -r    what the DS3231 says
+    hwclock -w                 copy the system time INTO rtc0
+    i2cdetect -y 0             the J1 bus. 0x68 is the DS3231; 0x57, if it
+                               shows, is an EEPROM on that module.
+    i2cdetect -y 1             the onboard bus. 0x6F is the MCP7940N. A
+                               monitor may also answer at 0x50 — that is its
+                               EDID, on the shared HDMI DDC lines, and it is
+                               not a fault.
 
   If `date` is wrong, set it and write it down:
 
     date -s "2026-08-14 21:30:00" && hwclock -w
+    date -s "2026-08-14 21:30:00" && hwclock -f /dev/rtc1 -w   # the DS3231
 
   Two older mechanisms are still here and still work, and they are what runs
   if the module is unplugged:
@@ -89,8 +103,10 @@ CLOCK
   That fallback is monotonic, not correct: after a week unplugged it believes
   it is still last Tuesday.
 
-  If `date` says 1970 with the module fitted, the chip is not being seen:
-  check `i2cdetect -y 0` for 0x68, then `dmesg | grep -i rtc`.
+  If `date` says 1970, no clock was read: check `i2cdetect` on both busses,
+  then `dmesg | grep -i rtc`. The commonest cause is an EMPTY BATTERY HOLDER —
+  the ULX3S ships without the CR1225, so rtc0 keeps time only while powered
+  until one is fitted.
 
   The DS3231 also measures its own temperature — that is how it stays accurate
   to a couple of seconds a month — and koti reads it out:

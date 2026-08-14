@@ -85,5 +85,9 @@ src/usb_kbd.sv
 vendor/audio.sv
 src/audio_r2r.sv
 
+# The I2C bus for the DS3231 RTC on J1 (PLAN item 28). Two open-drain pins and
+# a signature word; the protocol is Linux's i2c-algo-bit, not fabric.
+src/i2c_bit.sv
+
 # ---- harness only: no silicon pin exists for any of this ----
 fpga/ulx3s/ulx3s_top.sv

@@ -69,6 +69,11 @@ module tb_boot ();
       // unconnected input is x, and these feed usb_kbd's report state machine —
       // x there would propagate into its FIFO pointers, which is precisely the
       // class of defect that makes a bench lie rather than fail.
+      // No RTC on this bench. Tied HIGH, which is what a real idle I2C bus
+      // reads: both lines are pulled up and nothing is holding them down. An
+      // open input would be x, and x in i2c_bit's synchronisers propagates
+      // into the register a booting kernel reads.
+      .i2c_scl_in(1'b1), .i2c_sda_in(1'b1), .i2c_sqw_in(1'b1),
       .usb_report_tog(1'b0), .usb_typ(2'd0), .usb_conerr(1'b0),
       .usb_key_modifiers(8'd0),
       .usb_key1(8'd0), .usb_key2(8'd0), .usb_key3(8'd0), .usb_key4(8'd0),

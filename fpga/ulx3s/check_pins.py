@@ -81,7 +81,19 @@ EXPECTED = {
     # J2 = gp/gn[4..7]
     "vga_gp[0]": "A7", "vga_gp[1]": "C8", "vga_gp[2]": "C6", "vga_gp[3]": "A6",
     "vga_gn[0]": "A8", "vga_gn[1]": "B8", "vga_gn[2]": "C7", "vga_gn[3]": "B6",
-    # gp[8], gp[9]
+    # J1 rows 8/9 — the DS3231 RTC's I2C bus (PLAN item 28). gp[8]=A4,
+    # gp[9]=A2, gn[8]=A5 in upstream ulx3s_v20.lpf, re-read from that file
+    # 2026-08-14 rather than carried over from the PS/2 assignment these
+    # replace. gn[9]=B1 stays free.
+    "rtc_scl": "A4", "rtc_sda": "A2", "rtc_sqw": "A5",
+    # the onboard 3.5 mm jack's R2R ladder (PLAN item 21, added 2026-08-14).
+    # Sites from console/fpga/ulx3s.lpf, which played music through this jack
+    # on this board; they were absent from this table, so check 3 could only
+    # warn about them.
+    "audio_l[3]": "B3", "audio_l[2]": "C3", "audio_l[1]": "D3",
+    "audio_l[0]": "E4",
+    "audio_r[3]": "C5", "audio_r[2]": "D5", "audio_r[1]": "B5",
+    "audio_r[0]": "A3",
     # onboard 32 MB SDRAM (upstream ulx3s_v20.lpf, fetched 2026-08-02)
     "sdram_clk": "F19",
     "sdram_cke": "F20",

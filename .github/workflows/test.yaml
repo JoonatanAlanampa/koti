@@ -141,6 +141,24 @@ jobs:
           vvp tb_audio.vvp | tee audio.log
           grep -q "tb_audio: PASS" audio.log
 
+          # The RTC's I2C bus (PLAN item 28). src/i2c_bit.sv has no protocol in
+          # it at all — two open-drain drive bits and two pin levels — so the
+          # only question worth asking is whether a REAL transaction can be
+          # composed out of it. This bit-bangs the register exactly as
+          # sw/linux/koti_i2c.c does, against a DS3231 model, and reads the
+          # seven timekeeping registers back through a repeated START.
+          #
+          # ⭐ It is also the only gate on the OPEN-DRAIN wiring's semantics:
+          # the bench copies ulx3s_top.sv's two `assign`s and the LPF's
+          # pull-ups, so a master that ever drove a line high would show up
+          # here as X on every acknowledge instead of on the bench a week
+          # later. Verified in both directions 2026-08-14 — with rdata
+          # returning the drive bits instead of the pins, every ACK reads 1
+          # and every byte reads 0xFF.
+          iverilog -g2012 -o tb_i2c.vvp ../src/i2c_bit.sv ds3231_model.sv tb_i2c.v
+          vvp tb_i2c.vvp | tee i2c.log
+          grep -q "tb_i2c: PASS" i2c.log
+
           # The ESP32 link (PLAN item 11). Its first test is the one that
           # matters most: esp_en must be LOW out of reset, because the ESP32's
           # GPIOs are the microSD bus and koti loads its kernel off that card.

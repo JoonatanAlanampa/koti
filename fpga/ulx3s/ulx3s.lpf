@@ -223,11 +223,49 @@ IOBUF PORT "vga_gn[1]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
 IOBUF PORT "vga_gn[2]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
 IOBUF PORT "vga_gn[3]" PULLMODE=NONE IO_TYPE=LVCMOS33 DRIVE=8;
 
-# gp[8] (A4) and gp[9] (A2) are FREE. They carried the PS/2 clock and data
-# until 2026-08-08, when PS/2 was removed — the USB HID keyboard on US2 had
-# typed on real hardware, which was the condition PLAN.md set for retiring it.
-# Nothing is constrained here now, so the pins are available for the next
-# thing that needs two inputs.
+# ---- J1 rows 8 and 9: the DS3231 RTC module's I2C bus (PLAN item 28) ----
+#
+# These three pins carried the PS/2 clock and data until 2026-08-08, when PS/2
+# was removed because the USB keyboard had typed on real hardware. They are
+# the I2C bus now.
+#
+# WHERE THEY ARE ON THE BOARD, from the ULX3S KiCad PCB (emard/ulx3s,
+# ulx3s.kicad_pcb, read 2026-08-14 rather than remembered — J1 is a
+# Socket_Strip_Angled_2x20 and its pad nets are in the file):
+#
+#   rtc_scl  gp[8]  A4   J1 pin 26   row "8", the "+" hole (outer column)
+#   rtc_sda  gp[9]  A2   J1 pin 28   row "9", the "+" hole
+#   rtc_sqw  gn[8]  A5   J1 pin 25   row "8", the "-" hole (inner column)
+#   power         J1 pins 19/20 = 2V5_3V3, pins 21/22 = GND — the pair of rows
+#                 immediately below row 7, inside the same 2x10 block.
+#
+# ⚠️ J1's supply net is `2V5_3V3`, NOT a fixed 3.3 V rail: it is bank 0's VCCIO
+# and follows the RV2/RV3 0-ohm jumpers beside the "3.3V / 2.5V" silk. Boards
+# ship at 3.3 V. Either value is inside the DS3231's 2.3-5.5 V range, and
+# because this master can only ever pull DOWN (see ulx3s_top.sv), a rail
+# mismatch cannot drive current into the part — at 2.5 V the module's pull-ups
+# still present a valid LVCMOS33 high (VIH 2.0 V) to these inputs.
+#
+# ⭐ PULLMODE=UP ON ALL THREE, AND IT IS NOT BELT-AND-BRACES. The RTC module
+# carries its own 4.7k pull-ups, which dominate when it is plugged in — but
+# with nothing attached these pins would otherwise float, and a floating input
+# on an open-drain bus reads as whatever the last edge left on the trace. The
+# weak internal pull-up is what makes "no RTC connected" read as a clean idle
+# bus (0x6932631F at 0x0009_0000) instead of as noise. It is also what makes
+# rtc_sqw, which nothing drives today, read 1 rather than oscillate.
+# ⚠️ A pull-up only takes effect on a pin the tools built a real IO buffer for
+# — see the sd_d[0] story in ulx3s_top.sv, where losing the tristate silently
+# lost the pull-up with it. fpga/ulx3s/check_tristate.py is the gate for that.
+LOCATE COMP "rtc_scl" SITE "A4";
+LOCATE COMP "rtc_sda" SITE "A2";
+LOCATE COMP "rtc_sqw" SITE "A5";
+# DRIVE is irrelevant on an open-drain output that only ever sinks the bus's
+# pull-up current, and 4 mA is comfortably more than a 4.7k resistor asks for.
+IOBUF PORT "rtc_scl" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "rtc_sda" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF PORT "rtc_sqw" PULLMODE=UP IO_TYPE=LVCMOS33;
+
+# gn[9] (B1) and gp/gn[10..13] are still FREE, and so is the whole of J2.
 
 # ---- onboard 32 MB SDRAM (16-bit) ----
 # Sites from upstream emard/ulx3s doc/constraints/ulx3s_v20.lpf, fetched

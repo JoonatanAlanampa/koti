@@ -130,6 +130,19 @@ module tt_um_koti (
     // music through on this board on 2026-08-04. koti drives it mono.
     output wire [3:0]  audio_l,
     output wire [3:0]  audio_r,
+    // ---- the I2C bus on J1: the DS3231 real-time clock (PLAN item 28) ----
+    // Two OPEN-DRAIN lines and one spare input. `*_oe` high means pull the
+    // line LOW; the harness floats the pad otherwise and the bus's pull-up
+    // decides the level. Nothing here can ever drive a line high, which is
+    // what makes it safe to share with a device that talks back.
+    // ⚠️ The harness has to build a REAL tristate out of these — see the
+    // sd_d[0] comment in fpga/ulx3s/ulx3s_top.sv, where a pin that lost its
+    // tristate silently lost its pull-up with it and cost a day.
+    output wire        i2c_scl_oe,
+    output wire        i2c_sda_oe,
+    input  wire        i2c_scl_in,
+    input  wire        i2c_sda_in,
+    input  wire        i2c_sqw_in,     // DS3231 INT/SQW; read-only, unused today
     output wire        dbg_halted,
     output wire        dbg_fetch,
     output wire [4:0]  dbg_irq,        // see the assign for the bit meanings
@@ -244,6 +257,13 @@ module tt_um_koti (
   // three, so test/check_mmio.py now proves the two agree rather than trusting
   // this comment to be read.
   wire aud_range   = d_addr[23:14] == 10'h008;
+  // The I2C bus at 0x0009_0000, the next window after sound — src/i2c_bit.sv,
+  // two open-drain pins for the DS3231 RTC (PLAN item 28). FIFTH window, same
+  // full compare, same two-edit rule: koti_core.sv's `pa_dev` bound has to
+  // reach 0x09 or the first write takes a store fault. test/check_mmio.py
+  // proves that, and it is why this one did not have to be found on hardware
+  // the way the PLIC, the microSD and the ESP32 link each were.
+  wire i2c_range   = d_addr[23:14] == 10'h009;
   // PLIC: the TOP 4 MB of flash address space, 0x00C0_0000..0x00FF_FFFF.
   //
   // It cannot live in a 64 KB carve-out beside the CLINT: the SiFive layout
@@ -252,14 +272,34 @@ module tt_um_koti (
   // Taking it off the TOP of flash space rather than punching a hole in the
   // low addresses keeps software's run from zero contiguous.
   wire plic_range  = d_addr[23:22] == 2'b00 && d_addr[21:20] == 2'b11;
+  // ⭐ ONE NAME FOR "THIS ADDRESS BELONGS TO A DEVICE", USED TWICE.
+  //
+  // Every window above has to be excluded from the cacheable request further
+  // down, and until 2026-08-14 that exclusion was a SECOND hand-written list —
+  // which promptly went out of date: `aud_range` was added to the decode and
+  // not to the list, so every write to a sound register was ALSO accepted by
+  // the D-cache, which then ran an unwanted transaction to flash and raised a
+  // second, late `d_ack`. A stray ack can complete an unrelated load with
+  // whatever the cache fetched, which is memory corruption that points
+  // nowhere near the sound block. It never showed on the bench because a bell
+  // is rare and the damage lands elsewhere.
+  //
+  // ⇒ the list exists ONCE now, and test/check_mmio.py asserts that every
+  // `*_range` in this file appears in it. A new peripheral can no longer
+  // become cacheable by being forgotten in a second place — which is exactly
+  // what the comment on `dc_req` already claimed, before this was true.
+  wire mmio_range  = clint_range || vga_range || plic_range || sd_range
+                  || usb_range || esp_range || aud_range || i2c_range;
+
   wire clint_sel   = d_req && clint_range;
   wire vga_sel     = d_req && vga_range;
   wire sd_sel_i    = d_req && sd_range;
   wire usb_sel_i   = d_req && usb_range;
   wire esp_sel_i   = d_req && esp_range;
   wire aud_sel     = d_req && aud_range;
+  wire i2c_sel     = d_req && i2c_range;
   wire plic_sel    = d_req && plic_range;
-  reg  clint_ack, vga_ack, plic_ack, sd_ack, usb_ack, esp_ack, aud_ack;
+  reg  clint_ack, vga_ack, plic_ack, sd_ack, usb_ack, esp_ack, aud_ack, i2c_ack;
   always @(posedge clk) begin
       clint_ack <= rst ? 1'b0 : (clint_sel && !clint_ack);
       vga_ack   <= rst ? 1'b0 : (vga_sel && !vga_ack);
@@ -267,6 +307,7 @@ module tt_um_koti (
       usb_ack   <= rst ? 1'b0 : (usb_sel_i && !usb_ack);
       esp_ack   <= rst ? 1'b0 : (esp_sel_i && !esp_ack);
       aud_ack   <= rst ? 1'b0 : (aud_sel && !aud_ack);
+      i2c_ack   <= rst ? 1'b0 : (i2c_sel && !i2c_ack);
       plic_ack  <= rst ? 1'b0 : (plic_sel && !plic_ack);
   end
 
@@ -337,6 +378,27 @@ module tt_um_koti (
   );
   assign audio_l = aud_dac;
   assign audio_r = aud_dac;
+
+  // ---- I2C, for the DS3231 RTC on J1 (PLAN item 28) -----------------------
+  // One register: two drive bits out, two pin levels back. Everything that
+  // makes it a bus — START, STOP, bytes, the acknowledge, the repeated START a
+  // register read needs — is Linux's i2c-algo-bit in software. See the header
+  // of src/i2c_bit.sv for why that is the right side of the flash/card line to
+  // put a protocol on.
+  wire [31:0] i2c_rdata;
+  i2c_bit i2c0 (
+      .clk(clk), .rst(rst),
+      .sel(i2c_sel && !i2c_ack), .we(d_we), .wdata(d_wdata), .rdata(i2c_rdata),
+      .scl_oe(i2c_scl_oe), .sda_oe(i2c_sda_oe),
+      .scl_in(i2c_scl_in), .sda_in(i2c_sda_in), .sqw_in(i2c_sqw_in)
+  );
+
+  // Captured on the select cycle like its neighbours. i2c_bit has a single
+  // register and no address to mux on, so nothing here can be served stale —
+  // this is uniformity with the blocks around it, not a fix for a hazard.
+  reg [31:0] i2c_rdata_q;
+  always @(posedge clk)
+      if (i2c_sel && !i2c_ack && !d_we) i2c_rdata_q <= i2c_rdata;
 
   wire [31:0] clint_rdata;
   clint clint0 (
@@ -477,14 +539,15 @@ module tt_um_koti (
 
   wire ad_ack;
   assign d_ack   = clint_ack || vga_ack || plic_ack || sd_ack || usb_ack
-                   || esp_ack || aud_ack || ad_ack;
+                   || esp_ack || aud_ack || i2c_ack || ad_ack;
   assign d_rdata = clint_ack ? clint_rdata
                  : vga_ack   ? vga_rdata_q
                  : plic_ack  ? plic_rdata_q
                  : sd_ack    ? sd_rdata
                  : usb_ack   ? usb_rdata
                  : esp_ack   ? esp_rdata
-                 : aud_ack   ? aud_rdata_q  : ad_rdata;
+                 : aud_ack   ? aud_rdata_q
+                 : i2c_ack   ? i2c_rdata_q  : ad_rdata;
 
   // ---- video DMA + text pipeline ----
   wire        v_req, v_ack, vt_hs, vt_vs, vt_act, vt_pix;
@@ -512,14 +575,26 @@ module tt_um_koti (
   );
 
   // ---- data cache (FPGA only) --------------------------------------------
-  // Sits between the data port and the arbiter. MMIO is already excluded here
-  // — the request below is d_req minus every device window — which is what
-  // makes caching safe at all: a cached UART status register would spin
-  // forever. That filtering existed for the arbiter's benefit and this reuses
-  // it rather than repeating the decode, so a new MMIO window cannot become
-  // cacheable by being forgotten in a second place.
-  wire dc_req = d_req && !clint_range && !vga_range && !plic_range
-                      && !sd_range && !usb_range && !esp_range;
+  // Sits between the data port and the arbiter. MMIO is excluded here — the
+  // request below is d_req minus every device window — which is what makes
+  // caching safe at all: a cached UART status register would spin forever.
+  //
+  // ⛔ IT MUST BE `mmio_range` AND NOT A LIST REPEATED HERE. This line used to
+  // carry its own copy of the window names, and when the sound block was added
+  // on 2026-08-14 it was updated in the decode and not here. What that does is
+  // not "the register gets cached" — it is worse and much quieter:
+  //   1. the audio access is answered by aud_ack after one cycle, as intended;
+  //   2. the D-cache ALSO accepted it (src/dcache.sv latches on the cycle it
+  //      sees c_req, and does not require c_req to stay up), misses, and goes
+  //      `pending` on a transaction to the FLASH window;
+  //   3. ~130 clocks later that transaction finishes and raises `ad_ack`,
+  //      which this file ORs into d_ack — an ack for a request the core no
+  //      longer has outstanding, or worse, one it does: the next load
+  //      completes early with the cache's flash data in it.
+  // The damage lands nowhere near the bell that caused it. Found by reading,
+  // not by a failure, which is the only way this one was ever going to be
+  // found; test/check_mmio.py now asserts that this term names every window.
+  wire dc_req = d_req && !mmio_range;
   wire        am_req, am_we;
   wire [23:0] am_addr;
   wire [31:0] am_wdata;

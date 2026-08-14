@@ -57,6 +57,15 @@ module tb_fpga ();
   pullup (pmod_gp[0]); pullup (pmod_gp[1]); pullup (pmod_gp[2]); pullup (pmod_gp[3]);
   pullup (pmod_gn[0]); pullup (pmod_gn[1]); pullup (pmod_gn[2]); pullup (pmod_gn[3]);
 
+  // ---- J1 rows 8/9: the RTC's I2C bus --------------------------------------
+  // No DS3231 model here — test/tb_i2c.v is where the bus is actually driven,
+  // against a real one. What this bench owns is the WIRING: that the harness
+  // builds a genuine open-drain pair, so an undriven bus idles HIGH rather
+  // than floating. The pull-ups are the LPF's PULLMODE=UP modelled, exactly as
+  // for the Pmod header above; without them the SoC would read x here.
+  wire rtc_scl, rtc_sda, rtc_sqw;
+  pullup (rtc_scl); pullup (rtc_sda); pullup (rtc_sqw);
+
   // ---- onboard SDRAM ------------------------------------------------------
   // The RAM half of the memory map now lands here rather than on the QSPI
   // Pmod, so the harness needs a part to talk to or nothing that touches a
@@ -92,6 +101,9 @@ module tb_fpga ();
       .wifi_en    (wifi_en),
       .pmod_gp    (pmod_gp),
       .pmod_gn    (pmod_gn),
+      .rtc_scl    (rtc_scl),
+      .rtc_sda    (rtc_sda),
+      .rtc_sqw    (rtc_sqw),
       .vga_gp     (vga_gp),
       .vga_gn     (vga_gn),
       .sdram_clk  (sdram_clk),

@@ -208,6 +208,19 @@ jobs:
           yosys -l fpga/ulx3s/build/yosys.log \
             -p "read_verilog -sv $extra -I src $src; synth_ecp5 -top ulx3s_top -json fpga/ulx3s/build/koti.json"
 
+      # ⛔ THE GATE ulx3s_top.sv SAYS DOES NOT EXIST. Every bidirectional pin
+      # must still have a driver in the synthesised netlist. A tristate that
+      # collapses does not fail loudly — the tools then build no IO buffer, the
+      # LPF's PULLMODE stops applying, and the pin FLOATS. That is what made
+      # the microSD read as absent for a day on 2026-08-07, and simulation
+      # cannot see it because the benches supply their own pull-ups.
+      #
+      # It runs BEFORE place and route on purpose: this is a synthesis-stage
+      # property, the JSON is where the evidence is, and failing here saves the
+      # ~15 minutes nextpnr would spend routing a design that is already wrong.
+      - name: every bidirectional pin still has a driver
+        run: python3 fpga/ulx3s/check_tristate.py fpga/ulx3s/build/koti.json
+
       # nextpnr fails by design when the 25 MHz constraint in ulx3s.lpf is not
       # met. Capture its exit code instead of letting the step die, so the
       # achieved Fmax still reaches the summary and the artifact on a red run —

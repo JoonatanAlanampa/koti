@@ -71,6 +71,10 @@ SOURCES = [
     # this one before CI did.
     VENDOR_DIR / "audio.sv",
     SRC_DIR / "audio_r2r.sv",
+    # The RTC's I2C bus, for the same reason: project.sv instantiates it
+    # unconditionally, so leaving it out breaks elaboration for every test here
+    # rather than merely leaving one untested.
+    SRC_DIR / "i2c_bit.sv",
     FPGA_DIR / "ulx3s_top.sv",
     TEST_DIR / "sdram_model.sv",
     TEST_DIR / "tb_fpga.v",

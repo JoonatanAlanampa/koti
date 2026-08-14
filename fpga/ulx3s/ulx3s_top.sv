@@ -103,6 +103,18 @@ module ulx3s_top (
     output logic [3:0] vga_gp,
     output logic [3:0] vga_gn,
 
+    // ---- J1, rows 8 and 9: the DS3231 RTC module's I2C bus (PLAN item 28) --
+    // OPEN DRAIN, so both are `inout` and neither is ever driven high. The
+    // pull-ups on the RTC module do that, with the ECP5's own weak pull-ups
+    // (PULLMODE=UP in the LPF) as a fallback so the bus reads idle when
+    // nothing is plugged in at all.
+    //   rtc_scl  gp[8]  ball A4  J1 row 8, the "+" hole
+    //   rtc_sda  gp[9]  ball A2  J1 row 9, the "+" hole
+    //   rtc_sqw  gn[8]  ball A5  J1 row 8, the "-" hole — input only, spare
+    inout  wire        rtc_scl,
+    inout  wire        rtc_sda,
+    input  wire        rtc_sqw,
+
     // ---- onboard 3.5 mm audio jack, 4-bit R2R ladder per channel ----
     // ⭐ THE ONE AUDIO PATH THAT NEEDS NO PMOD AND NO HEADER: these eight pins
     // ARE the DAC, and the socket is on the board. Every site is copied from
@@ -244,6 +256,11 @@ module ulx3s_top (
       .esp_gpio0  (wifi_gpio0),
       .audio_l    (audio_l),
       .audio_r    (audio_r),
+      .i2c_scl_oe (soc_i2c_scl_oe),
+      .i2c_sda_oe (soc_i2c_sda_oe),
+      .i2c_scl_in (rtc_scl),
+      .i2c_sda_in (rtc_sda),
+      .i2c_sqw_in (rtc_sqw),
       .dbg_halted (cpu_halted),
       .dbg_fetch  (cpu_fetch),
       .dbg_irq    (irq_state),
@@ -293,6 +310,25 @@ module ulx3s_top (
   // its own pull-up, so a bench stays green while the board goes deaf. The check
   // is the nextpnr log line above.
   assign sd_d[0] = soc_sd_miso_oe ? soc_sd_miso_drv : 1'bz;
+
+  // ------------------------------------------------- J1 rows 8/9: the RTC
+  // ⛔ OPEN DRAIN, AND THE `1'b0` IS THE WHOLE POINT: there is no expression
+  // here that can put a 1 on either wire. I2C is wired-AND — the DS3231 pulls
+  // SDA down to acknowledge a byte, and a master that drove high at that
+  // instant would be a short circuit through two output stages.
+  //
+  // ⚠️ THE SAME TRISTATE TRAP AS sd_d[0] ABOVE APPLIES, and it would be worse
+  // here. If this ever collapses to a plain output or a plain input, the LPF's
+  // PULLMODE=UP stops taking effect and the bus floats — an I2C bus that
+  // floats does not fail cleanly, it reads whatever the last edge left on the
+  // trace. Verified in yosys 2026-08-14 on a minimal case: `oe ? 1'b0 : 1'bz`
+  // synthesises to `$_TBUF_` with A tied to 0 and E from a register, while a
+  // bare `1'bz` leaves the port bit as the literal 'z' with no driver at all.
+  // fpga/ulx3s/check_tristate.py now asserts that on the REAL netlist, in CI,
+  // which is the gate sd_d[0]'s comment says does not exist.
+  wire soc_i2c_scl_oe, soc_i2c_sda_oe;
+  assign rtc_scl = soc_i2c_scl_oe ? 1'b0 : 1'bz;
+  assign rtc_sda = soc_i2c_sda_oe ? 1'b0 : 1'bz;
 
   // ------------------------------------------------------- J1: QSPI Pmod
   // uio numbering (TT QSPI Pmod standard):

@@ -1,12 +1,12 @@
 {
   "sbi_prof": {
-    "bin_bytes": 26783,
-    "bin_sha256": "f7d07fa0b716cb23c2f526352379a648b7887b877a8a008f44c32131f074134a",
+    "bin_bytes": 27049,
+    "bin_sha256": "a446ad274c43e7f07cf63f1078254a64f7f768dc0e743eb89ea562a559aa64fd",
     "sources": {
       "../console.c": "1f0fd9aefcab367bc751fa798337d82fc3f6a390bb4ce3a3d080729d524432ba",
       "../console.h": "9f34b6a346f3240663d3bb801139da78d0db69573f7417663efbfb8583134d29",
       "../koti.h": "2784538e9f71f59e8c04eda125f2dba7b357be3b6a9ca1840691dda55f05e515",
-      "../linux/koti.dtb": "dec2b8b79e4b49ae1c642fb6739c966233078bc70a6336a6b9858b27ff9003a9",
+      "../linux/koti.dtb": "67515d1eb7e57f4920522acb048cef21eedbddc7068be24218bf9af12d8b7284",
       "../usbkbd.c": "39ecf5f282ea522b2baf382eb55670ea43b605a3f437e0e8d5e12483d8278252",
       "dtb.S": "1ff1fb86d82dd5df71fe990cba8be361f1853307f8136e32ddd31becb637b92e",
       "link.ld": "cd5b1561929f4369405d0158e19be9dd48a0133e89468933a484a725f000c7a4",
@@ -18,13 +18,13 @@
     }
   },
   "sbi_sd": {
-    "bin_bytes": 26783,
-    "bin_sha256": "d816a0104136cda53bc4386f136976c5ef8943d641a78980e0297a2f183f1c87",
+    "bin_bytes": 27049,
+    "bin_sha256": "3ff61b591f406cccad2d38897185d1dfd419fa060ec5e35433d651e161fcae2b",
     "sources": {
       "../console.c": "1f0fd9aefcab367bc751fa798337d82fc3f6a390bb4ce3a3d080729d524432ba",
       "../console.h": "9f34b6a346f3240663d3bb801139da78d0db69573f7417663efbfb8583134d29",
       "../koti.h": "2784538e9f71f59e8c04eda125f2dba7b357be3b6a9ca1840691dda55f05e515",
-      "../linux/koti.dtb": "dec2b8b79e4b49ae1c642fb6739c966233078bc70a6336a6b9858b27ff9003a9",
+      "../linux/koti.dtb": "67515d1eb7e57f4920522acb048cef21eedbddc7068be24218bf9af12d8b7284",
       "../usbkbd.c": "39ecf5f282ea522b2baf382eb55670ea43b605a3f437e0e8d5e12483d8278252",
       "dtb.S": "1ff1fb86d82dd5df71fe990cba8be361f1853307f8136e32ddd31becb637b92e",
       "link.ld": "cd5b1561929f4369405d0158e19be9dd48a0133e89468933a484a725f000c7a4",
@@ -36,13 +36,13 @@
     }
   },
   "sbi_test": {
-    "bin_bytes": 26783,
-    "bin_sha256": "c61d701057b3a1ee4b0caa03dc6caa485e60c38aff09567e5e41d14ab4bee243",
+    "bin_bytes": 27049,
+    "bin_sha256": "ba810e8ff28169a136ade76c8bb0854388ca6ead2b3dbe2b866d167afeeed72f",
     "sources": {
       "../console.c": "1f0fd9aefcab367bc751fa798337d82fc3f6a390bb4ce3a3d080729d524432ba",
       "../console.h": "9f34b6a346f3240663d3bb801139da78d0db69573f7417663efbfb8583134d29",
       "../koti.h": "2784538e9f71f59e8c04eda125f2dba7b357be3b6a9ca1840691dda55f05e515",
-      "../linux/koti.dtb": "dec2b8b79e4b49ae1c642fb6739c966233078bc70a6336a6b9858b27ff9003a9",
+      "../linux/koti.dtb": "67515d1eb7e57f4920522acb048cef21eedbddc7068be24218bf9af12d8b7284",
       "dtb.S": "1ff1fb86d82dd5df71fe990cba8be361f1853307f8136e32ddd31becb637b92e",
       "link.ld": "cd5b1561929f4369405d0158e19be9dd48a0133e89468933a484a725f000c7a4",
       "payload.c": "b5e880b3ddb265e03bf62e5ba112c3e597aeb937a4edd4ae2acfbe73c84ee479",

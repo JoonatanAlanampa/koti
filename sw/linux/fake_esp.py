@@ -78,7 +78,12 @@ class Reset(Exception):
 class Mock:
     def __init__(self, scenario):
         self.scenario = scenario
-        self.cfg = ["172.20.10.2", "255.255.255.240", GATEWAY, BROKEN_DNS]
+        # `gooddns` is an ordinary router rather than the iPhone: it hands over
+        # a resolver that IS a resolver. The repair must then do nothing at
+        # all, which is the case koti will meet on any normal network and the
+        # one a repair written for a broken link can quietly break.
+        dns = GATEWAY if scenario == "gooddns" else BROKEN_DNS
+        self.cfg = ["172.20.10.2", "255.255.255.240", GATEWAY, dns]
         self.socks = []
         self.out = []
         self.overruns = []
@@ -115,7 +120,7 @@ class Mock:
 
     def dhcp_tick(self):
         """The lease comes back between commands. Only the DNS field moves."""
-        if self.scenario == "no-dhcp":
+        if self.scenario in ("no-dhcp", "gooddns"):
             return
         if self.cfg[3] != BROKEN_DNS:
             self.reverts += 1

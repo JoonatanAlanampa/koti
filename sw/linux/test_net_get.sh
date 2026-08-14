@@ -182,6 +182,15 @@ eq "exit status" 1 "$rc"
 eq "printed no page" "" "$(cat "$TMP/out9")"
 if grep -q "koti-net join" "$TMP/err9"; then ok; else bad "no diagnosis: $(cat "$TMP/err9")"; fi
 
+echo "== 10. an ordinary router, whose resolver is already a resolver =="
+start_mock gooddns
+cmd_get http://example.com/ > "$TMP/outA" 2> "$TMP/errA"; rc=$?
+stop_mock
+eq "exit status" 0 "$rc"
+eq "the page, exactly" "$PAGE" "$(cat "$TMP/outA")"
+r=$($PY -c "import json,sys;d=json.load(open(sys.argv[1]));print(d['repairs'],d['cfg'][3])" "$TMP/report.json")
+eq "left a working resolver alone" "0 172.20.10.1" "$r"
+
 echo
 echo "$checks checks, $fails failures"
 [ "$fails" -eq 0 ] || exit 1

@@ -1181,10 +1181,23 @@ on the ladder; the first two are small and change how the machine feels.
 is retired with it; **there is no item 26**, and the housekeeper is two tiers —
 24 and 25.
 
-28. [~] 🕰️ **A REAL CLOCK — THE DS3231 RTC MODULE. BUILT 2026-08-14, NOT YET
-    ON HARDWARE: the part had not arrived.** User directive the same day: *"I
-    bought the RTC DS3231 I2C module… once it arrives I want to just plug it
-    into ULX3S and then koti should have RTC."*
+28. [~] 🕰️ **A REAL CLOCK. 🔋 2026-08-15: THE USER FITTED THE CR1225, so the
+    ONBOARD half is unblocked** — it needed no solder and no delivery, only the
+    cell. The DS3231 half is still waiting on the module. User directive
+    2026-08-14: *"I bought the RTC DS3231 I2C module… once it arrives I want to
+    just plug it into ULX3S and then koti should have RTC."*
+    🔴 **AND THE LAST BITSTREAM WAS ONE DTB BEHIND — a flash would have been a
+    wasted trip.** `fpga-ulx3s` triggers only on `src/**` and `fpga/ulx3s/**`,
+    so the last pushed run was at `2e50f0a`; `55fdf22` then rebuilt `sbi_*.bin`
+    for the second RTC node and the `aliases`, and **the DTB rides inside the
+    bitstream**. No pushed run had ever built the final firmware. Dispatched by
+    hand at `4117168` (`image: sbi`, run **31890672747**, `bram` + `pmod` both
+    green): system clock **28.44 MHz PASS @25**, `clk_shift` 128.63 PASS @125,
+    `clk_usb` 77.30 PASS @12 — last occurrence per clock, as always.
+    📌 **The trigger gap is the reusable lesson**: any commit that touches only
+    `sw/sbi/` or `koti.dts` changes what the bitstream contains without
+    building one. Dispatch by hand after a firmware rebuild, or flash something
+    older than the tree without being told.
     **It is numbered 28 and not 26 because 26 is a retired number** (see the
     paragraph above); 27 is taken by the flash write-protect fix.
     ⭐ **THIS IS THE FIRST koti PERIPHERAL WHOSE DRIVER IS MAINLINE'S.** Every
@@ -1263,6 +1276,26 @@ is retired with it; **there is no item 26**, and the housekeeper is two tiers �
     reaches exactly the holder, the RTC's battery pin and one capacitor, so
     **nothing on the board can charge anything**. A rechargeable cell there
     would discharge once and stay flat. SHOPPING.md has the entry.
+    ✅ **FITTED 2026-08-15 by the user.**
+
+    ### ⛔⛔ A FITTED CELL IS NOT A RUNNING CLOCK — `hwclock -w` IS MANDATORY
+    Read out of the 6.12 `drivers/rtc/rtc-ds1307.c` rather than assumed,
+    because the two bits behave differently and only one of them is automatic:
+    - **`VBATEN` (bit 3 of `RTCWKDAY`, 0x03) — the driver sets it at probe**,
+      unconditionally, if it is not already set. ⇒ **the cell is used, with no
+      code, no config and no command.** That is what the user's €3 bought.
+    - **`ST` (bit 7 of `RTCSEC`, 0x00) — the oscillator — is NOT started at
+      probe.** `rtc-ds1307.c` only ORs it in inside `ds1307_set_time()`. **A
+      virgin MCP7940N is therefore HALTED**, and a halted RTC is not an obvious
+      failure: it answers on the bus, `i2cdetect` shows it, `hwclock -r`
+      returns a valid time — **the same instant at every boot, for ever.**
+    ⇒ **`date -s … && hwclock -w` once is what STARTS the clock**, not merely
+    what sets it. 🪤 And the first boot after this reads **2000-01-01, not
+    1970** — the MCP7940N's own epoch, arriving through `RTC_HCTOSYS` — so
+    "`date` says 1970" is the wrong symptom to look for on this machine.
+    📌 `S45kotisd`'s `restore_clock` composes with that correctly by accident
+    of good design: 2000 is earlier than any saved value, so the card's clock
+    file still moves the time forward on that one boot.
 
 ⛔ **NON-GOAL, so nobody re-proposes it: a FRONTIER-CLASS LLM running ON koti.**
 ⚠️ **Read the scope of this before quoting it: it rules out a ~0.5B model doing

@@ -1181,11 +1181,31 @@ on the ladder; the first two are small and change how the machine feels.
 is retired with it; **there is no item 26**, and the housekeeper is two tiers —
 24 and 25.
 
-28. [~] 🕰️ **A REAL CLOCK. 🔋 2026-08-15: THE USER FITTED THE CR1225, so the
-    ONBOARD half is unblocked** — it needed no solder and no delivery, only the
-    cell. The DS3231 half is still waiting on the module. User directive
-    2026-08-14: *"I bought the RTC DS3231 I2C module… once it arrives I want to
-    just plug it into ULX3S and then koti should have RTC."*
+28. [~] 🕰️ **A REAL CLOCK. 🔋🏆 2026-08-15: THE ONBOARD MCP7940N RUNS ON REAL
+    HARDWARE.** The user fitted the CR1225 and the onboard half went from
+    unblocked to working in one session — it needed no solder and no delivery,
+    only the cell. The DS3231 half is still waiting on the module.
+    User directive 2026-08-14: *"I bought the RTC DS3231 I2C module… once it
+    arrives I want to just plug it into ULX3S and then koti should have RTC."*
+
+    **THE EVIDENCE, off the machine's own boot log and registers:**
+    ```
+    [56.862] koti-i2c 90000.i2c: bit-banged I2C on i2c-0
+    [57.299] rtc-ds1307 1-006f: oscillator failed, set time!
+    [57.729] rtc-ds1307 1-006f: registered as rtc0
+    [57.821] rtc-ds1307 1-006f: hctosys: unable to read the hardware clock
+    [57.903] koti-i2c a0000.i2c: bit-banged I2C on i2c-1
+    ```
+    ⇒ the part answers at **0x6f on i2c-1**, mainline's driver binds unmodified,
+    and the **DT `aliases` node worked** — it came up as `rtc0`, not `rtc1`.
+    After `date -s … && hwclock -w`: `hwclock -r` returns a real time instead of
+    `RTC_RD_TIME: Invalid argument`, and the chip's own status bits read back
+    **`RTCSEC=0xa7`** (bit7 **ST=1**) and **`RTCWKDAY=0x2f`** — bit5 **OSCRUN=1**
+    (*the chip itself reports the crystal is oscillating*), bit3 **VBATEN=1**
+    (**the battery is enabled — this is the bit the CR1225 depends on**), bit4
+    **PWRFAIL=0**. Set to within **~1 s** of true UTC.
+    ⏳ **STILL UNPROVEN: persistence across a power cycle** — that is the only
+    claim the battery actually makes, and it needs power fully removed.
     🔴 **AND THE LAST BITSTREAM WAS ONE DTB BEHIND — a flash would have been a
     wasted trip.** `fpga-ulx3s` triggers only on `src/**` and `fpga/ulx3s/**`,
     so the last pushed run was at `2e50f0a`; `55fdf22` then rebuilt `sbi_*.bin`

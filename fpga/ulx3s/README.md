@@ -73,6 +73,37 @@ fujprog fpga/ulx3s/build/koti-bram.bit        # SRAM, volatile, ~60 s  ✅ WORKS
 **The volatile load is gone at power-off**, which is what you want while
 iterating. Do the whole checklist with it.
 
+### ⛔⛔ SW3: THE TWO IMAGES WANT **OPPOSITE** POSITIONS. CHECK IT FIRST.
+`ftdi_rxd = sw[2] ? uo_out[6] : uo_out[0]` — one switch decides which pin the
+host listens to, and **it is not a preference, it is per-image**:
+
+| image | UART lands on | SW3 |
+|---|---|---|
+| `bringup`, `memtest`, `sdtest`, `usbtest`, … (headless) | `uo[0]` | **OFF** |
+| `sbi`, `sbiprof`, `hello` (they enable VGA) | `uo[6]` | **ON** |
+
+⛔ **And for `sbi` it is not "the part after VGA starts" — it is EVERYTHING.**
+`sbi_init()` sets `VGA_CTRL = 3` as its **second statement** (`sw/sbi/sbi.c:49`,
+right after `con_init()`), so the UART has already moved before the first
+character is printed. There is no early banner on `uo[0]` to catch.
+
+🪤 **THE FAILURE MODE IS SILENCE, NOT GARBLE** — the pin you are not listening
+to idles high, which is indistinguishable from an unconfigured FPGA, a dead
+board or a hung CPU. Cost an hour on 2026-08-15. **If a koti bitstream prints
+nothing, check SW3 before suspecting anything else**, and note that trying the
+*other* image does not disambiguate — it flips the requirement too, so "both
+images are silent" is the expected result of one wrong switch, not evidence of
+a broken design.
+
+📌 **The control that ends the argument in 60 s**: SRAM-load
+`pmod-cartridge/fpga/build/cartridge_bringup.bit`. It drives `ftdi_rxd`
+directly with **no SW3 mux** and prints continuously, so if it talks, the host
+path, cable, FTDI, power and ESP32 are all fine and the problem is koti-side.
+
+🪤 **`image: sbi` also needs a microSD in the slot.** With no card there is
+nothing to load and the machine goes quiet after the firmware's own output —
+which, with SW3 in the wrong place, looks identical to everything else above.
+
 ## ~~⛔ `fujprog -j flash` DOES NOT WORK ON THIS BOARD~~ — ✅ **IT DOES. SUPERSEDED SAME DAY.**
 
 ⭐ **`fujprog -j flash <bit>` WORKS, ~142 s, one command** — used twice on

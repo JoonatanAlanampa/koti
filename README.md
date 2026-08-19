@@ -59,8 +59,25 @@ genuinely read those bytes back off the card.
 
 ### The first website, fetched by a computer built from the CPU up
 
-`info.cern.ch` has served the same page since 1993. This is koti asking for it —
-captured off the machine's own console, not reconstructed:
+`info.cern.ch` has served the same page since 1993. This is koti asking for it:
+
+![koti fetching the first website](docs/img/koti-cern.png)
+
+> **Rendered, not photographed**, the same way as the screen above — a real
+> capture taken off the machine, laid out by `tools/screenshot.py` with the
+> hardware's own font ROM and 80x60 wrap rules. The long `<li>` lines wrapping
+> mid-URL is the screen doing that, not the page.
+
+Every layer under that request is in this repository. The name was resolved and
+the socket opened by an ESP32 acting as a modem on a serial link koti drives;
+the bytes crossed a UART written here, into a kernel driver written here, on a
+CPU written here, executing from SDRAM through a controller and a cache written
+here. `Content-Length: 646`, and all 646 arrived — the link destroys the first
+byte of every transmission burst, which is why the reply is buffered whole on
+the far side and handed over in one piece rather than read in fragments.
+
+<details>
+<summary>the same bytes as text</summary>
 
 ```
 # koti-net get http://info.cern.ch/
@@ -89,13 +106,7 @@ Content-Type: text/html
 </body></html>
 ```
 
-Every layer under that request is in this repository. The name was resolved and
-the socket opened by an ESP32 acting as a modem on a serial link koti drives;
-the bytes crossed a UART written here, into a kernel driver written here, on a
-CPU written here, executing from SDRAM through a controller and a cache written
-here. `Content-Length: 646`, and all 646 arrived — the link destroys the first
-byte of every transmission burst, which is why the reply is buffered whole on
-the far side and handed over in one piece rather than read in fragments.
+</details>
 
 ## What it costs on the FPGA
 

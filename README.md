@@ -212,8 +212,6 @@ written for, or it is decoration.
 
 ## Layout
 
-- [PLAN.md](PLAN.md) — the ladder, the architecture decisions and why each was
-  taken, the risks
 - `src/` — the SoC: core, MMU/TLB, SDRAM, caches, arbiter, video, microSD, USB,
   ESP32 link, audio
 - `sw/` — bare-metal images, the SBI firmware (`sw/sbi/`), Linux and its drivers
@@ -223,7 +221,8 @@ written for, or it is decoration.
   vendored rather than written
 - `tools/` — card writer, screen renderer, console driver, ROM generators
 - `test/` — the benches; `.github/workflows/` runs them all on every push
-- `docs/` — the manual, images, and finished work orders kept as stop signs
+- `docs/` — the [manual](docs/MANUAL.md) for using the machine, images, and
+  finished work orders kept as stop signs
 
 ## Licence
 

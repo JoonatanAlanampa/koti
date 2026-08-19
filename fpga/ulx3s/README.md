@@ -24,7 +24,7 @@ What is already proven, and what is not:
 | ✅ **`sw/bringup.S`, the ASSEMBLY rewrite** | 2026-08-08: first contact. 296 bytes, **0 non-printable**, counter monotonic #257-260. Proves the SDRAM stack round-trip (so `RD_ADV` still holds), `remu`/`divu`, and — since this bitstream carries it — the **core ack-routing fix** of the same day |
 | ✅ **The SDRAM, including `RD_ADV` and the address decode** | 2026-08-08: `sw/memtest.bin`, **eight clean passes over the full 32 MB** with an address-derived pattern, plus the byte-lane/DQM path and the `addrbits` walking-1 phase. (2026-08-07's four passes covered 16 MB, which was all the address path could then reach.) |
 | ✅ **The board revision** | it is a **PCB v3.1.8**, and only `wifi_gpio0` differs from v2.0 — see step 1 |
-| **NOT proven: the font glyphs look right** | needs the Tiny VGA Pmod — step 6, and PLAN.md item 9 |
+| **NOT proven: the font glyphs look right** | needs the Tiny VGA Pmod — step 6 |
 | **NOT proven: anything on J1/J2** | both headers are still unpopulated |
 
 ## Straps, all four in one place
@@ -670,7 +670,7 @@ can be typed at too**, on any bitstream built after that date.
 > ⛔ The paragraph that used to sit here said the opposite: "koti's UART is
 > `uart_tx.sv` — transmit only — and SBI `console_getchar` reads the PS/2 block,
 > for which there is no keyboard." Every clause of that is now wrong. PS/2 was
-> deleted on 2026-08-08 (PLAN item 8) once USB had typed on real hardware;
+> deleted on 2026-08-08 once USB had typed on real hardware;
 > `console_getchar` reads the USB FIFO and, since 2026-08-10, `UART_RX` as well.
 > It is kept, struck through, because a reader who finds a bring-up guide
 > telling them the machine cannot accept input will not try.
@@ -701,7 +701,7 @@ and `image: sdraw` is the layer below that.
 >
 > ⇒ **The ESP32 route is OPEN.** Networking and storage are not mutually
 > exclusive; the Ethernet-Pmod fallback is not needed. This is the measurement
-> PLAN item 11 was gated on.
+> networking was gated on.
 >
 > ### ⭐ AND THE PREDICTION BELOW ABOUT GARBAGE IS WRONG — IT IS LEGIBLE
 > This section told you to expect undecodable bytes on line 4, because an
@@ -805,7 +805,7 @@ is the result**; legible text would be a bonus, not the test.
 ⚠️ It is SRAM-loaded, so a power cycle removes it. Nothing here touches the
 config flash, and `ESP_CTRL = 0` on the way out puts the ESP32 back in reset.
 
-**What each verdict means for PLAN item 11** (✅ the first one is what happened):
+**What each verdict means for networking** (✅ the first one is what happened):
 
 - *the card SURVIVES* → the ESP32 route is open. ⇒ **This is the measured
   answer.** Next is not "the ESP32's own firmware": that firmware already
@@ -918,7 +918,7 @@ Flash `sw/sbi/sbi_test.bin` (step 4) and move **SW3 on**, because that firmware
 enables VGA and moves the UART to `uo[6]` as it does so. Expect `STK` on the
 serial line and the same characters on the monitor, 640x480@60.
 
-**This step is the one that closes PLAN.md item 9**: the 8x8 font ROM has never
+**This step is the one that closes the font check**: the 8x8 font ROM has never
 been looked at by a human on a real display. Check the glyphs are the right
 shapes, not just that something appears — a transposed font ROM produces a
 screen full of confident-looking garbage.
@@ -930,8 +930,8 @@ timing is alive** even if the monitor shows nothing.
 
 **There is no PS/2 receiver in koti any more.** `src/ps2_rx.sv`, `sw/ps2kbd.c`,
 the MMIO word at `0x0004000C` and the `gp[8]`/`gp[9]` constraints were all
-deleted on 2026-08-08 (PLAN item 8), once the USB keyboard had typed on real
-hardware — the condition the plan set for retiring it. Wiring a keyboard to
+deleted on 2026-08-08, once the USB keyboard had typed on real
+hardware — the condition set for retiring it. Wiring a keyboard to
 those pins today connects it to nothing.
 
 **Use a USB keyboard in US2 instead.** That is section 2d, and it works.
@@ -939,7 +939,7 @@ those pins today connects it to nothing.
 ⚠️ `0x0004000C` still decodes and reads **zero**, deliberately: to a surviving
 PS/2 driver that means "no key waiting", so it idles rather than misbehaves.
 ~~`gp[8]`/`gp[9]` (A4/A2) are free.~~ ⇒ **they are the I2C bus now** — section 8
-below, PLAN item 28. The three pins PS/2 gave back are exactly the three the
+below. The three pins PS/2 gave back are exactly the three the
 RTC took.
 
 The wiring notes below are kept because the **3.3 V hazard is real and general**
@@ -981,8 +981,8 @@ work.
 
 ## 🕰️ 8. The DS3231 RTC on J1 — **BUILT 2026-08-14, NOT YET ON HARDWARE**
 
-PLAN item 28. The part had not arrived when this was written; everything up to
-the pin is tested and nothing past it is.
+The part had not arrived when this was written; everything up to the pin is
+tested and nothing past it is.
 
 ### What to solder
 

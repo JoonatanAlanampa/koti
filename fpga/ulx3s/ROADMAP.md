@@ -344,8 +344,7 @@ Rough order: confirm the board revision → power the board alone and load
 the bitstream (LEDs should show koti's headless personality) → Cartridge
 Pmod on J1, check SW1 orientation → flash `hello.bin`, watch the UART
 banner at 115200 → VGA Pmod on J2, software sets VGA_EN, **visually check
-the font glyphs on a real monitor** (that check is an open PLAN.md item
-that only hardware can close) → PS/2 keyboard.
+the font glyphs on a real monitor** (a check that only hardware can close) → PS/2 keyboard.
 
 Plus a "things that will look like bugs and are not" section — the
 orientation straps, the two UART pin positions, and the fact that koti

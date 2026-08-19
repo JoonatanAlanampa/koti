@@ -133,8 +133,8 @@ Net effect: **Linux gets the whole 16 MB window bar a 64 KB reservation** —
 
 ### 2. There is no PLIC — BUILT 2026-08-04, `src/plic.sv`
 
-`PLAN.md`'s architecture delta 7 had listed a "PLIC-lite" since the start and
-it was never built. What stood in for it was one wire — `project.sv` did
+The architecture had listed a "PLIC-lite" from the start and it was never
+built. What stood in for it was one wire — `project.sv` did
 `assign kb_irq = kb_avail;` straight into the core's `meip` — which meant
 Linux had no interrupt controller to bind a driver to, and the keyboard raised
 an **M-mode** interrupt while `mideleg` delegates SEIP, which nothing raised.
@@ -158,7 +158,7 @@ Breaking that loop needs a non-standard SBI call on every single interrupt.
 Claim/complete is an acknowledgement path that already exists in the spec.
 
 Wired today: source 1 = the keyboard. **VSync is deliberately not wired** even
-though `PLAN.md` lists it — `vt_vs` is a pulse, and a level-sensitive gateway
+though the register map has room for it — `vt_vs` is a pulse, and a level-sensitive gateway
 would either miss it or latch it forever depending on which cycle it landed
 on. It needs a read-to-clear status bit first, the way the keyboard has one.
 Sources 2–4 are tied low so the register map already has room.
@@ -191,8 +191,8 @@ firmware change would touch.
 
 ## Which OS — decided 2026-08-04: mainline sv32 Linux, and rung 1 is deleted
 
-`PLAN.md` had a three-rung ladder — xv6, then nommu uClinux, then sv32 Linux —
-written before the MMU was finished. Re-examined when task 4 came up, **the
+The original plan had a three-rung ladder — xv6, then nommu uClinux, then sv32
+Linux — written before the MMU was finished. Re-examined when task 4 came up, **the
 first two rungs are not smaller steps toward the third; they are steps
 sideways onto different machines.** The evidence, checked against Linux v6.12
 rather than recalled:

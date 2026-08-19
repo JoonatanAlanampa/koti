@@ -322,20 +322,15 @@ for a subset of it.
   it as `/dev/rtc0`, and because it is soldered on and cannot be absent, it is
   the one the kernel reads at boot.
 
-  *With the DS3231 also plugged into J1* it appears as `/dev/rtc1` — a
-  temperature-compensated part, about five seconds a month against the
-  onboard one's minute — and `/etc/init.d/S45kotisd` adopts its reading and
-  writes it back into rtc0 so the two agree.
-
-  *With the DS3231 plugged into J1* (PLAN item 28 — the gateware, the driver
-  and the devicetree node are all in place, but as of 2026-08-14 the part had
-  not arrived, so nothing here has been seen working on hardware): the kernel
-  reads it before userspace starts and `date` is right at the login prompt.
-  `hwclock -w` writes the system time into the chip, `hwclock -r` reads it
-  back, `i2cdetect -y 0` shows it at 0x68, and
-  `/sys/class/hwmon/hwmon0/temp1_input` is its own die temperature in
-  millidegrees — that measurement is how it stays accurate to a couple of
-  seconds a month.
+  *With a DS3231 also plugged into J1* it appears as `/dev/rtc1` — a
+  temperature-compensated part, about five seconds a month against the onboard
+  one's minute — and `/etc/init.d/S45kotisd` adopts its reading and writes it
+  back into rtc0 so the two agree. `hwclock -f /dev/rtc1 -r` reads it directly,
+  `i2cdetect -y 0` shows it at 0x68, and `/sys/class/hwmon/hwmon0/temp1_input`
+  is its own die temperature in millidegrees — that measurement is how it stays
+  accurate. ⏳ The gateware, the driver and the devicetree node are all in
+  place, but the module has not arrived, so nothing in this paragraph has been
+  seen working on hardware.
 
   *With no cell in the holder and no DS3231*, nothing keeps time while the
   power is off and the fix is approximate. `koti-net

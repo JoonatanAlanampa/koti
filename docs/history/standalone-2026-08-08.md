@@ -59,4 +59,4 @@ protection; it is not needed for routine work.
   the FPGA's configuration. Listening on the UART destroys the evidence and
   costs a power cycle per attempt. The ESP32 never once crashed.
 
-Full detail, with the measurements: `fpga/ulx3s/README.md`.
+The measurements behind it are in the commit history.

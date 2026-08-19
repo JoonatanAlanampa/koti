@@ -216,7 +216,8 @@ written for, or it is decoration.
   ESP32 link, audio
 - `sw/` — bare-metal images, the SBI firmware (`sw/sbi/`), Linux and its drivers
   (`sw/linux/`)
-- `fpga/ulx3s/` — the board harness, pin plan and bring-up procedure
+- `fpga/ulx3s/` — the board harness, the pin plan and its checkers, and the
+  synthesis script
 - `vendor/` — verbatim copies from elsewhere, with provenance and why each is
   vendored rather than written
 - `tools/` — card writer, screen renderer, console driver, ROM generators

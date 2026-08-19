@@ -57,6 +57,46 @@ koti wrote this
 The unmount in there is the point: it drops the page cache, so the last `cat`
 genuinely read those bytes back off the card.
 
+### The first website, fetched by a computer built from the CPU up
+
+`info.cern.ch` has served the same page since 1993. This is koti asking for it —
+captured off the machine's own console, not reconstructed:
+
+```
+# koti-net get http://info.cern.ch/
+HTTP/1.1 200 OK
+Date: Wed, 19 Aug 2026 16:37:39 GMT
+Server: Apache
+Last-Modified: Wed, 05 Feb 2014 16:00:31 GMT
+ETag: "286-4f1aadb3105c0"
+Accept-Ranges: bytes
+Content-Length: 646
+Connection: close
+Content-Type: text/html
+
+<html><head></head><body><header>
+<title>http://info.cern.ch</title>
+</header>
+
+<h1>http://info.cern.ch - home of the first website</h1>
+<p>From here you can:</p>
+<ul>
+<li><a href="http://info.cern.ch/hypertext/WWW/TheProject.html">Browse the first website</a></li>
+<li><a href="http://line-mode.cern.ch/www/hypertext/WWW/TheProject.html">Browse the first website using the line-mode browser simulator</a></li>
+<li><a href="http://home.web.cern.ch/topics/birth-web">Learn about the birth of the web</a></li>
+<li><a href="http://home.web.cern.ch/about">Learn about CERN, the physics laboratory where the web was born</a></li>
+</ul>
+</body></html>
+```
+
+Every layer under that request is in this repository. The name was resolved and
+the socket opened by an ESP32 acting as a modem on a serial link koti drives;
+the bytes crossed a UART written here, into a kernel driver written here, on a
+CPU written here, executing from SDRAM through a controller and a cache written
+here. `Content-Length: 646`, and all 646 arrived — the link destroys the first
+byte of every transmission burst, which is why the reply is buffered whole on
+the far side and handed over in one piece rather than read in fragments.
+
 ## What it costs on the FPGA
 
 From `nextpnr.log` of the shipped build (`a65390a`, ECP5 **LFE5U-85F**) — the

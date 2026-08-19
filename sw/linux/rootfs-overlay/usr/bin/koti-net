@@ -179,6 +179,60 @@ capture_reset() { : > "$CAP"; }
 # capture is binary and prints "Binary file matches" instead of the line.
 capture() { cat "$CAP" 2>/dev/null; }
 
+# Pull the fetched page out of a capture, given on stdin.
+#
+# 	⛔⛔ THE LAST COMPLETE BEGIN..END PAIR, NOT THE FIRST. That is the whole
+# function, and getting it wrong is a defect the user hit on 2026-08-19:
+#
+#     z KOTI-BEGIN KOTI-END -z KOTI-BEGIN zz KOTI-BEGIN     (and no page)
+#
+# The capture is not guaranteed to hold exactly one transaction. capture_reset
+# runs when a command STARTS, but the far end is a separate machine that can
+# still be transmitting the tail of a previous one -- an exec() whose recv was
+# still blocked when `send` gave up on it flushes whenever it finally returns,
+# and that output lands in whatever capture is current by then. The markers of
+# a dead fetch therefore sit in front of the live one.
+#
+# The old pipeline used `sed -n /KOTI-BEGIN/,/KOTI-END/p`, which anchors on the
+# FIRST KOTI-BEGIN in the file, so one stale marker makes it print from the
+# corpse of the old fetch through the whole of the new one, marker text and
+# all. Reproduced off-hardware before this was written:
+#
+#     capture:  z KOTI-BEGIN / zz KOTI-END / >>> / zz KOTI-BEGIN / <page>
+#     printed:  KOTI-END
+#               zz KOTI-BEGIN
+#               HTTP/1.1 200 OK ...
+#
+# Taking the LAST pair is immune to any amount of debris in front of it, and
+# costs nothing: `res` is assigned only when an END closes a BEGIN, so an
+# unterminated BEGIN -- the shape a wedged far end leaves behind -- is
+# discarded rather than taken for the start of the page.
+#
+# busybox awk, so POSIX only: index(), sub(), printf, next. No gensub.
+extract_page() {
+	tr -d '\r' \
+		| sed -e 's/KOTI-BEGIN/KOTI-BEGIN\n/g' \
+		      -e 's/[z ]*KOTI-END/\nKOTI-END/g' \
+		| awk '
+			index($0, "KOTI-BEGIN") {
+				sub(/.*KOTI-BEGIN/, "")
+				cur = ($0 == "" ? "" : $0 "\n")
+				cap = 1
+				next
+			}
+			cap && index($0, "KOTI-END") {
+				sub(/[z ]*KOTI-END.*/, "")
+				if ($0 != "") cur = cur $0 "\n"
+				res = cur
+				cap = 0
+				next
+			}
+			cap { cur = cur $0 "\n" }
+			END { printf "%s", res }
+		' \
+		| sed -e '/./,$!d'
+}
+
 # ---------------------------------------------------------------------------
 # Sending.
 #
@@ -1161,12 +1215,7 @@ cmd_get() {
 		# ⚠️ It also means a page is held in a shell variable, so this
 		# path is for text. The `tr -d '\r'` above already ruled out
 		# fetching binaries; this does not narrow it further.
-		_page=$(capture | tr -d '\r' \
-			| sed -e 's/KOTI-BEGIN/KOTI-BEGIN\n/' \
-			      -e 's/[z ]*KOTI-END/\nKOTI-END/' \
-			| sed -n '/KOTI-BEGIN/,/KOTI-END/p' \
-			| sed -e '1s/.*KOTI-BEGIN//' -e '$s/KOTI-END.*//' \
-			| sed -e '/./,$!d')
+		_page=$(capture | extract_page)
 		printf '%s\n' "$_page"
 		# The reply is STILL in the capture, and it has the server's clock
 		# in it. Only when this machine's own clock has never been set —

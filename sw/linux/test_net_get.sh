@@ -199,6 +199,29 @@ eq "exit status" 0 "$rc"
 eq "the page, exactly" "$PAGE" "$(cat "$TMP/outB")"
 if grep -q 'retrying' "$TMP/errB"; then ok; else bad "did not say it retried: $(cat "$TMP/errB")"; fi
 
+echo "== 12. debris from a DEAD fetch in front of a live one =="
+# The 2026-08-19 defect, as a unit test on the extraction itself rather than a
+# scenario: capture_reset runs when a command starts, but the far end can still
+# be flushing a previous transaction, so its markers land in front of this
+# one's. The old pipeline anchored on the FIRST KOTI-BEGIN and printed from the
+# corpse of the old fetch through the whole of the new one -- marker text in
+# the page, which is exactly what the user saw on the machine.
+PAGE2='HTTP/1.1 200 OK
+
+<h1>hello</h1>'
+live=$(printf 'zz KOTI-BEGIN\nHTTP/1.1 200 OK\n\n<h1>hello</h1>\nzz KOTI-END\n>>> ')
+
+eq "no debris"            "$PAGE2" "$(printf '%s' "$live" | extract_page)"
+eq "a dead pair in front" "$PAGE2" \
+   "$(printf 'z KOTI-BEGIN\nzz KOTI-END\n>>> junk\n%s' "$live" | extract_page)"
+eq "an UNTERMINATED dead BEGIN (the wedge shape)" "$PAGE2" \
+   "$(printf 'z KOTI-BEGIN\nrubbish from a fetch that never ended\n%s' "$live" | extract_page)"
+eq "two dead pairs" "$PAGE2" \
+   "$(printf 'zz KOTI-BEGIN\nold1\nzz KOTI-END\nzz KOTI-BEGIN\nold2\nzz KOTI-END\n%s' "$live" | extract_page)"
+# ...and an unterminated BEGIN with nothing after it is not a page at all.
+eq "a wedge and nothing else yields nothing" "" \
+   "$(printf 'zz KOTI-BEGIN\nhalf a page and then silence\n' | extract_page)"
+
 echo
 echo "$checks checks, $fails failures"
 [ "$fails" -eq 0 ] || exit 1

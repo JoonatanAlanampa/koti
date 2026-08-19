@@ -32,7 +32,7 @@ Every line below has been seen on the bench, not only in simulation.
 | **Keyboard** | USB HID on US2, Finnish layout, a real input device |
 | **Internet** | **fetches a web page by name** — DNS, TCP and HTTP, through the onboard ESP32 as a modem |
 | **Sound** | 4 voices onto the board's own 3.5 mm jack; terminal bell plus `koti play` |
-| **Clock** | ⏳ **two** battery-backed RTCs on koti's own I2C busses: the ULX3S's onboard MCP7940N (needs only a CR1225 cell) and a DS3231 on J1. Gateware, driver and devicetree are in; **neither has run on hardware yet — the cell and the module were both still to arrive on 2026-08-14** |
+| **Clock** | 🔋 **battery-backed, and it keeps time with the board unplugged** — the ULX3S's own MCP7940N on koti's bit-banged I2C, `rtc0` by DT alias, read by the kernel before userspace. Proven 2026-08-15 on a cold boot with **power fully removed for >30 s**, standalone. A DS3231 on J1 becomes `rtc1`: gateware, driver and devicetree are in, ⏳ the module has not arrived |
 | **OS** | mainline **Linux 6.12** riscv32, busybox userspace, ~280 applets |
 | **Boot** | own M-mode SBI firmware loads the kernel off the card into RAM, ~49 s to a login prompt |
 | **Standalone** | its own bitstream in the board's flash: **phone charger, no PC** |

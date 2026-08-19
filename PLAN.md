@@ -1204,8 +1204,19 @@ is retired with it; **there is no item 26**, and the housekeeper is two tiers �
     (*the chip itself reports the crystal is oscillating*), bit3 **VBATEN=1**
     (**the battery is enabled — this is the bit the CR1225 depends on**), bit4
     **PWRFAIL=0**. Set to within **~1 s** of true UTC.
-    ⏳ **STILL UNPROVEN: persistence across a power cycle** — that is the only
-    claim the battery actually makes, and it needs power fully removed.
+    🏆 **PERSISTENCE ACROSS A POWER CYCLE: PROVEN THE SAME EVENING** — the
+    only claim the battery actually makes. Power fully removed for **>30 s**,
+    then a standalone cold boot (bitstream in the board's own config flash,
+    kernel on the card, no PC, no network, nothing typed):
+    ```
+    rtc-ds1307 1-006f: registered as rtc0
+    rtc-ds1307 1-006f: setting system clock to 2026-08-15T16:38:47 UTC (1786811927)
+    ```
+    ⭐ **The proof is as much in what VANISHED**: the boot above logged
+    `oscillator failed, set time!` and `hctosys: unable to read the hardware
+    clock`; both are gone ⇒ the crystal kept oscillating on the CR1225 while
+    the board was dead, and the kernel now sets the system clock from it before
+    userspace exists.
     🔴 **AND THE LAST BITSTREAM WAS ONE DTB BEHIND — a flash would have been a
     wasted trip.** `fpga-ulx3s` triggers only on `src/**` and `fpga/ulx3s/**`,
     so the last pushed run was at `2e50f0a`; `55fdf22` then rebuilt `sbi_*.bin`

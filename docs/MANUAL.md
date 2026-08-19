@@ -337,7 +337,8 @@ for a subset of it.
   millidegrees — that measurement is how it stays accurate to a couple of
   seconds a month.
 
-  *Without it*, there is no battery and the fix is approximate. `koti-net
+  *With no cell in the holder and no DS3231*, nothing keeps time while the
+  power is off and the fix is approximate. `koti-net
   time` sets the clock from the `Date:` header any HTTP reply already carries
   — accurate to a second or two, which is right for file timestamps and wrong
   for anything else. It then writes the time to the card, and `S45kotisd`

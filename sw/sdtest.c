@@ -3,7 +3,7 @@
 // The bring-up image for the SD rung, and the same shape as sw/bringup.c for the
 // same reason: it prints FOREVER and never touches video, because programming
 // the FPGA takes ~60 s and anything printed once is gone before a host can open
-// the serial port. It reports over UART and needs no host tooling.
+// the serial port. See fpga/ulx3s/README.md step 2b.
 //
 // WHAT IT ACTUALLY ESTABLISHES, in order, so a failure says which layer broke:
 //   1. `SD_READY` after init  — the card answered CMD0/CMD8/ACMD41/CMD58, so the

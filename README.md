@@ -18,6 +18,33 @@ web page and write a file that is still there tomorrow.
 > and scroll rules from `sw/console.c`. Every pixel is decided by something in
 > this repository.
 
+## The machine itself
+
+The screen above is rendered. The computer is not — this is it.
+
+![koti's hardware: the ULX3S 85F, assembled](docs/img/ulx3s_full.jpg)
+
+The whole computer. A ULX3S 85F under a two-plate acrylic cover
+([ulx3s-cover](https://github.com/JoonatanAlanampa/ulx3s-cover)): HDMI out to
+the screen, microSD holding the kernel and the root filesystem, US1 for power
+from a phone charger and US2 for the keyboard. The small board hanging off the
+J1 header on the right is the [cartridge
+Pmod](https://github.com/JoonatanAlanampa/cartridge_pmod) from a sibling
+project — koti does not use it, and everything in the table below runs without
+it.
+
+![the underside: ESP32-WROVER, CR1225, v3.1.8](docs/img/ulx3s_solder.jpg)
+
+The underside, and two parts of koti live here. The shielded can is the
+**ESP32-WROVER** — the modem koti talks AT commands to when it fetches a web
+page. The same face carries the **CR1225 holder** that keeps the MCP7940N
+running with the board unplugged, which is why the clock survives a power cut.
+The soldered header along the right edge is J1.
+
+![the stack, side on](docs/img/ulx3s_side.jpg)
+
+23.6 mm of computer, on four nylon standoffs.
+
 ## What works, on real hardware
 
 Every line below has been seen on the bench, not only in simulation.

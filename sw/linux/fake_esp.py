@@ -96,6 +96,7 @@ class Mock:
         self.reverts = 0
         self.connects = 0
         self.garbles = 0
+        self.interrupts = 0
 
     # --- the far end's own printing -------------------------------------
     def emit(self, *a, **kw):
@@ -268,18 +269,54 @@ def main():
             pass
         return d.decode("latin1").rstrip("\r\n")
 
+    def eat_interrupt():
+        """True if a Ctrl-C is waiting; consumes everything up to and past it.
+
+        MicroPython's REPL raises KeyboardInterrupt on 0x03 even from inside a
+        running exec(), which is the only thing that ends a blocked recv().
+        koti-net's resync() depends on that, so the mock has to model it or the
+        recovery path is untestable — and an untested recovery path is how the
+        wedge came to be documented as needing a power cycle.
+        """
+        try:
+            with open(args.dev, "rb") as f:
+                d = f.read()
+        except OSError:
+            return False
+        if b"\x03" not in d:
+            return False
+        rest = d.split(b"\x03", 1)[1]
+        with open(args.dev, "wb") as f:
+            f.write(rest)
+        return True
+
     def busy(seconds):
-        """Execute for a while. Anything written to us in here is LOST."""
+        """Execute for a while. Anything written to us in here is LOST.
+
+        Returns True if a Ctrl-C cut it short — the caller must then NOT run
+        the command, exactly as a real KeyboardInterrupt would not.
+        """
         end = time.time() + seconds
         while time.time() < end:
+            if eat_interrupt():
+                return True
             lost = take_line()
             if lost is not None:
                 mock.overruns.append(lost)
             time.sleep(0.02)
+        return False
 
     deadline = time.time() + args.timeout
     stop = args.dev + ".stop"
     while time.time() < deadline and not os.path.exists(stop):
+        # A Ctrl-C arriving at an IDLE prompt is not an error and not a line:
+        # it just gets a fresh prompt. resync() sends one unconditionally, so
+        # this is the ordinary case, not the exceptional one.
+        if eat_interrupt():
+            mock.interrupts += 1
+            burst("zz\r\n")
+            burst(">>> ")
+            continue
         line = take_line()
         if line is None:
             time.sleep(0.02)
@@ -296,6 +333,19 @@ def main():
         if args.scenario == "flakylink" and "KOTI'+'-UP" in line and not mock.garbles:
             mock.garbles += 1
             line = line.replace("isconnected", "isconnectd", 1)
+        # `c1damage` / `c1damage-hard`: ONE character — the `+` of a `c1+=` —
+        # is lost on the way in. The line stays valid Python and REPLACES the
+        # fetch program with that fragment instead of appending to it, so
+        # exec(c1) prints the BEGIN marker, raises NameError on `b`, and the
+        # page and the END marker never come. That is markers-and-no-page, the
+        # 2026-08-19 symptom, from a single dropped byte on a link this file
+        # documents as dropping bytes. `hard` never lets go, to prove the
+        # give-up path refuses rather than fetching half a page.
+        if (args.scenario in ("c1damage", "c1damage-hard")
+                and line.startswith("c1+=") and "-BEGIN" in line
+                and (args.scenario == "c1damage-hard" or not mock.garbles)):
+            mock.garbles += 1
+            line = line.replace("c1+=", "c1=", 1)
         mock.lines.append(line)
         burst(line + "\r\n")             # the echo is its own burst
         mock.out = []
@@ -305,7 +355,19 @@ def main():
         mock.dhcp_tick()
 
         # The far end is busy for a while, and deaf while it is.
-        busy(1.2 if line.startswith("exec(") else 0.1)
+        # `wedge`: it never finishes on its own. Only a Ctrl-C ends it, which
+        # is the state cmd_get's own comments described as needing an off/wake
+        # power cycle of the ESP32. It does not.
+        if args.scenario == "wedge" and line.startswith("exec("):
+            _b = 60.0
+        else:
+            _b = 1.2 if line.startswith("exec(") else 0.1
+        if busy(_b):
+            mock.out = []
+            mock.interrupts += 1
+            burst("zzKeyboardInterrupt\r\n")
+            burst(">>> ")
+            continue
 
         if line.startswith("import "):
             pass                          # the fakes are already in `ns`
@@ -339,6 +401,7 @@ def main():
                 "reverts": mock.reverts,
                 "connects": mock.connects,
                 "garbles": mock.garbles,
+                "interrupts": mock.interrupts,
                 "cfg": mock.cfg,
             }, f, indent=1)
     return 0

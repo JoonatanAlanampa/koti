@@ -353,6 +353,89 @@ send() {
 	return 1
 }
 
+# ---------------------------------------------------------------------------
+# Get the far end back to a prompt, whatever it was doing.
+#
+# ⛔⛔ THIS IS THE MISSING HALF OF `send`, AND ITS ABSENCE IS THE DEFECT THE
+# USER HIT ON 2026-08-19. `send` reports that the far end never came back to a
+# prompt and returns 1 — and until now every caller ignored that and simply
+# sent the next line anyway. The far end is a SEPARATE MACHINE: it does not
+# stop executing because this side stopped listening. So the lines that follow
+# a timed-out send are written into a REPL that is not reading, and whatever
+# the old command eventually prints lands in whichever capture is current when
+# it finally returns. That is how one fetch's markers end up in front of
+# another's, which is the shape that was reported:
+#
+#     z KOTI-BEGIN KOTI-END -z KOTI-BEGIN zz KOTI-BEGIN     (and no page)
+#
+# extract_page() now makes that debris HARMLESS. This makes it RARE, which is
+# the better half of the fix: the capture is also the diagnostic, and one that
+# routinely holds two transactions is a bad one.
+#
+# ⭐ 0x03 IS THE WHOLE MECHANISM, AND IT RECOVERS A WEDGE THAT PREVIOUSLY NEEDED
+# A POWER CYCLE. cmd_get's own comments record that a blocked `s.recv()` inside
+# `exec()` "took an off/wake power cycle of the ESP32 to recover". It does not:
+# MicroPython's REPL raises KeyboardInterrupt on Ctrl-C even from inside a
+# running exec(), which is exactly what a blocked recv needs. Idle, the same
+# byte costs nothing — the REPL answers a bare prompt.
+#
+# ⚠️ THE TRAILING capture_reset IS LOAD-BEARING. Whatever the interrupted
+# command was in the middle of saying arrives DURING this, so returning without
+# clearing would hand the caller the debris this function exists to remove. The
+# settle before it is for the same reason: a KeyboardInterrupt traceback is
+# printed after the prompt-bearing burst, not before it.
+#
+# ⚠️ It deliberately does NOT restart the reader or touch esp_power. Losing the
+# capture reader is a different fault with a different fix, and a resync that
+# power-cycles the far end would throw away the association `join` paid three
+# seconds and a DHCP lease for.
+# ---------------------------------------------------------------------------
+resync() {
+	capture_reset
+	# Ctrl-C first: it is the only thing that ends a blocked recv().
+	printf '\003' > "$DEV" 2>/dev/null
+	usleep 300000
+	# Then a bare line, which is what makes an IDLE repl say `>>>` again —
+	# Ctrl-C on an idle prompt prints one too, but not on every version, and
+	# this costs one write.
+	printf '\r\n' > "$DEV" 2>/dev/null
+	_rs=$(( $(date +%s) + 10 ))
+	while [ "$(date +%s)" -lt "$_rs" ]; do
+		# Two `>` not three: the first character of every burst from this
+		# link is destroyed. Same rule as `send`.
+		case "$(tail -c 16 "$CAP" 2>/dev/null | tr -d '\r\n' | tail -c 8)" in
+			*'>>'*)
+				# Let the tail of the interrupted command land, THEN
+				# throw it away. See above.
+				usleep 500000
+				capture_reset
+				return 0
+				;;
+		esac
+		usleep 200000
+	done
+	capture_reset
+	return 1
+}
+
+# One place to say "the far end stopped answering", because three copies of a
+# four-line message is how three copies drift apart. Every caller is a `send`
+# in the middle of a transaction, so the resync is part of the message rather
+# than something each caller has to remember: leaving the far end mid-command
+# is exactly what puts one fetch's markers in the next fetch's capture.
+lost_far_end() {
+	echo "koti-net: the far end stopped answering while $1; nothing was" >&2
+	echo "koti-net: fetched. Resynchronising it so the next command starts" >&2
+	echo "koti-net: from a prompt and not from the middle of this one." >&2
+	# ⚠️ DUMP BEFORE RESYNCHRONISING, NOT AFTER. resync() clears the capture —
+	# that is the point of it — so whatever the far end managed to say about
+	# why it went quiet is gone one line later. This file has been here
+	# before: the 2026-08-12 wedge stayed mysterious for an evening because
+	# the next capture_reset ate the traceback that explained it.
+	capture >&2
+	resync || echo "koti-net: it did not come back — try 'koti-net off', then 'wake'." >&2
+}
+
 # Poll the capture for a pattern. busybox has no `timeout`, and a fixed sleep
 # either wastes seconds or fails on the one boot that is slow.
 # ⛔ A REAL DEADLINE, not a loop count. The first version ran `_secs * 5`
@@ -819,6 +902,16 @@ link_up() {
 			return 1
 		fi
 		echo "koti-net: no answer from the link, retrying ($_lu)" >&2
+		# ⭐ AND CLEAR IT BEFORE ASKING AGAIN. Silence here has two causes
+		# and only one of them is a dropped character: the other is a far
+		# end still executing a PREVIOUS command, which cannot answer this
+		# one however many times it is asked. Until 2026-08-20 that state
+		# was unrecoverable from software — the file's own note said a
+		# blocked recv() 'took an off/wake power cycle of the ESP32' — and
+		# it is not: Ctrl-C ends it. Retrying without this is asking a
+		# question three times into a machine that is not listening, and
+		# then blaming the network.
+		resync || true
 		_lu=$((_lu + 1))
 	done
 	_st=$(capture | grep -a 'KOTI-UP' | tail -n 1)
@@ -837,6 +930,141 @@ link_up() {
 		*202*)  echo "koti-net: status 202 = wrong password." >&2 ;;
 		*203*)  echo "koti-net: status 203 = the access point refused it." >&2 ;;
 	esac
+	return 1
+}
+
+# ---------------------------------------------------------------------------
+# Build the fetch program on the far end, and CONFIRM IT ARRIVED WHOLE.
+#
+# ⛔⛔ FIVE REPL LINES WITH NOTHING CHECKING THEM WAS THE HOLE. `c1` is
+# assembled by five separate sends and then executed, and until 2026-08-20 not
+# one of those sends had its status looked at and nothing verified the result.
+# This file already documents, at length, that this link drops characters and
+# that `send` can time out — and `cmd_get` already guards the HOSTNAME against
+# exactly that, with a verify-and-retry loop, because a dropped character there
+# produced months of truthful `-202`s. The program that does the fetching had
+# no such guard, and it is the larger target: a couple of dozen characters of
+# hostname against roughly five hundred of Python.
+#
+# ⭐ AND IT IS THE ONE DAMAGE THAT PRODUCES THE REPORTED SYMPTOM — markers and
+# no page. Lose the `+` from any `c1+=` and the line is STILL VALID PYTHON: it
+# REPLACES the program with that fragment instead of appending to it. Lose it
+# from the BEGIN chunk and `exec(c1)` prints `zz KOTI-BEGIN`, then raises
+# NameError on `b`, so the page never comes and neither does the END marker.
+# The fetch sits out its 60 s wait and dumps the raw capture, which is a
+# screenful of markers with no page in it. A whole chunk lost to a timed-out
+# send does the same thing with a different fragment.
+#
+# ⚠️ WHAT IT CHECKS, AND WHY THAT SHAPE. `c1.count('KOTI')` is 4 — CN, CUT,
+# BEGIN and END — and it is a STRUCTURAL invariant, not a magic length: it
+# survives editing the program as long as it still prints its four markers,
+# which is what makes it safe to assert on every fetch. A length would be
+# tighter and would have to be recomputed by hand at every edit, and a tight
+# check that goes stale fails good fetches — worse than the fault it guards.
+#
+# ⚠️ IT DOES NOT CATCH EVERYTHING, deliberately. A character dropped INSIDE a
+# statement — `s.settimout(20)` — keeps the count at 4 and raises at exec()
+# instead; that path already ends in cmd_get printing the far end's traceback.
+# `len(c1)` and `len(req)` are printed alongside so a failure leaves numbers
+# behind rather than a bare verdict.
+#
+# ⛔ `'KOTI'+'-PG'`, split, for the reason every marker in this file is split:
+# the REPL echoes the line it is given, so an unsplit marker would match its
+# own echo and the check would pass on a far end that never ran anything.
+# ---------------------------------------------------------------------------
+build_fetch_prog() {
+	# `n` for the resolver octet, because `d` is the read loop's buffer below.
+	send "c1=\"g=w.ifconfig()\nn=int(g[3].split('.')[0])\nif n==0 or n>=224: w.ifconfig((g[0],g[1],g[2],g[2]))\ns=socket.socket()\ns.settimeout(20)\ns.connect(socket.getaddrinfo(a,80)[0][-1])\nprint('zz','KOTI'+'-CN')\ns.send(req)\"" || return 1
+	# ⛔ BOTH MARKERS ARE PRINTED BY ONE exec(), and the reason is the single
+	# nastiest property of driving a REPL: IT ECHOES WHAT YOU TYPE. Sending
+	# `print(begin)`, then the read loop, then `print(end)` as three commands
+	# puts the ECHO of commands two and three between the two markers, so the
+	# extracted "page" ends with a couple of lines of this script's own source.
+	# It looks like a page with junk appended, not like a bug. Emitting both
+	# markers from a single command means the only echo is that command's own,
+	# and it lands BEFORE the opening marker where it is trimmed away.
+	#
+	# The program is built up in `c` across two short lines rather than sent
+	# as one long one, purely to keep each line comfortably inside the far
+	# end's receive buffer — MicroPython 1.14 has no raw-paste flow control.
+	#
+	# 🪤 `sys.stdout.write(d)` ON RAW BYTES, not d.decode(...). MicroPython's
+	# bytes.decode() does not take the encoding/errors arguments CPython's
+	# does; the call that works everywhere else raises TypeError here, echoed
+	# back as a traceback. Writing the bytes through untouched is both shorter
+	# and exactly what a page fetch wants.
+	# ⛔ THE `zz` IS NOT DEBRIS — IT IS A SACRIFICIAL BYTE, AND WITHOUT IT THIS
+	# COMMAND TIMES OUT ON A PERFECT RESPONSE.
+	#
+	# Every burst the ESP32 sends arrives with its FIRST CHARACTER destroyed.
+	# Measured repeatedly on 2026-08-12, in the same capture, minutes apart:
+	#
+	#     print(6*7)          -> i2      (42)
+	#     print(w.active(..)) -> prue    (True)
+	#     print("zz",len(r))  -> )z 4    (zz 4)
+	#     HTTP/1.1 200 OK     -> rTTP/1.1 200 OK
+	#
+	# and it is the same thing two earlier sessions wrote off as harmless
+	# garble: `MicroPython v1.14` arriving as `oicroPython v1.14`, and
+	# esptest's `ets Jul 29 2019` as `ts Jul 29 2019`. One byte, every burst,
+	# always the first. fpga/ulx3s/README.md has the mechanism: the ESP32's
+	# transmit line and the FPGA's share one net back to the FTDI, so koti
+	# collides with the far end's opening character.
+	#
+	# It is NOT an esp_uart.sv defect — that FIFO pops only when non-empty and
+	# reads fifo[rptr] combinationally. Do not go looking for it there.
+	#
+	# So an unpadded `print('KOTI-BEGIN')` reaches the capture as `OTI-BEGIN`,
+	# the grep below never matches, and `get` reports "no complete reply in
+	# 60 s" while /tmp/koti-net.cap holds the entire page. Printing two junk
+	# characters in front of the marker donates them to the collision instead.
+	# ⛔⛔ READ THE WHOLE BODY BEFORE PRINTING ANY OF IT, AND THIS IS THE `zz`
+	# LESSON ONE LAYER DOWN. Measured on hardware 2026-08-14, three fetches out
+	# of three, on the build that had just fixed everything else:
+	#
+	#     'TTP/1.1 200 OK        <- the page's own first byte, destroyed
+	#
+	# The padding protects the MARKER, and it did: `KOTI-BEGIN` arrived intact
+	# every time. But `print('zz','KOTI-BEGIN')` finishes transmitting, and then
+	# `s.recv(256)` BLOCKS on the network — a pause of hundreds of milliseconds
+	# with the far end silent. Whatever it sends next opens a NEW burst, and the
+	# first character of every burst is destroyed. So the sacrificial bytes were
+	# spent on the marker and the page paid for the next collision itself.
+	#
+	# ⚠️ AND IT IS NOT ONLY THE FIRST BYTE. Every recv that has to wait for
+	# another TCP segment is another boundary, so a page larger than one segment
+	# loses a character in the MIDDLE too — invisible in a 1.2 KB test page and
+	# certain in a real one.
+	#
+	# Buffering on the ESP32 and writing once means the marker and the entire
+	# body are one uninterrupted transmission: the padding absorbs the only
+	# collision there is, and every byte of the page is downstream of it.
+	#
+	# ⚠️ THE CAP IS NOT SILENT. 200 KB is ESP32 RAM being spent on a page, and a
+	# truncated page that looks complete is worse than a refusal, so the cut
+	# announces itself with its own marker and `get` says so on stderr.
+	send "c1+=\"\nb=b''\nwhile len(b)<200000:\n d=s.recv(256)\n if not d:break\n b+=d\"" || return 1
+	send "c1+=\"\nif len(b)>=200000: print('zz','KOTI'+'-CUT')\"" || return 1
+	send "c1+=\"\nprint('zz','KOTI'+'-BEGIN')\nsys.stdout.write(b)\"" || return 1
+	# The trailing print() matters: a body that does not end in a newline
+	# would otherwise leave the end marker glued to the last line of the page,
+	# where the anchored match below never sees it and the fetch times out
+	# with the whole page already in hand.
+	send "c1+=\"\nprint()\nprint('zz','KOTI'+'-END')\ns.close()\"" || return 1
+	# ⛔ ASK THE FAR END WHAT IT ACTUALLY HAS. Nothing before this point can
+	# tell the difference between a program that arrived and one that did
+	# not: `send` returns when a prompt comes back, and an assignment that
+	# landed short still gets a prompt.
+	capture_reset
+	send "print('zz','KOTI'+'-PG', c1.count('KOTI'), len(c1), len(req))" || return 1
+	expect 'KOTI-PG' 8 || return 1
+	_pg=$(capture | grep -a 'KOTI-PG' | tail -n 1)
+	case "$_pg" in
+		# The trailing space is part of the pattern: without it a
+		# duplicated chunk reporting 40-something would also match.
+		*'KOTI-PG 4 '*) return 0 ;;
+	esac
+	echo "koti-net: the far end reports a damaged fetch program: $_pg" >&2
 	return 1
 }
 
@@ -878,7 +1106,7 @@ cmd_get() {
 	link_up || return 1
 
 	capture_reset
-	send 'import socket, sys'
+	send 'import socket, sys' || { lost_far_end 'importing socket'; return 1; }
 
 	# ⛔⛔ SEND THE HOSTNAME, THEN CHECK IT ARRIVED, AND RETRY IF IT DID NOT.
 	# THIS IS THE REAL CAUSE OF PLAN ITEM 19's `-202`, MEASURED 2026-08-12.
@@ -931,7 +1159,7 @@ cmd_get() {
 		_try=$((_try + 1))
 	done
 
-	send "p='$_path'"
+	send "p='$_path'" || { lost_far_end 'sending the path'; return 1; }
 	# ⚠️ The socket is NOT created here any more, and neither is its timeout
 	# set here — both moved into the single exec below, because every command
 	# boundary between the repair and the last byte read is a window for DHCP
@@ -1061,89 +1289,45 @@ cmd_get() {
 	# HTTP/1.0 with Connection: close so the far end ends the body by closing
 	# the socket, which is the only framing that needs no chunked-transfer
 	# parser at this end.
-	send "req=('GET '+p+' HTTP/1.0\r\nHost: '+h+'\r\nConnection: close\r\n\r\n').encode()"
-	# `n` for the resolver octet, because `d` is the read loop's buffer below.
-	send "c1=\"g=w.ifconfig()\nn=int(g[3].split('.')[0])\nif n==0 or n>=224: w.ifconfig((g[0],g[1],g[2],g[2]))\ns=socket.socket()\ns.settimeout(20)\ns.connect(socket.getaddrinfo(a,80)[0][-1])\nprint('zz','KOTI'+'-CN')\ns.send(req)\""
-	# ⛔ BOTH MARKERS ARE PRINTED BY ONE exec(), and the reason is the single
-	# nastiest property of driving a REPL: IT ECHOES WHAT YOU TYPE. Sending
-	# `print(begin)`, then the read loop, then `print(end)` as three commands
-	# puts the ECHO of commands two and three between the two markers, so the
-	# extracted "page" ends with a couple of lines of this script's own source.
-	# It looks like a page with junk appended, not like a bug. Emitting both
-	# markers from a single command means the only echo is that command's own,
-	# and it lands BEFORE the opening marker where it is trimmed away.
+	send "req=('GET '+p+' HTTP/1.0\r\nHost: '+h+'\r\nConnection: close\r\n\r\n').encode()" \
+		|| { lost_far_end 'sending the request'; return 1; }
+	# ⛔ BUILD IT, THEN CONFIRM IT, AND REBUILD IT IF THE LINK DAMAGED IT.
+	# The same verify-and-retry shape the hostname above already uses, and for
+	# the same measured reason. See build_fetch_prog for what is checked.
 	#
-	# The program is built up in `c` across two short lines rather than sent
-	# as one long one, purely to keep each line comfortably inside the far
-	# end's receive buffer — MicroPython 1.14 has no raw-paste flow control.
-	#
-	# 🪤 `sys.stdout.write(d)` ON RAW BYTES, not d.decode(...). MicroPython's
-	# bytes.decode() does not take the encoding/errors arguments CPython's
-	# does; the call that works everywhere else raises TypeError here, echoed
-	# back as a traceback. Writing the bytes through untouched is both shorter
-	# and exactly what a page fetch wants.
-	# ⛔ THE `zz` IS NOT DEBRIS — IT IS A SACRIFICIAL BYTE, AND WITHOUT IT THIS
-	# COMMAND TIMES OUT ON A PERFECT RESPONSE.
-	#
-	# Every burst the ESP32 sends arrives with its FIRST CHARACTER destroyed.
-	# Measured repeatedly on 2026-08-12, in the same capture, minutes apart:
-	#
-	#     print(6*7)          -> i2      (42)
-	#     print(w.active(..)) -> prue    (True)
-	#     print("zz",len(r))  -> )z 4    (zz 4)
-	#     HTTP/1.1 200 OK     -> rTTP/1.1 200 OK
-	#
-	# and it is the same thing two earlier sessions wrote off as harmless
-	# garble: `MicroPython v1.14` arriving as `oicroPython v1.14`, and
-	# esptest's `ets Jul 29 2019` as `ts Jul 29 2019`. One byte, every burst,
-	# always the first. fpga/ulx3s/README.md has the mechanism: the ESP32's
-	# transmit line and the FPGA's share one net back to the FTDI, so koti
-	# collides with the far end's opening character.
-	#
-	# It is NOT an esp_uart.sv defect — that FIFO pops only when non-empty and
-	# reads fifo[rptr] combinationally. Do not go looking for it there.
-	#
-	# So an unpadded `print('KOTI-BEGIN')` reaches the capture as `OTI-BEGIN`,
-	# the grep below never matches, and `get` reports "no complete reply in
-	# 60 s" while /tmp/koti-net.cap holds the entire page. Printing two junk
-	# characters in front of the marker donates them to the collision instead.
-	# ⛔⛔ READ THE WHOLE BODY BEFORE PRINTING ANY OF IT, AND THIS IS THE `zz`
-	# LESSON ONE LAYER DOWN. Measured on hardware 2026-08-14, three fetches out
-	# of three, on the build that had just fixed everything else:
-	#
-	#     'TTP/1.1 200 OK        <- the page's own first byte, destroyed
-	#
-	# The padding protects the MARKER, and it did: `KOTI-BEGIN` arrived intact
-	# every time. But `print('zz','KOTI-BEGIN')` finishes transmitting, and then
-	# `s.recv(256)` BLOCKS on the network — a pause of hundreds of milliseconds
-	# with the far end silent. Whatever it sends next opens a NEW burst, and the
-	# first character of every burst is destroyed. So the sacrificial bytes were
-	# spent on the marker and the page paid for the next collision itself.
-	#
-	# ⚠️ AND IT IS NOT ONLY THE FIRST BYTE. Every recv that has to wait for
-	# another TCP segment is another boundary, so a page larger than one segment
-	# loses a character in the MIDDLE too — invisible in a 1.2 KB test page and
-	# certain in a real one.
-	#
-	# Buffering on the ESP32 and writing once means the marker and the entire
-	# body are one uninterrupted transmission: the padding absorbs the only
-	# collision there is, and every byte of the page is downstream of it.
-	#
-	# ⚠️ THE CAP IS NOT SILENT. 200 KB is ESP32 RAM being spent on a page, and a
-	# truncated page that looks complete is worse than a refusal, so the cut
-	# announces itself with its own marker and `get` says so on stderr.
-	send "c1+=\"\nb=b''\nwhile len(b)<200000:\n d=s.recv(256)\n if not d:break\n b+=d\""
-	send "c1+=\"\nif len(b)>=200000: print('zz','KOTI'+'-CUT')\""
-	send "c1+=\"\nprint('zz','KOTI'+'-BEGIN')\nsys.stdout.write(b)\""
-	# The trailing print() matters: a body that does not end in a newline
-	# would otherwise leave the end marker glued to the last line of the page,
-	# where the anchored match below never sees it and the fetch times out
-	# with the whole page already in hand.
-	send "c1+=\"\nprint()\nprint('zz','KOTI'+'-END')\ns.close()\""
+	# ⛔ RESYNC BEFORE EACH REBUILD. A build that failed because `send` timed
+	# out means the far end is still executing something; sending five more
+	# lines into it is what puts two transactions in one capture. Ctrl-C ends
+	# whatever it is doing and clears the capture, so the retry starts from a
+	# prompt rather than from the middle of the last attempt.
+	_pgtry=1
+	while ! build_fetch_prog ; do
+		if [ "$_pgtry" -ge 3 ]; then
+			echo "koti-net: the fetch program did not survive the link." >&2
+			echo "koti-net: It is five REPL lines and the far end says they" >&2
+			echo "koti-net: did not all arrive. Refusing to run half a fetch," >&2
+			echo "koti-net: which prints markers and no page." >&2
+			resync || true
+			return 1
+		fi
+		echo "koti-net: fetch program damaged in transit, rebuilding ($_pgtry)" >&2
+		resync || true
+		_pgtry=$((_pgtry + 1))
+	done
+
+
 	# ⛔ THE ONLY exec, and everything that touches the network is inside it.
 	# Appending to `c1` rather than starting a new `c` is the whole point: the
 	# connect and the read must not be two exec()s with a gap between them.
-	send 'exec(c1)'
+	# ⚠️ A FAILURE HERE IS NOT AN ABORT, AND THAT IS DELIBERATE. `send` gives
+	# up after 40 s; the socket's own timeout is 20 s, so a transaction that
+	# outlasts the deadline is unusual, but its bytes may still be arriving and
+	# the END marker is the authority on whether a page came. So the wait below
+	# still gets its chance — the flag only decides what is SAID if it does not,
+	# and guarantees a resync on the way out so the next command does not
+	# inherit this one's tail.
+	_execto=0
+	send 'exec(c1)' || _execto=1
 
 	# The connect check survives the merge, but it moved AFTER the exec, which
 	# is the only place it can now live. `send` above already waited for the
@@ -1154,8 +1338,19 @@ cmd_get() {
 	# marker that cannot arrive, and then report a timeout — which is how a
 	# refused connection came to look like a slow one.
 	if ! grep -qa 'KOTI-CN' "$CAP" 2>/dev/null; then
-		echo "koti-net: could not connect to $_addr. The far end said:" >&2
+		# ⛔ A TRACEBACK IS NOT A REFUSED CONNECTION, and calling it one is
+		# how a quoting bug came to be blamed on the network for an evening.
+		# The marker is missing either way; only the capture tells them
+		# apart, so say which one this is before printing it.
+		if grep -qa 'Traceback' "$CAP" 2>/dev/null; then
+			echo "koti-net: the far end RAISED instead of connecting to" >&2
+			echo "koti-net: $_addr. That is the program or its arguments," >&2
+			echo "koti-net: not the network. It said:" >&2
+		else
+			echo "koti-net: could not connect to $_addr. The far end said:" >&2
+		fi
 		capture >&2
+		resync || true
 		return 1
 	fi
 
@@ -1226,8 +1421,19 @@ cmd_get() {
 		fi
 		return 0
 	fi
-	echo "koti-net: no complete reply in 60 s. Raw capture follows:" >&2
+	if [ "$_execto" -eq 1 ]; then
+		echo "koti-net: the far end never came back to a prompt AND no reply" >&2
+		echo "koti-net: arrived — it is wedged, not slow. Raw capture follows:" >&2
+	else
+		echo "koti-net: no complete reply in 60 s. Raw capture follows:" >&2
+	fi
 	capture >&2
+	# ⛔⛔ RESYNC ON THE WAY OUT, ALWAYS. This is the exit that leaves a
+	# transaction still running on the far end, and it is therefore the exit
+	# that poisons the NEXT command's capture with markers from this one —
+	# the 2026-08-19 defect. extract_page makes that debris harmless; this
+	# stops it being created.
+	resync || true
 	return 1
 }
 

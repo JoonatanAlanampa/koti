@@ -222,6 +222,56 @@ eq "two dead pairs" "$PAGE2" \
 eq "a wedge and nothing else yields nothing" "" \
    "$(printf 'zz KOTI-BEGIN\nhalf a page and then silence\n' | extract_page)"
 
+echo "== 13. the fetch program loses a character: rebuild it, then fetch =="
+# The 2026-08-19 defect's most likely maker. `c1` is assembled by five REPL
+# lines and lose the `+` from any `c1+=` and the line is STILL VALID PYTHON —
+# it replaces the program instead of appending to it. exec(c1) then prints the
+# BEGIN marker, raises NameError on `b`, and neither the page nor the END
+# marker ever comes: markers and no page, which is exactly what was reported.
+# Nothing checked this until now; the hostname two lines above it was checked
+# from 2026-08-12.
+start_mock c1damage
+cmd_get http://example.com/ > "$TMP/outC" 2> "$TMP/errC"; rc=$?
+stop_mock
+eq "exit status" 0 "$rc"
+eq "the page, exactly" "$PAGE" "$(cat "$TMP/outC")"
+if grep -q 'rebuilding' "$TMP/errC"; then ok; else bad "rebuilt silently: $(cat "$TMP/errC")"; fi
+g=$($PY -c "import json,sys;print(json.load(open(sys.argv[1]))['garbles'])" "$TMP/report.json")
+eq "the far end really was fed a damaged program" 1 "$g"
+i=$($PY -c "import json,sys;print(json.load(open(sys.argv[1]))['interrupts'])" "$TMP/report.json")
+if [ "$i" -ge 1 ]; then ok; else bad "did not resync before rebuilding (interrupts=$i)"; fi
+
+echo "== 14. it keeps losing it: refuse, do not print markers as a page =="
+start_mock c1damage-hard
+cmd_get http://example.com/ > "$TMP/outD" 2> "$TMP/errD"; rc=$?
+stop_mock
+eq "exit status" 1 "$rc"
+eq "printed no page" "" "$(cat "$TMP/outD")"
+if grep -q 'KOTI' "$TMP/outD"; then bad "printed markers instead of refusing"; else ok; fi
+if grep -q 'did not survive the link' "$TMP/errD"; then ok; else bad "no diagnosis: $(cat "$TMP/errD")"; fi
+
+echo "== 15. resync ends a far end stuck mid-command =="
+# ⭐ THE CLAIM THIS TEST EXISTS TO CHECK: a blocked recv() inside exec() does
+# NOT need a power cycle. cmd_get's own comments said "it took an off/wake
+# power cycle of the ESP32 to recover", and that was never true — Ctrl-C ends
+# it. Without this, every timed-out send left the far end running and its
+# output landed in the NEXT command's capture, which is the mechanism behind
+# the reported markers-in-place-of-a-page.
+#
+# The wedge is created by writing at the device directly rather than through
+# `send`, purely so the test does not have to sit out send's 40 s deadline to
+# reach the state that deadline hands to resync.
+start_mock wedge
+printf 'exec(1)\r\n' > "$DEV"
+sleep 1
+t0=$(date +%s); resync; rc=$?; t1=$(date +%s)
+stop_mock
+eq "resync succeeded" 0 "$rc"
+if [ $((t1 - t0)) -lt 10 ]; then ok; else bad "took $((t1 - t0))s — it did not interrupt anything"; fi
+if grep -q 'KeyboardInterrupt' "$CAP"; then bad "left its own debris in the capture"; else ok; fi
+i=$($PY -c "import json,sys;print(json.load(open(sys.argv[1]))['interrupts'])" "$TMP/report.json")
+eq "the far end really was interrupted" 1 "$i"
+
 echo
 echo "$checks checks, $fails failures"
 [ "$fails" -eq 0 ] || exit 1

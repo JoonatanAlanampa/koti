@@ -518,6 +518,64 @@ def main():
         else:
             print(f"  ok   overlay {rel} sends no argument across a newline")
 
+    # ---- 5c. no send() may echo more than the RX FIFO ------------------------
+    #
+    # ⛔⛔ koti's RX FIFO IS 64 BYTES AND THE FAR END ECHOES EVERYTHING IT IS
+    # SENT. A line of n bytes comes straight back as n + 2 + 4 (CRLF and the
+    # `>>> ` prompt). If that fits in the FIFO it cannot be lost however late
+    # the interrupt is; if it does not, the driver has to be scheduled
+    # MID-BURST to drain it, on a 25 MHz core running a shell that forks four
+    # times a second while it waits.
+    #
+    # ⭐ MEASURED 2026-08-20. On the user's first standalone fetch after the
+    # marker fix, every line under 46 bytes of echo arrived and the FIRST line
+    # to exceed the FIFO — `req=`, 79 payload and 85 of echo — came back with a
+    # quote missing and `get` stopped. `c1=` was 228. What was damaged was the
+    # ECHO, on koti's receive side, not the line on its way out.
+    #
+    # ⚠️ THIS CANNOT BE CAUGHT ANYWHERE ELSE. The shell is valid, the Python is
+    # valid, the unit suite passes against a mock with no FIFO in it, and the
+    # failure is intermittent on real hardware because it depends on scheduling
+    # latency. Only counting the bytes finds it, and only before it ships.
+    ECHO_OVERHEAD = 6          # CRLF + the four bytes of ">>> "
+    RX_FIFO = 64
+    for p in overlay_files():
+        rel = str(p.relative_to(OVERLAY)).replace("\\", "/")
+        try:
+            src = p.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if "send " not in src:
+            continue
+        fat = []
+        for n, line in enumerate(src.split("\n"), 1):
+            t = line.strip()
+            if not t.startswith("send "):
+                continue
+            q = t[5]
+            if q not in "\"'":
+                continue
+            body = t[6:]
+            if q not in body:
+                continue
+            body = body[:body.rindex(q)]
+            if body.startswith("$"):      # send "$1" in cmd_py, caller's text
+                continue
+            echo = len(body) + ECHO_OVERHEAD
+            if echo > RX_FIFO:
+                fat.append((n, echo, body[:48]))
+        if fat:
+            for n, echo, body in fat:
+                print(f"  FAIL overlay {rel}:{n} echoes {echo} bytes "
+                      f"(> {RX_FIFO}): {body}")
+            bad.append(f"sw/linux/rootfs-overlay/{rel}: {len(fat)} send() "
+                       f"line(s) echo more than koti's {RX_FIFO}-byte RX FIFO. "
+                       f"Split them with `+=` on the far end until each is "
+                       f"under {RX_FIFO - ECHO_OVERHEAD} bytes of payload; the "
+                       f"program the far end ends up with is unchanged.")
+        else:
+            print(f"  ok   overlay {rel} echoes nothing wider than the RX FIFO")
+
     # ---- 6. freshness: the fragment, by recorded hash ------------------------
     if not PROVENANCE.exists():
         print(f"  FAIL {PROVENANCE.name} missing")

@@ -272,6 +272,41 @@ if grep -q 'KeyboardInterrupt' "$CAP"; then bad "left its own debris in the capt
 i=$($PY -c "import json,sys;print(json.load(open(sys.argv[1]))['interrupts'])" "$TMP/report.json")
 eq "the far end really was interrupted" 1 "$i"
 
+echo "== 16. one character lost from the REQUEST line =="
+# 2026-08-20, on the user's machine, first standalone run after the fix: the
+# request line lost a quote and `koti-net get` stopped with `far end did not
+# return to a prompt after: req=(...)`. Two things were wrong and both are
+# fixed here: `req` was sent OUTSIDE build_fetch_prog, so the rebuild loop
+# retried the one thing that was not broken; and nothing checked it, although
+# the verification line already measured len(req) and threw the number away.
+start_mock reqdamage
+cmd_get http://example.com/ > "$TMP/outE" 2> "$TMP/errE"; rc=$?
+stop_mock
+eq "exit status" 0 "$rc"
+eq "the page, exactly" "$PAGE" "$(cat "$TMP/outE")"
+if grep -q 'rebuilding' "$TMP/errE"; then ok; else bad "rebuilt silently: $(cat "$TMP/errE")"; fi
+g=$($PY -c "import json,sys;print(json.load(open(sys.argv[1]))['garbles'])" "$TMP/report.json")
+eq "the far end really was fed a short request" 1 "$g"
+
+echo "== 17. a bracket lost: the far end sits at a continuation prompt =="
+# ⛔ THE FAILURE MODE THAT COST 40 SECONDS AND THEN LIED. MicroPython answers an
+# incomplete statement with `... `, which contains no `>`, so send's prompt
+# match could never see it: it waited out the whole deadline and reported "did
+# not return to a prompt" while the far end sat there swallowing every command
+# sent afterwards as more of the broken line. The elapsed-time check is the
+# point of this test -- a pass that took 40 s would mean nothing was detected.
+start_mock continuation
+t0=$(date +%s)
+cmd_get http://example.com/ > "$TMP/outF" 2> "$TMP/errF"; rc=$?
+t1=$(date +%s)
+stop_mock
+eq "exit status" 0 "$rc"
+eq "the page, exactly" "$PAGE" "$(cat "$TMP/outF")"
+if grep -q 'continuation prompt' "$TMP/errF"; then ok; else bad "did not name it: $(cat "$TMP/errF")"; fi
+if [ $((t1 - t0)) -lt 35 ]; then ok; else bad "took $((t1 - t0))s — it sat out send's 40 s deadline"; fi
+i=$($PY -c "import json,sys;print(json.load(open(sys.argv[1]))['interrupts'])" "$TMP/report.json")
+if [ "$i" -ge 1 ]; then ok; else bad "never Ctrl-C'd the far end out of it"; fi
+
 echo
 echo "$checks checks, $fails failures"
 [ "$fails" -eq 0 ] || exit 1

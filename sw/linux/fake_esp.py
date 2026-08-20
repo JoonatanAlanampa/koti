@@ -97,6 +97,7 @@ class Mock:
         self.connects = 0
         self.garbles = 0
         self.interrupts = 0
+        self.continuing = False
 
     # --- the far end's own printing -------------------------------------
     def emit(self, *a, **kw):
@@ -314,12 +315,20 @@ def main():
         # this is the ordinary case, not the exceptional one.
         if eat_interrupt():
             mock.interrupts += 1
+            mock.continuing = False
             burst("zz\r\n")
             burst(">>> ")
             continue
         line = take_line()
         if line is None:
             time.sleep(0.02)
+            continue
+        # Still inside an incomplete statement: echo and ask for more. Only a
+        # Ctrl-C gets out, which is exactly what resync() sends.
+        if mock.continuing:
+            mock.lines.append(line)
+            burst(line + "\r\n")
+            burst("... ")
             continue
         # `garble`: the far end RECEIVES a line with a character missing, the
         # measured burst fault that made every -202 truthful. It echoes what it
@@ -341,6 +350,28 @@ def main():
         # 2026-08-19 symptom, from a single dropped byte on a link this file
         # documents as dropping bytes. `hard` never lets go, to prove the
         # give-up path refuses rather than fetching half a page.
+        # `reqdamage`: a character is lost from the REQUEST line -- 79 bytes
+        # with six quotes and four brackets, and until 2026-08-20 the one line
+        # in a fetch with nothing checking it. Dropping a letter out of a
+        # header keeps it valid Python and assigns a request one byte short,
+        # which no marker and no traceback will ever reveal: only len(req).
+        if (args.scenario == "reqdamage" and "Connection" in line
+                and not mock.garbles):
+            mock.garbles += 1
+            line = line.replace("Connection", "Connetion", 1)
+        # `continuation`: the line arrives with a BRACKET missing, so the REPL
+        # does not raise -- it decides the statement is incomplete and answers
+        # `... `, then swallows everything sent afterwards as more of it. That
+        # is the state a 40-second `send` deadline used to end in, with the far
+        # end left mid-line and its output landing in the next command's
+        # capture. One-shot, so the retry after a resync can succeed.
+        if (args.scenario == "continuation" and "Connection" in line
+                and not mock.garbles):
+            mock.garbles += 1
+            mock.continuing = True
+            burst(line[:-1] + '\r\n')
+            burst("... ")
+            continue
         if (args.scenario in ("c1damage", "c1damage-hard")
                 and line.startswith("c1+=") and "-BEGIN" in line
                 and (args.scenario == "c1damage-hard" or not mock.garbles)):

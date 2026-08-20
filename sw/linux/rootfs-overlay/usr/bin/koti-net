@@ -314,6 +314,7 @@ send() {
 	# ⚠️ Not larger than necessary either: this is how long a genuinely wedged
 	# far end costs per send, and `get`'s socket timeout (20 s) plus transfer
 	# also has to fit under it.
+	_prev=0
 	_dl=$(( $(date +%s) + 40 ))
 	while [ "$(date +%s)" -lt "$_dl" ]; do
 		usleep 250000
@@ -342,10 +343,48 @@ send() {
 		# `tail -c "$(( _b1 - _b0 ))"` is exactly the new bytes. Deliberately
 		# not `tail -c +N`: this shell is busybox ash and `-c N` is the form
 		# already proven on the machine.
-		case "$(tail -c "$(( _b1 - _b0 ))" "$CAP" 2>/dev/null \
-		        | tr -d '\r\n' | tail -c 8)" in
+		_tail=$(tail -c "$(( _b1 - _b0 ))" "$CAP" 2>/dev/null \
+		        | tr -d '\r\n' | tail -c 8)
+		case "$_tail" in
 			*'>>'*) return 0 ;;
 		esac
+		# ⛔⛔ A CONTINUATION PROMPT IS A DAMAGED LINE, NOT A SLOW ONE - and
+		# nothing here could see one until 2026-08-20.
+		#
+		# MicroPython's friendly REPL answers an INCOMPLETE statement with
+		# `... `, not with `>>> `. Lose one bracket from a line - and the
+		# request line carries four, on a link this file documents as
+		# dropping characters - and the far end sits waiting for the rest of
+		# it. The match above looks for `>`, of which `... ` has none, so this
+		# burned the full 40 s and then reported "did not return to a prompt",
+		# which is true and useless. Worse, it left the REPL in continuation
+		# mode, where every later command is swallowed as more of the broken
+		# line - the far end that is 'still transmitting' in resync()'s note.
+		#
+		# ⚠️ ONLY WHEN THE FAR END HAS GONE QUIET, and that guard is the whole
+		# reason this is safe. A page body can contain `... ` and `exec(c1)`
+		# streams one through this very loop, so matching the tail alone would
+		# abort a good fetch on its own content. A transfer in progress GROWS
+		# the capture every tick; a continuation prompt does not. Requiring no
+		# growth since the previous tick separates them with no knowledge of
+		# what is being fetched.
+		if [ "$_b1" -eq "${_prev:-0}" ]; then
+			case "$_tail" in
+				# ⛔ TWO DOTS, NOT THREE — the same rule as `>>` above, and for
+				# the same reason: the first character of a burst from this
+				# link is destroyed, so `... ` can arrive as `.. `. Matching
+				# three found nothing and sat out the whole deadline, which
+				# is how test 17 caught this.
+				*'.. ')
+					echo "koti-net: the far end is waiting for more input: the" >&2
+					echo "koti-net: line arrived with a bracket missing, and it" >&2
+					echo "koti-net: is sitting at a continuation prompt." >&2
+					echo "koti-net: $1" >&2
+					return 1
+					;;
+			esac
+		fi
+		_prev=$_b1
 	done
 	# Silence here used to become a corrupted variable three lines later,
 	# which is a much worse place to find out about it.
@@ -702,7 +741,9 @@ cmd_join() {
 	# The block goes through exec() so it stays ONE line — see the note on
 	# the friendly REPL's auto-indent above. 60 half-seconds: a cold DHCP
 	# on a busy 2.4 GHz band is routinely over ten.
-	send 'exec("for _ in range(60):\n if w.isconnected(): break\n time.sleep(0.5)")'
+	send 'j="for _ in range(60):\n if w.isconnected(): break"'
+	send 'j+="\n time.sleep(0.5)"'
+	send 'exec(j)'
 	# ---------------------------------------------------------------------
 	# ⛔⛔ THE NAME SERVER DHCP HANDS OVER IS NOT USABLE ON THIS HOTSPOT, AND
 	# THAT — NOT koti, NOT the link — IS WHAT `OSError: -202` HAS BEEN.
@@ -752,7 +793,12 @@ cmd_join() {
 	# literal dotted quads was long enough that the link lost a character and
 	# the REPL sat in continuation mode until `send` timed out — reading the
 	# values back on the far end is both shorter and immune to that.
-	send "exec(\"try:\n c=w.ifconfig()\n d=int(c[3].split('.')[0])\n if d==0 or d>=224: w.ifconfig((c[0],c[1],c[2],c[2]))\nexcept: pass\")"
+	send "j=\"try:\n c=w.ifconfig()\""
+	send "j+=\"\n d=int(c[3].split('.')[0])\""
+	send "j+=\"\n if d==0 or d>=224:\""
+	send "j+=\" w.ifconfig((c[0],c[1],c[2],c[2]))\""
+	send "j+=\"\nexcept: pass\""
+	send 'exec(j)'
 	send "print('zz','KOTI'+'-DNS', w.ifconfig()[3])"
 	# ---------------------------------------------------------------------
 	# The marker is CONCATENATED so that the echo of this very line does not
@@ -765,7 +811,8 @@ cmd_join() {
 	# the connection was up, and `link_up` reported "the ESP32 is not
 	# answering" because the grep could not match a marker missing its first
 	# character. `KOTI-IP` here had simply been lucky.
-	send "print('zz','KOTI'+'-IP', w.ifconfig()[0] if w.isconnected() else 'FAILED')"
+	send "q=w.ifconfig()[0] if w.isconnected() else 'FAILED'"
+	send "print('zz','KOTI'+'-IP',q)"
 
 	if expect 'KOTI-IP' 45; then
 		# ⛔ `.*KOTI-IP `, NOT `^KOTI-IP `. The marker is padded now, so the
@@ -973,8 +1020,80 @@ link_up() {
 # own echo and the check would pass on a far end that never ran anything.
 # ---------------------------------------------------------------------------
 build_fetch_prog() {
+	# 🪤 `req` IS A SEPARATE REPL LINE, deliberately. The request carries
+	# `\r\n`, which must survive as a two-character escape into the code
+	# exec() parses; written inline in `c1` it needs doubling at every level,
+	# and one missed backslash puts a real CR inside a string literal. As an
+	# ordinary repl line the escaping stays single-level — and building it
+	# touches no network, so it opens no gap that matters.
+	#
+	# ⛔⛔ BUT IT LIVES IN HERE, AND UNTIL 2026-08-20 IT DID NOT. It was sent
+	# by cmd_get, one line ABOVE the rebuild loop — so when the link damaged
+	# THIS line, the retry rebuilt `c1` around the same broken `req` for ever.
+	# That is not theory: it is what the user hit on the first standalone run
+	# after the fix, with a quote missing from `+p+' HTTP` on the screen and
+	# `far end did not return to a prompt after: req=(...)`. The guard fired
+	# correctly and then retried the one thing that was not broken.
+	#
+	# 🪤 `.encode()` ON THE WHOLE REQUEST, not b'GET '+p. `h` and `p` are str
+	# and MicroPython refuses bytes+str exactly as CPython does — the error
+	# arrives as a TypeError traceback echoed back through the REPL, which is
+	# a confusing place to read a type error from.
+	#
+	# HTTP/1.0 with Connection: close so the far end ends the body by closing
+	# the socket, which is the only framing that needs no chunked-transfer
+	# parser at this end.
+	#
+	# ⛔ REQ_FIXED IS THE LENGTH OF EVERYTHING IN THE TEMPLATE THAT IS NOT `p`
+	# OR `h`, AND IT MUST MOVE WITH THE LINE BELOW:
+	#   'GET ' 4  + ' HTTP/1.0' 9 + CRLF 2 + 'Host: ' 6 + CRLF 2
+	#   + 'Connection: close' 17 + CRLF 2 + CRLF 2   =  44
+	# The verification at the end of this function checks len(req) against
+	# REQ_FIXED + len(p) + len(h), which is exact.
+	REQ_FIXED=44
+	# --------------------------------------------------------------------
+	# ⛔⛔ NO LINE HERE MAY ECHO MORE THAN 64 BYTES, AND THAT IS THE WHOLE
+	# REASON THESE ARE SPLIT THE WAY THEY ARE. Measured 2026-08-20, from
+	# the user's first standalone run after the marker fix.
+	#
+	# koti's RX FIFO is 64 bytes (KOTI_ESP_FIFO; esp_uart.sv TXDEPTH),
+	# which is 5.56 ms of wire at 115200. The far end ECHOES every
+	# character it is sent, so a line of n bytes comes straight back as
+	# n + 2 + 4 — CRLF and the `>>> ` prompt. If that fits in the FIFO it
+	# CANNOT be lost, however late the interrupt is. If it does not, the
+	# driver has to be scheduled MID-BURST to drain it — and koti is a
+	# 25 MHz core running a shell that forks wc, tail, tr and date four
+	# times a second while it waits.
+	#
+	# ⭐ THAT IS WHY THE FETCH DIED WHERE IT DID. Every line before it was
+	# under 46 bytes of echo and every one arrived. `req=` was 79 bytes of
+	# payload and 85 of echo — the FIRST line in the whole fetch to exceed
+	# the FIFO — and `c1=` was 228. The screen showed the echo coming back
+	# with a quote missing from `+p+' HTTP`, so what was damaged was the
+	# ECHO, on koti's RECEIVE side, not the line on its way out.
+	#
+	# ⚠️ IT IS THE ECHO THAT SETS THE BUDGET, NOT THE FAR END'S BUFFER. The
+	# older note here said these were split "to keep each line comfortably
+	# inside the far end's receive buffer" — the right instinct aimed at
+	# the wrong end. The ESP32 has a 128-byte hardware FIFO and a ring
+	# buffer behind it. koti is the narrow one.
+	#
+	# ⚠️ 64 is a CEILING, not a target: keep new lines near 50. The budget
+	# is payload + 6, and the worst line below is 62.
+	#
+	# 🪤 The split is byte-exact — the far end still ends up with the same
+	# 409-byte program and the same four markers. That was checked by
+	# rebuilding both versions and comparing, not by reading.
+	# --------------------------------------------------------------------
+	send "req='GET '+p+' HTTP/1.0\r\nHost: '" || return 1
+	send "req=(req+h+'\r\nConnection: close\r\n\r\n').encode()" || return 1
 	# `n` for the resolver octet, because `d` is the read loop's buffer below.
-	send "c1=\"g=w.ifconfig()\nn=int(g[3].split('.')[0])\nif n==0 or n>=224: w.ifconfig((g[0],g[1],g[2],g[2]))\ns=socket.socket()\ns.settimeout(20)\ns.connect(socket.getaddrinfo(a,80)[0][-1])\nprint('zz','KOTI'+'-CN')\ns.send(req)\"" || return 1
+	send "c1=\"g=w.ifconfig()\nn=int(g[3].split('.')[0])\"" || return 1
+	send "c1+=\"\nif n==0 or n>=224:\"" || return 1
+	send "c1+=\" w.ifconfig((g[0],g[1],g[2],g[2]))\"" || return 1
+	send "c1+=\"\ns=socket.socket()\ns.settimeout(20)\"" || return 1
+	send "c1+=\"\ns.connect(socket.getaddrinfo(a,80)[0][-1])\"" || return 1
+	send "c1+=\"\nprint('zz','KOTI'+'-CN')\ns.send(req)\"" || return 1
 	# ⛔ BOTH MARKERS ARE PRINTED BY ONE exec(), and the reason is the single
 	# nastiest property of driving a REPL: IT ECHOES WHAT YOU TYPE. Sending
 	# `print(begin)`, then the read loop, then `print(end)` as three commands
@@ -1043,9 +1162,11 @@ build_fetch_prog() {
 	# ⚠️ THE CAP IS NOT SILENT. 200 KB is ESP32 RAM being spent on a page, and a
 	# truncated page that looks complete is worse than a refusal, so the cut
 	# announces itself with its own marker and `get` says so on stderr.
-	send "c1+=\"\nb=b''\nwhile len(b)<200000:\n d=s.recv(256)\n if not d:break\n b+=d\"" || return 1
+	send "c1+=\"\nb=b''\nwhile len(b)<200000:\"" || return 1
+	send "c1+=\"\n d=s.recv(256)\n if not d:break\n b+=d\"" || return 1
 	send "c1+=\"\nif len(b)>=200000: print('zz','KOTI'+'-CUT')\"" || return 1
-	send "c1+=\"\nprint('zz','KOTI'+'-BEGIN')\nsys.stdout.write(b)\"" || return 1
+	send "c1+=\"\nprint('zz','KOTI'+'-BEGIN')\"" || return 1
+	send "c1+=\"\nsys.stdout.write(b)\"" || return 1
 	# The trailing print() matters: a body that does not end in a newline
 	# would otherwise leave the end marker glued to the last line of the page,
 	# where the anchored match below never sees it and the fetch times out
@@ -1056,15 +1177,39 @@ build_fetch_prog() {
 	# not: `send` returns when a prompt comes back, and an assignment that
 	# landed short still gets a prompt.
 	capture_reset
-	send "print('zz','KOTI'+'-PG', c1.count('KOTI'), len(c1), len(req))" || return 1
+	send "q=c1.count('KOTI')" || return 1
+	send "print('zz','KOTI'+'-PG',q,len(c1),len(req))" || return 1
 	expect 'KOTI-PG' 8 || return 1
-	_pg=$(capture | grep -a 'KOTI-PG' | tail -n 1)
+	# ⛔ `tr -d` FIRST. The far end ends its lines with CR, and the length is
+	# matched at the END of the line below — a trailing CR would sit between
+	# the number and the anchor and fail every good fetch.
+	_pg=$(capture | tr -d '\r' | grep -a 'KOTI-PG' | tail -n 1)
+	# ⛔ AND CHECK `req` TOO, WHICH THIS LINE ALREADY MEASURED AND THREW AWAY.
+	# len(req) is EXACTLY derivable — the request is a fixed template with the
+	# path and the host substituted into it — so unlike `c1`, an exact number
+	# here costs nothing in staleness as long as REQ_FIXED moves with the
+	# template. It is defined beside that template above for exactly that
+	# reason, and this message names it so a future edit is told where to look.
+	#
+	# ⭐ THIS IS THE CHECK THAT WAS MISSING ON 2026-08-20. The request line is
+	# 79 characters with six quotes and four brackets, sent over a link this
+	# file documents as dropping characters, and it was the ONE line in the
+	# fetch with nothing watching it. The user lost a quote from `+p+' HTTP`.
+	_wantreq=$(( REQ_FIXED + ${#_path} + ${#_host} ))
 	case "$_pg" in
 		# The trailing space is part of the pattern: without it a
 		# duplicated chunk reporting 40-something would also match.
-		*'KOTI-PG 4 '*) return 0 ;;
+		# ⛔ ANCHORED AT THE END, with the space in front of it. The line is
+		# `zz KOTI-PG 4 <len(c1)> <len(req)>`, so an unanchored match on the
+		# number would also hit it inside len(c1) — 456 contains 56 — and
+		# pass a damaged request.
+		*"KOTI-PG 4 "*" $_wantreq") return 0 ;;
 	esac
-	echo "koti-net: the far end reports a damaged fetch program: $_pg" >&2
+	echo "koti-net: the far end reports a damaged fetch program." >&2
+	echo "koti-net: it said: $_pg" >&2
+	echo "koti-net: wanted 4 markers in the program and a ${_wantreq}-byte" >&2
+	echo "koti-net: request. (If you edited the request template, REQ_FIXED" >&2
+	echo "koti-net: next to it has to move with it.)" >&2
 	return 1
 }
 
@@ -1274,23 +1419,6 @@ cmd_get() {
 	# gap itself as the only difference, and it is why this is one exec rather
 	# than a reordered sequence of several.
 	#
-	# 🪤 `req` IS BUILT OUTSIDE, deliberately. The request carries `\r\n`, which
-	# must survive as a two-character escape into the code exec() parses;
-	# written inline it needs doubling at every level, and one missed backslash
-	# puts a real CR inside a string literal. As an ordinary repl line the
-	# escaping stays single-level — and building it touches no network, so it
-	# opens no gap that matters.
-	#
-	# 🪤 `.encode()` ON THE WHOLE REQUEST, not b'GET '+p. `h` and `p` are str
-	# and MicroPython refuses bytes+str exactly as CPython does — the error
-	# arrives as a TypeError traceback echoed back through the REPL, which is
-	# a confusing place to read a type error from.
-	#
-	# HTTP/1.0 with Connection: close so the far end ends the body by closing
-	# the socket, which is the only framing that needs no chunked-transfer
-	# parser at this end.
-	send "req=('GET '+p+' HTTP/1.0\r\nHost: '+h+'\r\nConnection: close\r\n\r\n').encode()" \
-		|| { lost_far_end 'sending the request'; return 1; }
 	# ⛔ BUILD IT, THEN CONFIRM IT, AND REBUILD IT IF THE LINK DAMAGED IT.
 	# The same verify-and-retry shape the hostname above already uses, and for
 	# the same measured reason. See build_fetch_prog for what is checked.

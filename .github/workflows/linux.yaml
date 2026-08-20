@@ -376,6 +376,7 @@ jobs:
             # and is embedded as-is; the .cpio suffix is what selects that path
             # (init/Kconfig), so the committed file must keep that name.
             echo "INITRAMFS=$PWD/sw/linux/rootfs.cpio" >> "$GITHUB_ENV"
+            echo "WHICH=rootfs" >> "$GITHUB_ENV"
           else
             riscv64-linux-gnu-gcc -march=rv32ima -mabi=ilp32 \
               -nostdlib -static -no-pie -Wl,--build-id=none \
@@ -390,6 +391,7 @@ jobs:
           EOF
             cat initramfs.desc
             echo "INITRAMFS=$PWD/initramfs.desc" >> "$GITHUB_ENV"
+            echo "WHICH=init" >> "$GITHUB_ENV"
           fi
 
       # init.S is built on EVERY run, whichever initramfs is embedded. It is
@@ -440,6 +442,23 @@ jobs:
       # koti's 16 MB window at all.
       - name: The Image satisfies koti's boot contract
         run: python3 sw/linux/check_image.py linux-${KVER}/arch/riscv/boot/Image
+
+      # ⛔ AND THE USERSPACE INSIDE IT IS OURS. check_initramfs.py above checked
+      # an INPUT — the overlay against the committed cpio. This checks the
+      # OUTPUT, which is the file that goes on the microSD, and nothing did.
+      #
+      # Between those two facts sits an unguarded kbuild step, and every other
+      # gate here — header magic, size, System.map — passes on an Image with an
+      # empty initramfs or the wrong one, because none of them looks inside.
+      # The failure surfaces on the bench as "the fix is not on the machine",
+      # one microSD round trip later — and that round trip is a person carrying
+      # a card to a PC reader and back. This costs a second.
+      #
+      # ⚠️ Skipped for `initramfs: init`, where the stand-in is embedded on
+      # purpose and the overlay is legitimately absent.
+      - name: The initramfs inside the Image is the one we committed
+        if: env.WHICH == 'rootfs'
+        run: python3 sw/linux/check_image_initramfs.py linux-${KVER}/arch/riscv/boot/Image
 
       # check_config.py asserts the LEVER (CRYPTO_MANAGER_DISABLE_TESTS=y).
       # This asserts the EFFECT, and the two are not the same claim: the symbol
